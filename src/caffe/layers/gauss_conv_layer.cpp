@@ -547,22 +547,6 @@ void GaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
 					// convolve top j-th error matrix with k-th gaussian
 					// multiply result with bottom activation values (element wise)
 					// save result to top_error[i,k]
-					/*
-					// convert top error data into column array where convolution can be performed using matrix multiplication
-					im2col_cpu(top_diff + top[i]->offset(n),
-							this->conv_out_channels_,
-							this->conv_in_height_, this->conv_in_width_,
-							this->kernel_h_, this->kernel_w_,
-							0, 0, 1, 1, this->col_buffer_.mutable_cpu_data());
-
-					// propagate error down by convolving top error matrix [conv_out_channels_, conv_in_height_, conv_in_width_] with weights [conv_in_channels_, kernel_h_, kernel_w_]
-					// to get bottom error [conv_in_channels_, conv_in_height_, conv_in_width_]
-					caffe_cpu_gemm<Dtype>(CblasNoTrans, CblasNoTrans,
-							this->conv_in_channels_,
-							this->conv_out_spatial_dim_,
-							this->conv_out_channels_ * this->kernel_h_ * this->kernel_w_,
-							(Dtype)1., deriv_error , this->col_buffer_.cpu_data() ,
-							(Dtype)0., bottom_diff + bottom[i]->offset(n));*/
 
 					this->backward_cpu_gemm(top_diff + top[i]->offset(n), weight_buffer_->cpu_data(),
 				              	  	  	  	  bottom_diff + bottom[i]->offset(n));
