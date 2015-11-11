@@ -476,32 +476,6 @@ void GaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_pass
 			}
 			if (is_backward_pass) {
 
-/*
-				// add neccesary terms to weight derivative obtained from normalization factors (i.e. sum of weights in other gaussian components)
-				for (int k = 0; k < NUM_GAUSS; ++k) {
-
-					Dtype w_k = gauss_params_w[gauss_param_buffer_w.offset(0,j,i,k)];
-
-					int deriv_weight_offset =  this->deriv_weight_buffer_->offset(j,i * NUM_GAUSS + k);
-					int tmp_deriv_weight_offset_k = this->tmp_deriv_weight_buffer_.offset(0,k);
-
-					int w_k_sign = caffe_sign(w_k);
-					// add first term with w_deriv = (sum(w) - w_k)/(sum(w)^2) * G_k(x) / N_k(x)
-					caffe_cpu_axpby(kernel_size, (w_sum - w_k*w_k_sign)/w_sum_2, tmp_deriv_weight + tmp_deriv_weight_offset_k, (Dtype)0, deriv_weight + deriv_weight_offset);
-
-					// adding all other terms that include w_k only as normalization and have w_j (i.e. all that w_k != w_j)
-					// they should be multiplied with -1 * w_j/(sum(w)^2) * G_j(x) / N_j(x)
-					for (int j1 = 0; j1 < NUM_GAUSS; ++j1) {
-						if (k != j1) {
-							int tmp_deriv_weight_offset_j1 = this->tmp_deriv_weight_buffer_.offset(0,j1);
-							Dtype w_j = gauss_params_w[gauss_param_buffer_w.offset(0,j,i,j1)];
-
-							caffe_cpu_axpby(kernel_size, -(Dtype)1.0 * w_j*w_k_sign/w_sum_2, tmp_deriv_weight + tmp_deriv_weight_offset_j1, (Dtype)1.0, deriv_weight + deriv_weight_offset);
-						}
-					}
-				}
-*/
-
 				// notice: deriv_error_buffer_ has first two dimensions switched to enable more efficent computation of bottom error in backward process
 				int deriv_error_offset = this->deriv_error_buffer_->offset(j,i);
 
