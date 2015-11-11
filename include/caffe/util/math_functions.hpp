@@ -12,6 +12,9 @@
 
 namespace caffe {
 
+template <typename Dtype>
+void caffe_cpu_copy_strided(const int N, const Dtype* X, int incx, Dtype *Y, int incy);
+
 // Caffe gemm provides a simpler interface to the gemm functions, with the
 // limitation that the data has to be contiguous in memory.
 template <typename Dtype>

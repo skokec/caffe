@@ -323,7 +323,7 @@ bool UpgradeV0LayerParameter(const V1LayerParameter& v0_layer_connection,
     }
     if (v0_layer_param.has_scale()) {
       layer_param->mutable_transform_param()->
-          set_scale(v0_layer_param.scale());
+          add_scale(v0_layer_param.scale());
     }
     if (v0_layer_param.has_meanfile()) {
       layer_param->mutable_transform_param()->
@@ -557,7 +557,7 @@ bool NetNeedsDataUpgrade(const NetParameter& net_param) {
       TransformationParameter* transform_param = \
           net_param->mutable_layers(i)->mutable_transform_param(); \
       if (layer_param->has_scale()) { \
-        transform_param->set_scale(layer_param->scale()); \
+        transform_param->add_scale(layer_param->scale()); \
         layer_param->clear_scale(); \
       } \
       if (layer_param->has_mean_file()) { \

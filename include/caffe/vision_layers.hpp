@@ -76,7 +76,7 @@ class BaseConvolutionLayer : public Layer<Dtype> {
   bool bias_term_;
   bool is_1x1_;
 
- private:
+ protected:
   // wrap im2col/col2im so we don't have to remember the (long) argument lists
   inline void conv_im2col_cpu(const Dtype* data, Dtype* col_buff) {
     im2col_cpu(data, conv_in_channels_, conv_in_height_, conv_in_width_,
@@ -174,6 +174,61 @@ class ConvolutionLayer : public BaseConvolutionLayer<Dtype> {
       const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
   virtual inline bool reverse_dimensions() { return false; }
   virtual void compute_output_shape();
+};
+
+
+template <typename Dtype>
+class GaussianConvLayer : public BaseConvolutionLayer<Dtype> {
+ public:
+  
+  explicit GaussianConvLayer(const LayerParameter& param)
+      : BaseConvolutionLayer<Dtype>(param) {}
+
+  virtual inline const char* type() const { return "GaussianConv"; }
+  virtual void LayerSetUp(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top);
+  virtual void Reshape(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top);
+  
+ protected:
+  virtual void Forward_cpu(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top);
+  virtual void Forward_gpu(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top);
+  virtual void Backward_cpu(const vector<Blob<Dtype>*>& top, const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
+  virtual void Backward_gpu(const vector<Blob<Dtype>*>& top,const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
+  virtual inline bool reverse_dimensions() { return false; }
+  virtual void compute_output_shape();
+  
+  void precompute_guassian_weights(bool precompute_derivs);
+  
+  void compute_parameter_deriv(int num_iter,const Blob<Dtype>& col_activations_buffer, const Blob<Dtype>& deriv_kernels_buffer, 
+				const Blob<Dtype>& top_error_buffer, Blob<Dtype>& param_output_buffer, int param_output_offset);
+  
+  bool use_gmm_weight_normalization;
+
+  shared_ptr<Blob<Dtype> > param_buffer_w_;
+  shared_ptr<Blob<Dtype> > param_buffer_mu1_;
+  shared_ptr<Blob<Dtype> > param_buffer_mu2_;
+  shared_ptr<Blob<Dtype> > param_buffer_sigma_;
+  shared_ptr<Blob<Dtype> > param_buffer_w_gmm_;
+  shared_ptr<Blob<Dtype> > param_buffer_bias_;
+
+  shared_ptr<Blob<Dtype> > param_buffer_w_lagrange_;
+
+  shared_ptr<Blob<Dtype> > weight_buffer_;
+  shared_ptr<Blob<Dtype> > deriv_error_buffer_;
+  shared_ptr<Blob<Dtype> > deriv_weight_buffer_;
+  shared_ptr<Blob<Dtype> > deriv_sigma_buffer_;
+  shared_ptr<Blob<Dtype> > deriv_mu1_buffer_;
+  shared_ptr<Blob<Dtype> > deriv_mu2_buffer_;
+  //shared_ptr<Blob<Dtype> > subfeature_weight_buffer_;
+
+  Blob<Dtype> tmp_buffer_;
+  Blob<Dtype> tmp_deriv_weight_buffer_;
+  Blob<Dtype> tmp_bottom_buffer_;
+
+  Blob<Dtype> tmp_w_gmm_sign_;
+  Blob<Dtype> tmp_w_gmm_fabs_;
+
+  Blob<Dtype> tmp_w_sign_;
+  Blob<Dtype> tmp_w_fabs_;
 };
 
 /**

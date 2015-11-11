@@ -354,7 +354,8 @@ message TransformationParameter {
   // For data pre-processing, we can do simple scaling and subtracting the
   // data mean, if provided. Note that the mean subtraction is always carried
   // out before scaling.
-  optional float scale = 1 [default = 1];
+  //optional float scale = 1 [default = 1];
+  repeated float scale = 1;
   // Specify if we want to randomly mirror data.
   optional bool mirror = 2 [default = false];
   // Specify if we would like to randomly crop an image.
@@ -365,6 +366,14 @@ message TransformationParameter {
   // or can be repeated the same number of times as channels
   // (would subtract them from the corresponding channel)
   repeated float mean_value = 5;
+  
+  // transform to specific colorspace
+   enum ColorspaceMode {
+    BGR = 0;
+    LAB = 1;
+    HSV = 2;
+  }
+  optional ColorspaceMode colorspace = 6 [default = BGR];
 }
 
 // Message that stores parameters shared by loss layers
@@ -440,8 +449,13 @@ message ConvolutionParameter {
   optional uint32 stride = 6 [default = 1]; // The stride (equal in Y, X)
   optional uint32 stride_h = 13; // The stride height
   optional uint32 stride_w = 14; // The stride width
-  optional FillerParameter weight_filler = 7; // The filler for the weight
+  optional FillerParameter weight_filler = 7; // The filler for the weight  
   optional FillerParameter bias_filler = 8; // The filler for the bias
+  optional FillerParameter mu_filler = 20; // The filler for the gaussian mean 
+  optional FillerParameter sigma_filler = 21; // The filler for the gaussian sigma
+  optional uint32 number_gauss = 22; // The number of gaussian kernels per patch
+  optional bool gmm_weight_normalization = 23 [default = true]; // Should GMM be normalized or not 
+  
   enum Engine {
     DEFAULT = 0;
     CAFFE = 1;

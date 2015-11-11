@@ -38,7 +38,7 @@ class Solver {
   }
   int iter() { return iter_; }
 
- protected:
+ //protected:
   // Make and apply the update value for the current iteration.
   virtual void ApplyUpdate() = 0;
   // The Solver::Snapshot function implements the basic snapshotting utility
@@ -52,7 +52,7 @@ class Solver {
   virtual void SnapshotSolverState(SolverState* state) = 0;
   virtual void RestoreSolverState(const SolverState& state) = 0;
   void DisplayOutputBlobs(const int net_id);
-
+ protected:
   SolverParameter param_;
   int iter_;
   int current_step_;

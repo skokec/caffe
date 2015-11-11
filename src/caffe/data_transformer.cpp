@@ -1,4 +1,5 @@
 #include <opencv2/core/core.hpp>
+#include <opencv2/imgproc/imgproc.hpp>
 
 #include <string>
 #include <vector>
@@ -43,7 +44,7 @@ void DataTransformer<Dtype>::Transform(const Datum& datum,
   const int datum_width = datum.width();
 
   const int crop_size = param_.crop_size();
-  const Dtype scale = param_.scale();
+  //const Dtype scale = param_.scale();
   const bool do_mirror = param_.mirror() && Rand(2);
   const bool has_mean_file = param_.has_mean_file();
   const bool has_uint8 = data.size() > 0;
@@ -70,6 +71,13 @@ void DataTransformer<Dtype>::Transform(const Datum& datum,
       }
     }
   }
+
+  vector<Dtype> scale_values;
+  int cc;
+  for (cc = 0; cc < param_.scale_size(); ++cc) {
+	  scale_values.push_back(param_.scale(cc));
+  }
+  while (cc++ < datum_channels) scale_values.push_back(1);
 
   int height = datum_height;
   int width = datum_width;
@@ -108,13 +116,13 @@ void DataTransformer<Dtype>::Transform(const Datum& datum,
         }
         if (has_mean_file) {
           transformed_data[top_index] =
-            (datum_element - mean[data_index]) * scale;
+            (datum_element - mean[data_index]) * scale_values[c];
         } else {
           if (has_mean_values) {
             transformed_data[top_index] =
-              (datum_element - mean_values_[c]) * scale;
+              (datum_element - mean_values_[c]) * scale_values[c];
           } else {
-            transformed_data[top_index] = datum_element * scale;
+            transformed_data[top_index] = datum_element * scale_values[c];
           }
         }
       }
@@ -213,7 +221,7 @@ void DataTransformer<Dtype>::Transform(const cv::Mat& cv_img,
   CHECK(cv_img.depth() == CV_8U) << "Image data type must be unsigned byte";
 
   const int crop_size = param_.crop_size();
-  const Dtype scale = param_.scale();
+  //const Dtype scale = param_.scale();
   const bool do_mirror = param_.mirror() && Rand(2);
   const bool has_mean_file = param_.has_mean_file();
   const bool has_mean_values = mean_values_.size() > 0;
@@ -221,6 +229,42 @@ void DataTransformer<Dtype>::Transform(const cv::Mat& cv_img,
   CHECK_GT(img_channels, 0);
   CHECK_GE(img_height, crop_size);
   CHECK_GE(img_width, crop_size);
+
+  if (img_channels == 3) {
+
+	  const TransformationParameter::ColorspaceMode colorspace = param_.colorspace();
+
+	  if (colorspace == TransformationParameter::BGR) {
+		  // should already be in this format
+	  } else if (colorspace == TransformationParameter::LAB) {
+		  cvtColor(cv_img, cv_img, cv::COLOR_BGR2Lab);
+	  } else if (colorspace == TransformationParameter::HSV) {
+		  cvtColor(cv_img, cv_img, cv::COLOR_BGR2HSV);
+	  }
+
+	  // !! tmp testing only only !!
+	  // split to channels
+	  /*
+	  std::vector<cv::Mat> ch;
+	  cv::split(cv_img, ch);
+
+	  // rotate 90 deg
+	  cv::flip(ch[1].t(), ch[1], 1);
+
+	  // rotate 180 deg
+	  cv::flip(ch[2], ch[2], -1);
+
+	  cv::merge(ch, cv_img);
+	  */
+	  ////
+  }
+
+  vector<Dtype> scale_values;
+  int cc;
+  for (cc = 0; cc < param_.scale_size(); ++cc) {
+	scale_values.push_back(param_.scale(cc));
+  }
+  while (cc++ < img_channels) scale_values.push_back(1);
 
   Dtype* mean = NULL;
   if (has_mean_file) {
@@ -280,13 +324,13 @@ void DataTransformer<Dtype>::Transform(const cv::Mat& cv_img,
         if (has_mean_file) {
           int mean_index = (c * img_height + h_off + h) * img_width + w_off + w;
           transformed_data[top_index] =
-            (pixel - mean[mean_index]) * scale;
+            (pixel - mean[mean_index]) * scale_values[c];
         } else {
           if (has_mean_values) {
             transformed_data[top_index] =
-              (pixel - mean_values_[c]) * scale;
+              (pixel - mean_values_[c]) * scale_values[c];
           } else {
-            transformed_data[top_index] = pixel * scale;
+            transformed_data[top_index] = pixel * scale_values[c];
           }
         }
       }
@@ -314,10 +358,17 @@ void DataTransformer<Dtype>::Transform(Blob<Dtype>* input_blob,
   CHECK_GE(input_width, width);
 
   const int crop_size = param_.crop_size();
-  const Dtype scale = param_.scale();
+  //const Dtype scale = param_.scale();
   const bool do_mirror = param_.mirror() && Rand(2);
   const bool has_mean_file = param_.has_mean_file();
   const bool has_mean_values = mean_values_.size() > 0;
+
+  vector<Dtype> scale_values;
+  int cc;
+  for (cc = 0; cc < param_.scale_size(); ++cc) {
+	scale_values.push_back(param_.scale(cc));
+  }
+  while (cc++ < input_channels) scale_values.push_back(1);
 
   int h_off = 0;
   int w_off = 0;
@@ -389,9 +440,9 @@ void DataTransformer<Dtype>::Transform(Blob<Dtype>* input_blob,
       }
     }
   }
-  if (scale != Dtype(1)) {
-    DLOG(INFO) << "Scale: " << scale;
-    caffe_scal(size, scale, transformed_data);
+  if (scale_values[0] != Dtype(1)) {
+    DLOG(INFO) << "Scale: " << scale_values[0];
+    caffe_scal(size, scale_values[0], transformed_data);
   }
 }
 
