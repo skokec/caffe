@@ -90,10 +90,10 @@ void GaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
 		LOG(INFO) << "Skipping parameter initialization";
 	} else {
 		if (this->bias_term_) {
-			this->blobs_.resize(1 + NUM_GAUSS_COMPONENT_PARAM + NUM_GAUSS_PARAM + 6 + 1);
+			this->blobs_.resize(1 + NUM_GAUSS_COMPONENT_PARAM + NUM_GAUSS_PARAM + 6 );
 			//this->blobs_.resize(1 + NUM_GAUSS_COMPONENT_PARAM + NUM_GAUSS_PARAM);
 		} else {
-			this->blobs_.resize(NUM_GAUSS_COMPONENT_PARAM +  NUM_GAUSS_PARAM + 6 + 1);
+			this->blobs_.resize(NUM_GAUSS_COMPONENT_PARAM +  NUM_GAUSS_PARAM + 6 );
 			//this->blobs_.resize(NUM_GAUSS_COMPONENT_PARAM +  NUM_GAUSS_PARAM);
 		}
 		// Initialize and fill the weights:
@@ -103,7 +103,7 @@ void GaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
 		for (int i = 0; i < NUM_GAUSS_COMPONENT_PARAM; i++)
 			this->blobs_[blobs_index++].reset(new Blob<Dtype>(1, this->conv_in_channels_, this->conv_out_channels_, NUM_GAUSS));
 
-		// set per-GMM parameters (weight_gmm)
+		// set per-GMM parameters (weight_gmm) - depricated, NUM_GAUSS_PARAM should be 0
 		for (int i = 0; i < NUM_GAUSS_PARAM; i++)
 			this->blobs_[blobs_index++].reset(new Blob<Dtype>(1, 1, this->conv_out_channels_, this->conv_in_channels_));
 
@@ -117,21 +117,18 @@ void GaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
 		this->param_buffer_mu1_ = this->blobs_[1];
 		this->param_buffer_mu2_ = this->blobs_[2];
 		this->param_buffer_sigma_ = this->blobs_[3];
-		this->param_buffer_w_gmm_ = this->blobs_[4];
 		this->param_buffer_bias_ = this->blobs_[5];
 
 		Blob<Dtype> tmp_w(1, this->conv_in_channels_, this->conv_out_channels_, NUM_GAUSS);
 		Blob<Dtype> tmp_sigma(1, this->conv_in_channels_, this->conv_out_channels_, NUM_GAUSS);
 		Blob<Dtype> tmp_mu1(1, this->conv_in_channels_, this->conv_out_channels_, NUM_GAUSS);
 		Blob<Dtype> tmp_mu2(1, this->conv_in_channels_, this->conv_out_channels_, NUM_GAUSS);
-		Blob<Dtype> tmp_w_gmm(1, 1, this->conv_in_channels_, this->conv_out_channels_);
 
 		shared_ptr<Filler<Dtype> > weight_filler(GetFiller<Dtype>(this->layer_param_.convolution_param().weight_filler()));
 		shared_ptr<Filler<Dtype> > sigma_filler(GetFiller<Dtype>(this->layer_param_.convolution_param().sigma_filler()));
 		shared_ptr<Filler<Dtype> > mu_filler(GetFiller<Dtype>(this->layer_param_.convolution_param().mu_filler()));
 
 		weight_filler->Fill(&tmp_w);
-		weight_filler->Fill(&tmp_w_gmm); // TODO: add seperate filler for per-GMM weights
 		sigma_filler->Fill(&tmp_sigma);
 		//mu_filler->Fill(&tmp_mu1);
 		//mu_filler->Fill(&tmp_mu2);
@@ -161,7 +158,6 @@ void GaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
 		memcpy(this->param_buffer_mu1_->mutable_cpu_data() + this->param_buffer_mu1_->offset(0), tmp_mu1.cpu_data(), sizeof(Dtype) * this->conv_in_channels_ * this->conv_out_channels_ * NUM_GAUSS);
 		memcpy(this->param_buffer_mu2_->mutable_cpu_data() + this->param_buffer_mu2_->offset(0), tmp_mu2.cpu_data(), sizeof(Dtype) * this->conv_in_channels_ * this->conv_out_channels_ * NUM_GAUSS);
 		memcpy(this->param_buffer_sigma_->mutable_cpu_data() + this->param_buffer_sigma_->offset(0), tmp_sigma.cpu_data(), sizeof(Dtype) * this->conv_in_channels_ * this->conv_out_channels_ * NUM_GAUSS);
-		memcpy(this->param_buffer_w_gmm_->mutable_cpu_data() + this->param_buffer_w_gmm_->offset(0), tmp_w_gmm.cpu_data(), sizeof(Dtype) * this->conv_out_channels_ * this->conv_in_channels_);
 
 		// If necessary, fill the biases.
 		if (this->bias_term_) {
@@ -186,14 +182,6 @@ void GaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
 		this->blobs_[precomputed_blobs_offset + 3] = this->deriv_sigma_buffer_;
 		this->blobs_[precomputed_blobs_offset + 4] = this->deriv_mu1_buffer_;
 		this->blobs_[precomputed_blobs_offset + 5] = this->deriv_mu2_buffer_;
-
-
-		//param_buffer_w_lagrange_.reset(new Blob<Dtype>(1, 1, this->conv_out_channels_, this->conv_in_channels_));
-		param_buffer_w_lagrange_.reset(new Blob<Dtype>(1, 1, 1, this->conv_out_channels_));
-
-		// weight lagrange
-		this->blobs_[precomputed_blobs_offset + 6] = this->param_buffer_w_lagrange_;
-
 	}
 	// Propagate gradients to the parameters (as directed by backward pass).
 	this->param_propagate_down_.resize(this->blobs_.size(), true);
@@ -266,9 +254,6 @@ void GaussianConvLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
 	//this->tmp_bottom_buffer_.Reshape(this->conv_out_channels_, this->conv_in_channels_, this->height_out_, this->width_out_);
 	this->tmp_bottom_buffer_.Reshape(this->num_, this->conv_in_channels_, this->height_out_, this->width_out_); // for w_gmm without normalization
 
-	this->tmp_w_gmm_sign_.ReshapeLike(*this->param_buffer_w_gmm_);
-	this->tmp_w_gmm_fabs_.ReshapeLike(*this->param_buffer_w_gmm_);
-
 	this->tmp_w_sign_.ReshapeLike(*this->param_buffer_w_);
 	this->tmp_w_fabs_.ReshapeLike(*this->param_buffer_w_);
 
@@ -336,13 +321,11 @@ void GaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_pass
 	Blob<Dtype>& gauss_param_buffer_mu1 = *this->param_buffer_mu1_;
 	Blob<Dtype>& gauss_param_buffer_mu2 = *this->param_buffer_mu2_;
 	Blob<Dtype>& gauss_param_buffer_sigma = *this->param_buffer_sigma_;
-	Blob<Dtype>& gauss_param_buffer_w_gmm = *this->param_buffer_w_gmm_;
 
 	const Dtype* gauss_params_w = gauss_param_buffer_w.cpu_data();
 	const Dtype* gauss_params_mu1 = gauss_param_buffer_mu1.cpu_data();
 	const Dtype* gauss_params_mu2 = gauss_param_buffer_mu2.cpu_data();
 	const Dtype* gauss_params_sigma = gauss_param_buffer_sigma.cpu_data();
-	const Dtype* gauss_params_w_gmm = gauss_param_buffer_w_gmm.cpu_data();
 
 	int kernel_size = this->kernel_h_ * this->kernel_w_;
 
@@ -362,14 +345,7 @@ void GaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_pass
 
 		Dtype w_sum_2 = w_sum*w_sum;
 
-		//Dtype subfeature_weight_sum = caffe_cpu_asum(this->conv_in_channels_, gauss_params_w_gmm + gauss_param_buffer_w_gmm.offset(0,0,i));
-		Dtype subfeature_weight_sum = 1;
-
 		for (int j = 0; j < this->conv_in_channels_; ++j) { // over each subfeature (i.e. in feature)
-
-			//Dtype subfeature_weight = fabs(gauss_params_w_gmm[gauss_param_buffer_w_gmm.offset(0,0,i,j)]);
-			//Dtype subfeature_weight = gauss_params_w_gmm[gauss_param_buffer_w_gmm.offset(0,0,i,j)]; // abs
-			Dtype subfeature_weight = 1;
 
 			int weights_offset = this->weight_buffer_->offset(i,j);
 
@@ -434,10 +410,7 @@ void GaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_pass
 				}
 
 				// normalize current gauss and add it to final weight kernel buffer and add subfeature weight factor
-				// ( deriv_weight = deriv_weight +  subfeature_weight/subfeature_weight_sum *1/gauss_sum * weight_tmp)
 				Dtype normalize_factor = (Dtype)1.0/gauss_sum;
-				//normalize_factor = (Dtype)(subfeature_weight/subfeature_weight_sum) * normalize_factor; // sum
-				//normalize_factor = (Dtype)(subfeature_weight) * normalize_factor; // no sum
 				caffe_axpy(kernel_size, normalize_factor, weight_tmp, weight + weights_offset);
 
 				if (is_backward_pass) {
@@ -475,6 +448,7 @@ void GaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_pass
 
 			}
 			if (is_backward_pass) {
+
 
 				// notice: deriv_error_buffer_ has first two dimensions switched to enable more efficent computation of bottom error in backward process
 				int deriv_error_offset = this->deriv_error_buffer_->offset(j,i);
@@ -546,10 +520,6 @@ void GaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
 	Blob<Dtype>& gauss_param_buffer_mu1 = *this->param_buffer_mu1_;
 	Blob<Dtype>& gauss_param_buffer_mu2 = *this->param_buffer_mu2_;
 	Blob<Dtype>& gauss_param_buffer_sigma = *this->param_buffer_sigma_;
-	Blob<Dtype>& gauss_param_buffer_w_gmm = *this->param_buffer_w_gmm_;
-
-	Blob<Dtype>& gauss_param_buffer_w_lagrange = *this->param_buffer_w_lagrange_;
-
 
 	// clear values for gauassian parameters diffs
 	if (this->param_propagate_down_[0]) {
@@ -557,9 +527,6 @@ void GaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
 		caffe_set(gauss_param_buffer_mu1.count(), Dtype(0), gauss_param_buffer_mu1.mutable_cpu_diff());
 		caffe_set(gauss_param_buffer_mu2.count(), Dtype(0), gauss_param_buffer_mu2.mutable_cpu_diff());
 		caffe_set(gauss_param_buffer_sigma.count(), Dtype(0), gauss_param_buffer_sigma.mutable_cpu_diff());
-		caffe_set(gauss_param_buffer_w_gmm.count(), Dtype(0), gauss_param_buffer_w_gmm.mutable_cpu_diff());
-
-		caffe_set(gauss_param_buffer_w_lagrange.count(), Dtype(0), gauss_param_buffer_w_lagrange.mutable_cpu_diff());
 
 	}
 
@@ -570,36 +537,6 @@ void GaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
 		Dtype* bottom_diff = bottom[i]->mutable_cpu_diff();
 
 		if (this->param_propagate_down_[0] || propagate_down[i]) {
-
-			/*
-			// copy bottom input data into the same sized/padded array as top error data
-			// this is needed only for gradients of per-GMM weights
-			Dtype* bottom_data_resized = this->tmp_bottom_buffer_.mutable_cpu_data();
-
-
-			// set source offset to row [this->kernel_h_/2 - this->pad_h_] and column this->kernel_w_/2 - this->pad_w_
-			int start_src_offset = this->width_ * (this->kernel_h_/2 - this->pad_h_) + this->kernel_w_/2 - this->pad_w_;
-			// set increment for srouce data which should include strides in height
-			int src_increments = this->width_ * this->stride_h_;
-			for (int n = 0; n < this->num_; ++n) {
-				for (int s = 0; s < this->channels_; ++s) {
-					int src_offset = bottom[i]->offset(n,s);
-					int dst_offset = this->tmp_bottom_buffer_.offset(n,s);
-
-					// add start offset based on size of padding and kernel
-					src_offset += start_src_offset;
-					for (int h = 0; h < this->height_out_; ++h) {
-						// copy from original input to input with added crop and stride
-						caffe_cpu_copy_strided(this->width_out_,
-												bottom_data + src_offset, this->stride_w_,
-												bottom_data_resized + dst_offset, 1);
-						// increment src using width of line and stride in ehight
-						src_offset += src_increments;
-						// incremetn source by with of line in output
-						dst_offset += this->width_out_;
-					}
-				}
-			}*/
 
 			for (int n = 0; n < this->num_; ++n) {
 
@@ -655,95 +592,10 @@ void GaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
 					compute_parameter_deriv(n, this->col_buffer_, *deriv_mu2_buffer_, *top[i], gauss_param_buffer_mu2, 0);
 					compute_parameter_deriv(n, this->col_buffer_, *deriv_sigma_buffer_, *top[i], gauss_param_buffer_sigma, 0);
 
-					/* // sum
-					// convolve each input/bottom feature (i.e. subfeature) with matching GMM model for that subfeature WITHOUT subfeature weights
-					Dtype* bottom_data_convovled = this->tmp_bottom_buffer_.mutable_cpu_data();
-					const Dtype* weight = this->weight_buffer_->cpu_data();
-
-					for (int f = 0; f < this->conv_out_channels_; ++f) {
-
-						for (int s = 0; s < this->conv_in_channels_; ++s) {
-							caffe_cpu_gemm<Dtype>(CblasNoTrans, CblasNoTrans,
-													1,
-													this->conv_out_spatial_dim_,
-													this->kernel_h_ * this->kernel_w_,
-													(Dtype)1., weight + this->weight_buffer_->offset(f,s), this->col_buffer_.cpu_data() + this->col_buffer_.offset(s),
-													(Dtype)0., bottom_data_convovled + this->tmp_bottom_buffer_.offset(f,s));
-						}
-
-						caffe_cpu_gemm<Dtype>(CblasNoTrans, CblasTrans,
-												1,
-												this->channels_,
-												this->height_out_ * this->width_out_,
-												(Dtype)1., top_diff + top[i]->offset(n,f), bottom_data_convovled + this->tmp_bottom_buffer_.offset(f),
-												(Dtype)1., gauss_param_buffer_w_gmm.mutable_cpu_diff() + gauss_param_buffer_w_gmm.offset(0,0,f));
-
-					}
-					// compute gradients for subfeature weights
-					caffe_cpu_gemm<Dtype>(CblasNoTrans, CblasTrans,
-											this->num_output_,
-											this->channels_,
-											this->height_out_ * this->width_out_,
-											(Dtype)1., top_diff + top[i]->offset(n), bottom_data_resized + this->tmp_bottom_buffer_.offset(n),
-											(Dtype)1., gauss_param_buffer_w_gmm.mutable_cpu_diff()); // no sum
-											*/
 				}
 			}
 		}
 	}
-	// subfeature weights have to sum to 1 and this is reflected in computation of gradients by combining them with appropriate weights
-	/* - we do not use subfeature weights but instead normalize per-component weight over all GMM on other subfeatures as well
-	 *{  // sum
-		const Dtype* param_w_gmm_buffer = gauss_param_buffer_w_gmm.cpu_data();
-		Dtype* param_w_gmm_buffer_diff = gauss_param_buffer_w_gmm.mutable_cpu_diff();
-
-		Dtype* param_w_gmm_sign = this->tmp_w_gmm_sign_.mutable_cpu_data();
-		Dtype* param_w_gmm_fabs = this->tmp_w_gmm_fabs_.mutable_cpu_data();
-
-		caffe_cpu_sign(gauss_param_buffer_w_gmm.count(), param_w_gmm_buffer, param_w_gmm_sign);
-		caffe_cpu_fabs(gauss_param_buffer_w_gmm.count(), param_w_gmm_buffer, param_w_gmm_fabs);
-
-
-		// since we convolved with kernel that already has |w|/w_sum in it we neet to first remove that part from param_w_gmm_buffer_diff values
-		// we therfore multiply param_w_gmm_buffer_diff with w_sum/|w|
-
-		// we divide param_w_gmm_buffer_diff by absolute value of subfeature weight and apply w_sum within each loop
-		caffe_div(gauss_param_buffer_w_gmm.count(), param_w_gmm_buffer_diff, param_w_gmm_fabs, param_w_gmm_buffer_diff);
-		//caffe_div(gauss_param_buffer_w_gmm.count(), param_w_gmm_buffer_diff, param_w_gmm_buffer, param_w_gmm_buffer_diff); // abs
-
-		for (int f = 0; f < this->conv_out_channels_; ++f) {
-			Dtype w_sum = caffe_cpu_asum(this->conv_in_channels_, param_w_gmm_buffer + gauss_param_buffer_w_gmm.offset(0,0,f));
-
-			// multiply with w_sum as second part of eliminating |w|/w_sum within convolution kernel used in the first place
-			caffe_scal(this->conv_in_channels_, w_sum, param_w_gmm_buffer_diff + gauss_param_buffer_w_gmm.offset(0,0,f));
-
-			// sum gradients of all subfeatures from the same feature weighted by individual GMM weights
-			Dtype weighted_gradient_sum = caffe_cpu_dot(this->conv_in_channels_,
-														param_w_gmm_fabs + this->tmp_w_gmm_fabs_.offset(0,0,f),
-														//param_w_gmm_buffer + gauss_param_buffer_w_gmm.offset(0,0,f), // abs
-														param_w_gmm_buffer_diff + gauss_param_buffer_w_gmm.offset(0,0,f));
-
-			// normalize by sum of weights
-			weighted_gradient_sum = weighted_gradient_sum / w_sum;
-
-			// from abs
-			caffe_mul(this->conv_in_channels_, param_w_gmm_sign + this->tmp_w_gmm_sign_.offset(0,0,f),
-								param_w_gmm_buffer_diff + gauss_param_buffer_w_gmm.offset(0,0,f),
-								param_w_gmm_buffer_diff + gauss_param_buffer_w_gmm.offset(0,0,f));
-
-			// subtract normalized weighted gradient sum from each gradient
-			caffe_add_scalar(this->conv_in_channels_, -1 * weighted_gradient_sum, param_w_gmm_buffer_diff + gauss_param_buffer_w_gmm.offset(0,0,f));
-
-			// them multiply by sign(w)
-			caffe_mul(this->conv_in_channels_, param_w_gmm_sign + this->tmp_w_gmm_sign_.offset(0,0,f),
-						param_w_gmm_buffer_diff + gauss_param_buffer_w_gmm.offset(0,0,f),
-						param_w_gmm_buffer_diff + gauss_param_buffer_w_gmm.offset(0,0,f));
-
-			// and finally add normalization factor
-			caffe_scal(this->conv_in_channels_, (Dtype)1./w_sum, param_w_gmm_buffer_diff + gauss_param_buffer_w_gmm.offset(0,0,f));
-
-		}
-	}*/
 	if (this->use_gmm_weight_normalization) {
 
 		const Dtype* param_w_buffer = gauss_param_buffer_w.cpu_data();
@@ -806,44 +658,12 @@ void GaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
 	Dtype* gauss_mu1_deriv = gauss_param_buffer_mu1.mutable_cpu_diff();
 	Dtype* gauss_mu2_deriv = gauss_param_buffer_mu2.mutable_cpu_diff();
 	Dtype* gauss_sigma_deriv = gauss_param_buffer_sigma.mutable_cpu_diff();
-	Dtype* gauss_w_gmm_deriv = gauss_param_buffer_w_gmm.mutable_cpu_diff();
 
 	// add default normalizing factor to all parameters
 	caffe_scal(gauss_param_buffer_w.count(), norm_factor, gauss_w_deriv);
 	caffe_scal(gauss_param_buffer_mu1.count(), norm_factor, gauss_mu1_deriv);
 	caffe_scal(gauss_param_buffer_mu2.count(), norm_factor, gauss_mu2_deriv);
 	caffe_scal(gauss_param_buffer_sigma.count(), norm_factor, gauss_sigma_deriv);
-	caffe_scal(gauss_param_buffer_w_gmm.count(), norm_factor, gauss_w_gmm_deriv);
-
-	{
-		/*
-		// add lagrange multipliers for weights which constrain them to sum of 1
-		const Dtype* param_w_lagrange_buffer = gauss_param_buffer_w_lagrange.cpu_data();
-		const Dtype* param_w_buffer = gauss_param_buffer_w.cpu_data();
-
-		Dtype* param_w_buffer_diff = gauss_param_buffer_w.mutable_cpu_diff();
-		Dtype* param_w_lagrange_buffer_diff = gauss_param_buffer_w_lagrange.mutable_cpu_diff();
-
-		Dtype* param_w_sign = this->tmp_w_sign_.mutable_cpu_data();
-
-		caffe_cpu_sign(this->tmp_w_sign_.count(), param_w_buffer, param_w_sign); // this was already done but do it again just in case upper code gets disabled
-
-		for (int f = 0; f < this->conv_out_channels_; ++f) {
-			Dtype w_sum = 0;
-			for (int s = 0; s < this->conv_in_channels_; ++s) {
-				w_sum += caffe_cpu_asum(NUM_GAUSS, param_w_buffer + gauss_param_buffer_w.offset(0,s,f));
-			}
-
-			// update lagrange multiplier for weighths
-			param_w_lagrange_buffer_diff[f] = w_sum - 1;
-
-			for (int s = 0; s < this->conv_in_channels_; ++s) {
-				// add lagrange param_w_buffer_diff = param_w_buffer_diff + multiplier * sign(w)
-				caffe_axpy(NUM_GAUSS, param_w_lagrange_buffer[f], param_w_sign + this->tmp_w_sign_.offset(0,s,f), param_w_buffer_diff + gauss_param_buffer_w.offset(0,s,f));
-			}
-		}
-		*/
-	}
 }
 
 template <typename Dtype>
@@ -862,14 +682,6 @@ void GaussianConvLayer<Dtype>::compute_parameter_deriv(int num_iter,
 	Dtype* tmp_buff = tmp_buffer_.mutable_cpu_data();
 
 	Dtype* param_output = param_output_buffer.mutable_cpu_diff(); // using diff !!
-
-	const Dtype* param_w_gmm_buffer = this->param_buffer_w_gmm_->cpu_data();
-
-	Dtype* subfeature_weight_sum = (Dtype*)malloc(this->conv_out_channels_ * sizeof(Dtype));
-
-	for (int f = 0; f < this->conv_out_channels_; ++f) {
-		subfeature_weight_sum[f] = caffe_cpu_asum(this->conv_in_channels_, param_w_gmm_buffer + this->param_buffer_w_gmm_->offset(0,0,f));
-	}
 
 	for (int s = 0; s < this->conv_in_channels_; ++s) {
 
@@ -890,23 +702,8 @@ void GaussianConvLayer<Dtype>::compute_parameter_deriv(int num_iter,
 					this->conv_out_spatial_dim_,
 					(Dtype)1., tmp_buff + tmp_buffer_.offset(f), top_error + top_error_buffer.offset(num_iter,f),
 					(Dtype)1., param_output + param_output_buffer.offset(param_output_offset, s, f));
-
-			/* - we do not use subfeature_weight any more (only per gauss weight that can be normalized over components and GMMs from other sub-features)
-			// also apply normalized subfeature weight
-			Dtype subfeature_weight = fabs(param_w_gmm_buffer[this->param_buffer_w_gmm_->offset(0,0,f,s)]);
-			//Dtype subfeature_weight = param_w_gmm_buffer[this->param_buffer_w_gmm_->offset(0,0,f,s)]; // abs
-
-			subfeature_weight = subfeature_weight / subfeature_weight_sum[f]; // sum
-			subfeature_weight = 1;
-
-			// TODO: it would be more efficient to add factor after all N samples are summed up !!!
-			caffe_scal(NUM_GAUSS * 1, subfeature_weight, param_output + param_output_buffer.offset(param_output_offset, s, f));
-			*/
-
 		}
 	}
-
-	free(subfeature_weight_sum);
 }
 
 template <typename Dtype>
@@ -918,11 +715,6 @@ void GaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,cons
 	Backward_gpu(top, propagate_down, bottom);
 }
 
-
-#ifdef CPU_ONLY
-STUB_GPU(ConvolutionLayer);
-#endif
-*/
 INSTANTIATE_CLASS(GaussianConvLayer);
 REGISTER_LAYER_CLASS(GaussianConv);
 

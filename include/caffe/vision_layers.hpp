@@ -207,10 +207,7 @@ class GaussianConvLayer : public BaseConvolutionLayer<Dtype> {
   shared_ptr<Blob<Dtype> > param_buffer_mu1_;
   shared_ptr<Blob<Dtype> > param_buffer_mu2_;
   shared_ptr<Blob<Dtype> > param_buffer_sigma_;
-  shared_ptr<Blob<Dtype> > param_buffer_w_gmm_;
   shared_ptr<Blob<Dtype> > param_buffer_bias_;
-
-  shared_ptr<Blob<Dtype> > param_buffer_w_lagrange_;
 
   shared_ptr<Blob<Dtype> > weight_buffer_;
   shared_ptr<Blob<Dtype> > deriv_error_buffer_;
@@ -218,14 +215,10 @@ class GaussianConvLayer : public BaseConvolutionLayer<Dtype> {
   shared_ptr<Blob<Dtype> > deriv_sigma_buffer_;
   shared_ptr<Blob<Dtype> > deriv_mu1_buffer_;
   shared_ptr<Blob<Dtype> > deriv_mu2_buffer_;
-  //shared_ptr<Blob<Dtype> > subfeature_weight_buffer_;
 
   Blob<Dtype> tmp_buffer_;
   Blob<Dtype> tmp_deriv_weight_buffer_;
   Blob<Dtype> tmp_bottom_buffer_;
-
-  Blob<Dtype> tmp_w_gmm_sign_;
-  Blob<Dtype> tmp_w_gmm_fabs_;
 
   Blob<Dtype> tmp_w_sign_;
   Blob<Dtype> tmp_w_fabs_;
