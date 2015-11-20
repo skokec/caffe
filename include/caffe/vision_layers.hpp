@@ -259,6 +259,15 @@ class GaussianConvLayer : public BaseConvolutionLayer<Dtype> {
   void compute_parameter_deriv(int num_iter,const Blob<Dtype>& col_activations_buffer, const Blob<Dtype>& deriv_kernels_buffer, 
 				const Blob<Dtype>& top_error_buffer, Blob<Dtype>& param_output_buffer, int param_output_offset);
   
+  int kernel_h_, kernel_w_;
+  int stride_h_, stride_w_;
+  int pad_h_, pad_w_;
+  int height_, width_;
+  int height_out_, width_out_;
+  int conv_in_height_;
+  int conv_in_width_;
+  int weight_offset_;
+
   bool use_gmm_weight_normalization;
 
   shared_ptr<Blob<Dtype> > param_buffer_w_;

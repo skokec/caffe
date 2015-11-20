@@ -18,29 +18,29 @@ void GaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
 		const vector<Blob<Dtype>*>& top) {
 	int NUM_GAUSS_PER_AXIS = this->layer_param_.convolution_param().number_gauss();
 	int NUM_GAUSS =  NUM_GAUSS_PER_AXIS * NUM_GAUSS_PER_AXIS;
-	//if (this->layer_param_.loss_weight_size() == 0) {
-	//    this->layer_param_.add_loss_weight(Dtype(1));
-	//}
+
+	// TODO: with new changes in master kernel_size, pad and stripe are repeated fields
+	//       and this code needs to be changes to use that
 	CHECK_EQ(4, bottom[0]->num_axes()) << "Input must have 4 axes, "
 			<< "corresponding to (num, channels, height, width)";
 	// Configure the kernel size, padding, stride, and inputs.
 	ConvolutionParameter conv_param = this->layer_param_.convolution_param();
-	CHECK(!conv_param.has_kernel_size() !=
+	CHECK(!conv_param.kernel_size_size() !=
 			!(conv_param.has_kernel_h() && conv_param.has_kernel_w()))
-	<< "Filter size is kernel_size OR kernel_h and kernel_w; not both";
-	CHECK(conv_param.has_kernel_size() ||
+	<< "Filter size is kernel_size_size OR kernel_h and kernel_w; not both";
+	CHECK(conv_param.kernel_size_size() ||
 			(conv_param.has_kernel_h() && conv_param.has_kernel_w()))
 	<< "For non-square filters both kernel_h and kernel_w are required.";
-	CHECK((!conv_param.has_pad() && conv_param.has_pad_h()
+	CHECK((!conv_param.pad_size() && conv_param.has_pad_h()
 			&& conv_param.has_pad_w())
 			|| (!conv_param.has_pad_h() && !conv_param.has_pad_w()))
 	<< "pad is pad OR pad_h and pad_w are required.";
-	CHECK((!conv_param.has_stride() && conv_param.has_stride_h()
+	CHECK((!conv_param.stride_size() && conv_param.has_stride_h()
 			&& conv_param.has_stride_w())
 			|| (!conv_param.has_stride_h() && !conv_param.has_stride_w()))
 	<< "Stride is stride OR stride_h and stride_w are required.";
-	if (conv_param.has_kernel_size()) {
-		this->kernel_h_ = this->kernel_w_ = conv_param.kernel_size();
+	if (conv_param.kernel_size_size()) {
+		this->kernel_h_ = this->kernel_w_ = conv_param.kernel_size(0);
 	} else {
 		this->kernel_h_ = conv_param.kernel_h();
 		this->kernel_w_ = conv_param.kernel_w();
@@ -48,16 +48,95 @@ void GaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
 	CHECK_GT(this->kernel_h_, 0) << "Filter dimensions cannot be zero.";
 	CHECK_GT(this->kernel_w_, 0) << "Filter dimensions cannot be zero.";
 	if (!conv_param.has_pad_h()) {
-		this->pad_h_ = this->pad_w_ = conv_param.pad();
+		this->pad_h_ = this->pad_w_ = conv_param.pad(0);
 	} else {
 		this->pad_h_ = conv_param.pad_h();
 		this->pad_w_ = conv_param.pad_w();
 	}
 	if (!conv_param.has_stride_h()) {
-		this->stride_h_ = this->stride_w_ = conv_param.stride();
+		this->stride_h_ = this->stride_w_ = conv_param.stride(0);
 	} else {
 		this->stride_h_ = conv_param.stride_h();
 		this->stride_w_ = conv_param.stride_w();
+	}
+
+	this->force_nd_im2col_ = conv_param.force_nd_im2col();
+	this->channel_axis_ = bottom[0]->CanonicalAxisIndex(conv_param.axis());
+	const int first_spatial_axis = this->channel_axis_ + 1;
+	const int num_axes = bottom[0]->num_axes();
+	this->num_spatial_axes_ = num_axes - first_spatial_axis;
+	CHECK_GE(this->num_spatial_axes_, 0);
+	vector<int> bottom_dim_blob_shape(1, this->num_spatial_axes_ + 1);
+	vector<int> spatial_dim_blob_shape(1, std::max(this->num_spatial_axes_, 1));
+	// Setup filter kernel dimensions (kernel_shape_).
+	this->kernel_shape_.Reshape(spatial_dim_blob_shape);
+	int* kernel_shape_data = this->kernel_shape_.mutable_cpu_data();
+	if (conv_param.has_kernel_h() || conv_param.has_kernel_w()) {
+		CHECK_EQ(this->num_spatial_axes_, 2)
+			<< "kernel_h & kernel_w can only be used for 2D convolution.";
+		CHECK_EQ(0, conv_param.kernel_size_size())
+			<< "Either kernel_size or kernel_h/w should be specified; not both.";
+		kernel_shape_data[0] = conv_param.kernel_h();
+		kernel_shape_data[1] = conv_param.kernel_w();
+	} else {
+		const int num_kernel_dims = conv_param.kernel_size_size();
+		CHECK(num_kernel_dims == 1 || num_kernel_dims == this->num_spatial_axes_)
+			<< "kernel_size must be specified once, or once per spatial dimension "
+			<< "(kernel_size specified " << num_kernel_dims << " times; "
+			<< this->num_spatial_axes_ << " spatial dims);";
+		for (int i = 0; i < this->num_spatial_axes_; ++i) {
+			kernel_shape_data[i] = conv_param.kernel_size((num_kernel_dims == 1) ? 0 : i);
+		}
+	}
+	for (int i = 0; i < this->num_spatial_axes_; ++i) {
+		CHECK_GT(kernel_shape_data[i], 0) << "Filter dimensions must be nonzero.";
+	}
+	// Setup stride dimensions (stride_).
+	this->stride_.Reshape(spatial_dim_blob_shape);
+	int* stride_data = this->stride_.mutable_cpu_data();
+	if (conv_param.has_stride_h() || conv_param.has_stride_w()) {
+		CHECK_EQ(this->num_spatial_axes_, 2)
+			<< "stride_h & stride_w can only be used for 2D convolution.";
+		CHECK_EQ(0, conv_param.stride_size())
+			<< "Either stride or stride_h/w should be specified; not both.";
+		stride_data[0] = conv_param.stride_h();
+		stride_data[1] = conv_param.stride_w();
+	} else {
+		const int num_stride_dims = conv_param.stride_size();
+		CHECK(num_stride_dims == 0 || num_stride_dims == 1 ||
+			  num_stride_dims == this->num_spatial_axes_)
+			<< "stride must be specified once, or once per spatial dimension "
+			<< "(stride specified " << num_stride_dims << " times; "
+			<< this->num_spatial_axes_ << " spatial dims);";
+		const int kDefaultStride = 1;
+		for (int i = 0; i < this->num_spatial_axes_; ++i) {
+		  stride_data[i] = (num_stride_dims == 0) ? kDefaultStride :
+			  conv_param.stride((num_stride_dims == 1) ? 0 : i);
+		  CHECK_GT(stride_data[i], 0) << "Stride dimensions must be nonzero.";
+		}
+	}
+	// Setup pad dimensions (pad_).
+	this->pad_.Reshape(spatial_dim_blob_shape);
+	int* pad_data = this->pad_.mutable_cpu_data();
+	if (conv_param.has_pad_h() || conv_param.has_pad_w()) {
+		CHECK_EQ(this->num_spatial_axes_, 2)
+			<< "pad_h & pad_w can only be used for 2D convolution.";
+		CHECK_EQ(0, conv_param.pad_size())
+			<< "Either pad or pad_h/w should be specified; not both.";
+		pad_data[0] = conv_param.pad_h();
+		pad_data[1] = conv_param.pad_w();
+	} else {
+		const int num_pad_dims = conv_param.pad_size();
+		CHECK(num_pad_dims == 0 || num_pad_dims == 1 ||
+			  num_pad_dims == this->num_spatial_axes_)
+			<< "pad must be specified once, or once per spatial dimension "
+			<< "(pad specified " << num_pad_dims << " times; "
+			<< this->num_spatial_axes_ << " spatial dims);";
+		const int kDefaultPad = 0;
+		for (int i = 0; i < this->num_spatial_axes_; ++i) {
+		  pad_data[i] = (num_pad_dims == 0) ? kDefaultPad :
+			  conv_param.pad((num_pad_dims == 1) ? 0 : i);
+		}
 	}
 
 	//CHECK_EQ(this->stride_h_, 1) << "Only stride of 1 is supported";
@@ -67,6 +146,7 @@ void GaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
 	// and no padding, so flag for skipping the buffer and transformation.
 	this->is_1x1_ = this->kernel_w_ == 1 && this->kernel_h_ == 1
 			&& this->stride_h_ == 1 && this->stride_w_ == 1 && this->pad_h_ == 0 && this->pad_w_ == 0;
+	this->force_nd_im2col_ = false;
 	// Configure output channels and groups.
 	this->channels_ = bottom[0]->channels();
 	this->num_output_ = this->layer_param_.convolution_param().num_output();
@@ -82,6 +162,7 @@ void GaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
 		this->conv_out_channels_ = this->num_output_;
 		this->conv_in_channels_ = this->channels_;
 	}
+
 	// Handle the parameters: weights and biases.
 	// - blobs_[0] holds the filter weights
 	// - blobs_[1] holds the biases (optional)
@@ -193,6 +274,7 @@ void GaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
 template <typename Dtype>
 void GaussianConvLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
 		const vector<Blob<Dtype>*>& top) {
+	const int first_spatial_axis = this->channel_axis_ + 1;
 	int NUM_GAUSS_PER_AXIS = this->layer_param_.convolution_param().number_gauss();
 	int NUM_GAUSS =  NUM_GAUSS_PER_AXIS * NUM_GAUSS_PER_AXIS;
 
@@ -227,10 +309,30 @@ void GaussianConvLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
 		this->conv_in_width_ = this->width_;
 		this->conv_out_spatial_dim_ = this->height_out_ * this->width_out_;
 	}
+
+	this->out_spatial_dim_ = top[0]->count(first_spatial_axis);
+	this->bottom_dim_ = bottom[0]->count(this->channel_axis_);
+	this->top_dim_ = top[0]->count(this->channel_axis_);
+	this->num_kernels_im2col_ = this->conv_in_channels_ * this->conv_out_spatial_dim_;
+	this->num_kernels_col2im_ = reverse_dimensions() ? this->top_dim_ : this->bottom_dim_;
+
 	this->kernel_dim_ = this->conv_in_channels_ * this->kernel_h_ * this->kernel_w_;
 	this->weight_offset_ = this->conv_out_channels_ * this->kernel_dim_ / this->group_ / this->group_;
 	this->col_offset_ = this->kernel_dim_ * this->conv_out_spatial_dim_ / this->group_;
 	this->output_offset_ = this->conv_out_channels_ * this->conv_out_spatial_dim_ / this->group_;
+
+	 // Setup input dimensions (conv_input_shape_).
+	vector<int> bottom_dim_blob_shape(1, this->num_spatial_axes_ + 1);
+	this->conv_input_shape_.Reshape(bottom_dim_blob_shape);
+	int* conv_input_shape_data = this->conv_input_shape_.mutable_cpu_data();
+	for (int i = 0; i < this->num_spatial_axes_ + 1; ++i) {
+		if (reverse_dimensions()) {
+			conv_input_shape_data[i] = top[0]->shape(this->channel_axis_ + i);
+		} else {
+			conv_input_shape_data[i] = bottom[0]->shape(this->channel_axis_ + i);
+		}
+	}
+
 	// The im2col result buffer will only hold one image at a time to avoid
 	// overly large memory usage. In the special case of 1x1 convolution
 	// it goes lazily unused to save memory.

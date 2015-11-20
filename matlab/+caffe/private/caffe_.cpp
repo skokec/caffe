@@ -19,6 +19,31 @@
 
 #define MEX_ARGS int nlhs, mxArray **plhs, int nrhs, const mxArray **prhs
 
+#include "caffe/solver_factory.hpp"
+#include "caffe/sgd_solvers.hpp"
+
+// make sure to again register all solvers since original initialization does not happed properly due to matlab
+namespace caffe {
+
+INSTANTIATE_CLASS(RMSPropSolver);
+REGISTER_SOLVER_CLASS(RMSProp);
+
+INSTANTIATE_CLASS(AdaDeltaSolver);
+REGISTER_SOLVER_CLASS(AdaDelta);
+
+INSTANTIATE_CLASS(AdaGradSolver);
+REGISTER_SOLVER_CLASS(AdaGrad);
+
+INSTANTIATE_CLASS(AdamSolver);
+REGISTER_SOLVER_CLASS(Adam);
+
+INSTANTIATE_CLASS(NesterovSolver);
+REGISTER_SOLVER_CLASS(Nesterov);
+
+INSTANTIATE_CLASS(SGDSolver);
+REGISTER_SOLVER_CLASS(SGD);
+}
+
 using namespace caffe;  // NOLINT(build/namespaces)
 
 // Do CHECK and throw a Mex error if check fails
@@ -190,8 +215,11 @@ static void get_solver(MEX_ARGS) {
   mxCHECK_FILE_EXIST(solver_file);
   SolverParameter solver_param;
   ReadSolverParamsFromTextFileOrDie(solver_file, &solver_param);
-  shared_ptr<Solver<float> > solver(
-      SolverRegistry<float>::CreateSolver(solver_param));
+  LOG(INFO)  << "SolverRegistry::CreateSolver will be called next";
+
+
+  Solver<float>* s = SolverRegistry<float>::CreateSolver(solver_param);
+  shared_ptr<Solver<float> > solver(s);
   solvers_.push_back(solver);
   plhs[0] = ptr_to_handle<Solver<float> >(solver.get());
   mxFree(solver_file);
