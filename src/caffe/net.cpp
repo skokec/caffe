@@ -470,6 +470,7 @@ template <typename Dtype>
 void Net<Dtype>::AppendParam(const NetParameter& param, const int layer_id,
                              const int param_id) {
   const LayerParameter& layer_param = layers_[layer_id]->layer_param();
+  if (layer_param.param(param_id).lr_mult() == 0) return;
   const int param_size = layer_param.param_size();
   string param_name =
       (param_size > param_id) ? layer_param.param(param_id).name() : "";
