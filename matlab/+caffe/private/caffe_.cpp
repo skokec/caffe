@@ -349,6 +349,15 @@ static void net_backward(MEX_ARGS) {
   net->Backward();
 }
 
+// Usage: caffe_('net_share_trained_layers', hNet_dst, hNet_src)
+static void net_share_trained_layers(MEX_ARGS) {
+  mxCHECK(nrhs == 2 && mxIsStruct(prhs[0]) && mxIsStruct(prhs[1]),
+      "Usage: caffe_('net_share_trained_layers', hNet_dst, hNet_src)");
+  Net<float>* net_dst = handle_to_ptr<Net<float> >(prhs[0]);
+  Net<float>* net_src = handle_to_ptr<Net<float> >(prhs[1]);    
+  net_dst->ShareTrainedLayersWith(net_src);
+}
+
 // Usage: caffe_('net_copy_from', hNet, weights_file)
 static void net_copy_from(MEX_ARGS) {
   mxCHECK(nrhs == 2 && mxIsStruct(prhs[0]) && mxIsChar(prhs[1]),
@@ -562,6 +571,7 @@ static handler_registry handlers[] = {
   { "net_get_attr",       net_get_attr    },
   { "net_forward",        net_forward     },
   { "net_backward",       net_backward    },
+  { "net_share_trained_layers",      net_share_trained_layers   },
   { "net_copy_from",      net_copy_from   },
   { "net_reshape",        net_reshape     },
   { "net_save",           net_save        },

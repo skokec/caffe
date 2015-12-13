@@ -216,6 +216,9 @@ class Blob {
     return diff_;
   }
 
+  void force_cpu_data() { CHECK(data_); data_->set_head(SyncedMemory::HEAD_AT_CPU); }
+  void force_cpu_diff() { CHECK(diff_); diff_->set_head(SyncedMemory::HEAD_AT_CPU); }
+
   const Dtype* cpu_data() const;
   void set_cpu_data(Dtype* data);
   const int* gpu_shape() const;

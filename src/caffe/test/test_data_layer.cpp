@@ -78,7 +78,7 @@ class DataLayerTest : public MultiDeviceTest<TypeParam> {
 
     TransformationParameter* transform_param =
         param.mutable_transform_param();
-    transform_param->set_scale(scale);
+    transform_param->set_scale(0,scale);
 
     DataLayer<Dtype> layer(param);
     layer.SetUp(blob_bottom_vec_, blob_top_vec_);
@@ -183,7 +183,7 @@ class DataLayerTest : public MultiDeviceTest<TypeParam> {
 
     TransformationParameter* transform_param =
         param.mutable_transform_param();
-    transform_param->set_scale(scale);
+    transform_param->set_scale(0,scale);
     transform_param->set_crop_size(1);
 
     DataLayer<Dtype> layer(param);

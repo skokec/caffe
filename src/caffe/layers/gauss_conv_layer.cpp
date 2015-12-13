@@ -349,7 +349,40 @@ void GaussianConvLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
 	this->deriv_mu1_buffer_->Reshape(this->conv_in_channels_, NUM_GAUSS * this->conv_out_channels_, this->kernel_h_, this->kernel_w_);
 	this->deriv_mu2_buffer_->Reshape(this->conv_in_channels_, NUM_GAUSS * this->conv_out_channels_, this->kernel_h_, this->kernel_w_);
 
-	this->tmp_buffer_.Reshape(this->conv_out_channels_, NUM_GAUSS, this->height_out_, this->width_out_);
+
+	if (this->tmp_buffer_.size() != this->conv_in_channels_) {
+		for (int i = 0; i < this->tmp_buffer_.size(); ++i)
+			delete this->tmp_buffer_[i];
+
+		this->tmp_buffer_.resize(this->conv_in_channels_,0);
+
+		for (int i = 0; i < this->tmp_buffer_.size(); ++i)
+			this->tmp_buffer_[i] = new Blob<Dtype>(this->conv_out_channels_, NUM_GAUSS, this->height_out_, this->width_out_);
+	} else {
+		for (int i = 0; i < this->tmp_buffer_.size(); ++i)
+			if (this->tmp_buffer_[i] == NULL)
+				this->tmp_buffer_[i] = new Blob<Dtype>(this->conv_out_channels_, NUM_GAUSS, this->height_out_, this->width_out_);
+			else
+				this->tmp_buffer_[i]->Reshape(this->conv_out_channels_, NUM_GAUSS, this->height_out_, this->width_out_);
+	}
+
+	if (A != NULL) delete A;
+	if (B != NULL) delete B;
+	if (C != NULL) delete C;
+
+    A = new const Dtype*[this->conv_out_channels_ * this->conv_in_channels_];
+	B = new const Dtype*[this->conv_out_channels_ * this->conv_in_channels_];
+	C = new Dtype*[this->conv_out_channels_ * this->conv_in_channels_];
+
+#ifndef CPU_ONLY
+	if (d_A != NULL) cudaFree(d_A);
+	if (d_B != NULL) cudaFree(d_B);
+	if (d_C != NULL) cudaFree(d_C);
+
+	cudaMalloc((void**)&d_A, this->conv_out_channels_ * this->conv_in_channels_ * sizeof(Dtype*));
+	cudaMalloc((void**)&d_B, this->conv_out_channels_ * this->conv_in_channels_ * sizeof(Dtype*));
+	cudaMalloc((void**)&d_C, this->conv_out_channels_ * this->conv_in_channels_ * sizeof(Dtype*));
+#endif
 
 	this->tmp_deriv_weight_buffer_.Reshape(1, NUM_GAUSS , this->kernel_h_, this->kernel_w_);
 
@@ -387,17 +420,32 @@ double caffe_sum(const int N, const double* X) {
 	return sum;
 }
 
+#include <ctime>
+
 template <typename Dtype>
 void GaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_pass) {
 
+	clock_t start_t = clock();
+
 	int NUM_GAUSS_PER_AXIS = this->layer_param_.convolution_param().number_gauss();
 	int NUM_GAUSS =  NUM_GAUSS_PER_AXIS * NUM_GAUSS_PER_AXIS;
+
+	// force head to CPU to avoid copying from GPU back to CPU which would be zeroed anyway
+	this->weight_buffer_->force_cpu_data();
 
 	Dtype* weight = this->weight_buffer_->mutable_cpu_data();
 
 	Dtype* deriv_error, *deriv_weight, *deriv_sigma, *deriv_mu1, *deriv_mu2, *tmp_deriv_weight;
 
 	if (is_backward_pass) {
+
+		// force head to CPU to avoid copying from GPU back to CPU which would be zeroed anyway
+		this->deriv_error_buffer_->force_cpu_data();
+		this->deriv_weight_buffer_->force_cpu_data();
+		this->deriv_mu1_buffer_->force_cpu_data();
+		this->deriv_mu2_buffer_->force_cpu_data();
+		this->deriv_sigma_buffer_->force_cpu_data();
+
 		deriv_error = this->deriv_error_buffer_->mutable_cpu_data();
 		deriv_weight = this->deriv_weight_buffer_->mutable_cpu_data();
 		deriv_mu1 = this->deriv_mu1_buffer_->mutable_cpu_data();
@@ -479,6 +527,12 @@ void GaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_pass
 
 				// precompute sigma^2
 				Dtype sigma2 = sigma*sigma;
+				Dtype sigma3 = sigma2*sigma;
+
+				Dtype sigma2_inv = 1/sigma2;
+				Dtype sigma3_inv = 1/sigma3;
+
+				Dtype sigma2_inv_half = sigma2_inv/2;
 
 				Dtype gauss_sum = 0;
 
@@ -493,16 +547,15 @@ void GaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_pass
 						Dtype dist_y_2 = dist_y*dist_y;
 
 						Dtype dist = dist_x_2 + dist_y_2;
-						Dtype gauss_value = exp(-(dist)/(2 * sigma2));
+						Dtype gauss_value = exp( -dist * sigma2_inv_half);
 
 						weight_tmp[weights_index] = w * gauss_value;
-						//weight[weights_offset + weights_index] += w * gauss_value * 1.0 /(2 * 3.1416 * sigma2);
 						if (is_backward_pass) {
 
 							tmp_deriv_weight[tmp_deriv_weight_offset + weights_index] = gauss_value;
-							deriv_mu1[deriv_mu1_offset + weights_index] = (dist_x / sigma2) * gauss_value;
-							deriv_mu2[deriv_mu2_offset + weights_index] = (dist_y / sigma2) * gauss_value;
-							deriv_sigma[deriv_sigma_offset + weights_index] = (dist / (sigma2 * sigma)) * gauss_value;
+							deriv_mu1[deriv_mu1_offset + weights_index] = (dist_x * sigma2_inv) * gauss_value;
+							deriv_mu2[deriv_mu2_offset + weights_index] = (dist_y * sigma2_inv) * gauss_value;
+							deriv_sigma[deriv_sigma_offset + weights_index] = (dist * sigma3_inv) * gauss_value;
 						}
 
 						gauss_sum += gauss_value;
@@ -566,12 +619,17 @@ void GaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_pass
 	}
 
 	free(weight_tmp);
+
+	clock_t end_t = clock();
+
+	LOG(INFO) << "precompute_guassian_weights done in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC);
 }
 
 
 template <typename Dtype>
 void GaussianConvLayer<Dtype>::Forward_cpu(const vector<Blob<Dtype>*>& bottom,
 		const vector<Blob<Dtype>*>& top) {
+	LOG(INFO) << "called Forward_cpu";
 	// forward CPU:
 	// go over each bottom sub-feature i
 	// go over each top feature j
@@ -581,41 +639,46 @@ void GaussianConvLayer<Dtype>::Forward_cpu(const vector<Blob<Dtype>*>& bottom,
 	// add bias b[j] to  j-th result
 
 	// precompute kernels from gaussian parameters but only for forward pass
-	this->precompute_guassian_weights(false);
+	//this->precompute_guassian_weights(false);
+	this->precompute_guassian_weights(true); // avoid second call in Backward_cpu and just compute everything here
+
+	const Dtype* weight = using_gpu ? this->weight_buffer_->gpu_data() : this->weight_buffer_->cpu_data();
+	const Dtype* bias = using_gpu ? this->param_buffer_bias_->gpu_data() : this->param_buffer_bias_->cpu_data();
 
 	for (int i = 0; i < bottom.size(); ++i) {
 
-		const Dtype* weight = this->weight_buffer_->cpu_data();
-		const Dtype* bottom_data = bottom[i]->cpu_data();
-		Dtype* top_data = top[i]->mutable_cpu_data();
+		const Dtype* bottom_data = using_gpu ? bottom[i]->gpu_data() : bottom[i]->cpu_data();
+		Dtype* top_data = using_gpu ? top[i]->mutable_gpu_data() : top[i]->mutable_cpu_data();
 
 		for (int n = 0; n < this->num_; ++n) {
-			this->forward_cpu_gemm(bottom_data + bottom[i]->offset(n), weight,
-					top_data + top[i]->offset(n));
+			this->forward_cpu_gpu_gemm(bottom_data + bottom[i]->offset(n), weight, top_data + top[i]->offset(n));
 			if (this->bias_term_) {
-				const Dtype* bias = this->param_buffer_bias_->cpu_data();
-				this->forward_cpu_bias(top_data + top[i]->offset(n), bias);
+				this->forward_cpu_gpu_bias(top_data + top[i]->offset(n), bias);
 			}
 		}
 	}
+	LOG(INFO) << "finished Forward_cpu";
 }
 
 
 template <typename Dtype>
 void GaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
 		const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom) {
+	LOG(INFO) << "called Backward_cpu";
 	// backward CPU:
 	{
 		for (int i = 0; i < this->blobs_.size(); ++i) {
-			Dtype* tt = this->blobs_[i]->mutable_cpu_data();
-			caffe_set(this->blobs_[i]->count(), Dtype(0), this->blobs_[i]->mutable_cpu_diff());
+			if (using_gpu)
+				caffe_gpu_set(this->blobs_[i]->count(), Dtype(0), this->blobs_[i]->mutable_gpu_diff());
+			else
+				caffe_set(this->blobs_[i]->count(), Dtype(0), this->blobs_[i]->mutable_cpu_diff());
 		}
 	}
 	int NUM_GAUSS_PER_AXIS = this->layer_param_.convolution_param().number_gauss();
 	int NUM_GAUSS =  NUM_GAUSS_PER_AXIS * NUM_GAUSS_PER_AXIS;
 
 	// precompute kernels from gaussian parameters for forward and backward pass
-	this->precompute_guassian_weights(true);
+	//this->precompute_guassian_weights(true);
 
 
 	Blob<Dtype>& gauss_param_buffer_w = *this->param_buffer_w_;
@@ -623,20 +686,30 @@ void GaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
 	Blob<Dtype>& gauss_param_buffer_mu2 = *this->param_buffer_mu2_;
 	Blob<Dtype>& gauss_param_buffer_sigma = *this->param_buffer_sigma_;
 
+	const Dtype* weight = using_gpu ? weight_buffer_->gpu_data() :  weight_buffer_->cpu_data();
+
 	// clear values for gauassian parameters diffs
 	if (this->param_propagate_down_[0]) {
-		caffe_set(gauss_param_buffer_w.count(), Dtype(0), gauss_param_buffer_w.mutable_cpu_diff());
-		caffe_set(gauss_param_buffer_mu1.count(), Dtype(0), gauss_param_buffer_mu1.mutable_cpu_diff());
-		caffe_set(gauss_param_buffer_mu2.count(), Dtype(0), gauss_param_buffer_mu2.mutable_cpu_diff());
-		caffe_set(gauss_param_buffer_sigma.count(), Dtype(0), gauss_param_buffer_sigma.mutable_cpu_diff());
+		if (using_gpu) {
 
+			caffe_gpu_set(gauss_param_buffer_w.count(), Dtype(0), gauss_param_buffer_w.mutable_gpu_diff());
+			caffe_gpu_set(gauss_param_buffer_mu1.count(), Dtype(0), gauss_param_buffer_mu1.mutable_gpu_diff());
+			caffe_gpu_set(gauss_param_buffer_mu2.count(), Dtype(0), gauss_param_buffer_mu2.mutable_gpu_diff());
+			caffe_gpu_set(gauss_param_buffer_sigma.count(), Dtype(0), gauss_param_buffer_sigma.mutable_gpu_diff());
+
+		} else {
+			caffe_set(gauss_param_buffer_w.count(), Dtype(0), gauss_param_buffer_w.mutable_cpu_diff());
+			caffe_set(gauss_param_buffer_mu1.count(), Dtype(0), gauss_param_buffer_mu1.mutable_cpu_diff());
+			caffe_set(gauss_param_buffer_mu2.count(), Dtype(0), gauss_param_buffer_mu2.mutable_cpu_diff());
+			caffe_set(gauss_param_buffer_sigma.count(), Dtype(0), gauss_param_buffer_sigma.mutable_cpu_diff());
+		}
 	}
 
 	for (int i = 0; i < top.size(); ++i) {
-		const Dtype* top_diff = top[i]->cpu_diff();
-		const Dtype* bottom_data = bottom[i]->cpu_data();
+		const Dtype* top_diff = using_gpu ? top[i]->gpu_diff() : top[i]->cpu_diff();
+		const Dtype* bottom_data = using_gpu ? bottom[i]->gpu_data() : bottom[i]->cpu_data();
 
-		Dtype* bottom_diff = bottom[i]->mutable_cpu_diff();
+		Dtype* bottom_diff = using_gpu ? bottom[i]->mutable_gpu_diff() : bottom[i]->mutable_cpu_diff();
 
 		if (this->param_propagate_down_[0] || propagate_down[i]) {
 
@@ -650,8 +723,8 @@ void GaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
 					// multiply result with bottom activation values (element wise)
 					// save result to top_error[i,k]
 
-					this->backward_cpu_gemm(top_diff + top[i]->offset(n), weight_buffer_->cpu_data(),
-				              	  	  	  	  bottom_diff + bottom[i]->offset(n));
+					this->backward_cpu_gpu_gemm(top_diff + top[i]->offset(n), weight, bottom_diff + bottom[i]->offset(n));
+
 				}
 				if (this->param_propagate_down_[0]) {
 					// calculate gradients for each gaussain parameter (weights, mean [x,y], sigma)
@@ -662,12 +735,20 @@ void GaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
 					// save result to top_error[i,k]
 
 					// convert bottom activation data into column array where convolution can be performed using matrix multiplication
-					im2col_cpu(bottom_data + bottom[i]->offset(n),
-							this->conv_in_channels_,
-							this->conv_in_height_, this->conv_in_width_,
-							this->kernel_h_, this->kernel_w_,
-							this->pad_h_, this->pad_w_, this->stride_h_, this->stride_w_,
-							this->col_buffer_.mutable_cpu_data());
+					if (using_gpu)
+						im2col_gpu(bottom_data + bottom[i]->offset(n),
+								this->conv_in_channels_,
+								this->conv_in_height_, this->conv_in_width_,
+								this->kernel_h_, this->kernel_w_,
+								this->pad_h_, this->pad_w_, this->stride_h_, this->stride_w_,
+								this->col_buffer_.mutable_gpu_data());
+					else
+						im2col_cpu(bottom_data + bottom[i]->offset(n),
+								this->conv_in_channels_,
+								this->conv_in_height_, this->conv_in_width_,
+								this->kernel_h_, this->kernel_w_,
+								this->pad_h_, this->pad_w_, this->stride_h_, this->stride_w_,
+								this->col_buffer_.mutable_cpu_data());
 
 					// compute convolution with bottom activation data (in column format) with kernels for weight derivative,
 					// do dot-product of resut with top error and store final result to gaussian parameter diffs (i.e to diff of blobs_[0])
@@ -683,6 +764,7 @@ void GaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
 		}
 	}
 	if (this->use_gmm_weight_normalization) {
+		LOG(INFO) << "doing gmm weight normalization";
 
 		const Dtype* param_w_buffer = gauss_param_buffer_w.cpu_data();
 		Dtype* param_w_buffer_diff = gauss_param_buffer_w.mutable_cpu_diff();
@@ -750,6 +832,8 @@ void GaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
 	caffe_scal(gauss_param_buffer_mu1.count(), norm_factor, gauss_mu1_deriv);
 	caffe_scal(gauss_param_buffer_mu2.count(), norm_factor, gauss_mu2_deriv);
 	caffe_scal(gauss_param_buffer_sigma.count(), norm_factor, gauss_sigma_deriv);
+
+	LOG(INFO) << "finished Backward_cpu";
 }
 
 template <typename Dtype>
@@ -758,47 +842,157 @@ void GaussianConvLayer<Dtype>::compute_parameter_deriv(int num_iter,
 		const Blob<Dtype>& top_error_buffer,
 		Blob<Dtype>& param_output_buffer, int param_output_offset) {
 
+//	clock_t start_t = clock();
+
 	int NUM_GAUSS_PER_AXIS = this->layer_param_.convolution_param().number_gauss();
 	int NUM_GAUSS =  NUM_GAUSS_PER_AXIS * NUM_GAUSS_PER_AXIS;
 
-	const Dtype* col_buff = col_activations_buffer.cpu_data();
-	const Dtype* deriv_kernels = deriv_kernels_buffer.cpu_data();
-	const Dtype* top_error = top_error_buffer.cpu_diff(); // using diff !!
+	const Dtype* col_buff = using_gpu ? col_activations_buffer.gpu_data() : col_activations_buffer.cpu_data();
+	const Dtype* deriv_kernels = using_gpu ? deriv_kernels_buffer.gpu_data() : deriv_kernels_buffer.cpu_data();
+	const Dtype* top_error = using_gpu ? top_error_buffer.gpu_diff() : top_error_buffer.cpu_diff(); // using diff !!
 
-	Dtype* tmp_buff = tmp_buffer_.mutable_cpu_data();
 
-	Dtype* param_output = param_output_buffer.mutable_cpu_diff(); // using diff !!
+	Dtype* param_output = using_gpu ? param_output_buffer.mutable_gpu_diff() : param_output_buffer.mutable_cpu_diff(); // using diff !!
 
 	for (int s = 0; s < this->conv_in_channels_; ++s) {
 
+		Dtype* tmp_buff = using_gpu ? tmp_buffer_[s]->mutable_gpu_data() : tmp_buffer_[s]->mutable_cpu_data();
+
 		// compute convolution of activations with weight deriv gaussian for all s-th sub-feature (i.e. NUM_GAUSS * NUM_OUT_CHANNELS number of convolutions)
-		caffe_cpu_gemm<Dtype>(CblasNoTrans, CblasNoTrans,
-				this->conv_out_channels_ * NUM_GAUSS,
-				this->conv_out_spatial_dim_,
-				this->kernel_h_ * this->kernel_w_,
-				(Dtype)1., deriv_kernels + deriv_kernels_buffer.offset(s) , col_buff + col_activations_buffer.offset(s),
-				(Dtype)0., tmp_buff);
+		A[s] = deriv_kernels + deriv_kernels_buffer.offset(s);
+		B[s] = col_buff + col_activations_buffer.offset(s);
+		C[s] = tmp_buff;
+	}
+#ifndef CPU_ONLY
+	if (this->using_gpu) {
+		cudaMemcpy(d_A, A, this->conv_in_channels_ *sizeof(Dtype*), cudaMemcpyHostToDevice);
+		cudaMemcpy(d_B, B, this->conv_in_channels_ *sizeof(Dtype*), cudaMemcpyHostToDevice);
+		cudaMemcpy(d_C, C, this->conv_in_channels_ *sizeof(Dtype*), cudaMemcpyHostToDevice);
+	} else
+#endif
+	{
+		d_A = (Dtype**)A;
+		d_B = (Dtype**)B;
+		d_C = C;
+	}
+
+	caffe_cpu_gpu_gemm_batched(CblasNoTrans, CblasNoTrans,
+					this->conv_out_channels_ * NUM_GAUSS,
+					this->conv_out_spatial_dim_,
+					this->kernel_h_ * this->kernel_w_,
+					(Dtype)1., (const Dtype**)d_A, (const Dtype**)d_B,
+					(Dtype)0., d_C, this->conv_in_channels_);
+
+	for (int s = 0; s < this->conv_in_channels_; ++s) {
+
+		const Dtype* tmp_buff = using_gpu ? tmp_buffer_[s]->gpu_data() : tmp_buffer_[s]->cpu_data();
 
 		// perform dot-product of each convolution result with top error diff for each feature individualy
-		for (int f = 0; f < this->conv_out_channels_; ++f) {
 
-			caffe_cpu_gemm<Dtype>(CblasNoTrans, CblasNoTrans,
-					NUM_GAUSS,
-					1,
-					this->conv_out_spatial_dim_,
-					(Dtype)1., tmp_buff + tmp_buffer_.offset(f), top_error + top_error_buffer.offset(num_iter,f),
-					(Dtype)1., param_output + param_output_buffer.offset(param_output_offset, s, f));
+		for (int f = 0; f < this->conv_out_channels_; ++f) {
+			A[s * this->conv_out_channels_ + f] = tmp_buff + tmp_buffer_[s]->offset(f);
+			B[s * this->conv_out_channels_ + f] = top_error + top_error_buffer.offset(num_iter,f);
+			C[s * this->conv_out_channels_ + f] = param_output + param_output_buffer.offset(param_output_offset, s, f);
+
 		}
 	}
+#ifndef CPU_ONLY
+	if (this->using_gpu) {
+		cudaMemcpy(d_A, A, this->conv_out_channels_* this->conv_in_channels_ *sizeof(Dtype*), cudaMemcpyHostToDevice);
+		cudaMemcpy(d_B, B, this->conv_out_channels_* this->conv_in_channels_ *sizeof(Dtype*), cudaMemcpyHostToDevice);
+		cudaMemcpy(d_C, C, this->conv_out_channels_* this->conv_in_channels_ *sizeof(Dtype*), cudaMemcpyHostToDevice);
+	} else
+#endif
+	{
+		d_A = (Dtype**)A;
+		d_B = (Dtype**)B;
+		d_C = C;
+	}
+
+	caffe_cpu_gpu_gemm_batched(CblasNoTrans, CblasNoTrans,
+						NUM_GAUSS,
+						1,
+						this->conv_out_spatial_dim_,
+						(Dtype)1., (const Dtype**)d_A, (const Dtype**)d_B,
+						(Dtype)1., d_C, this->conv_out_channels_* this->conv_in_channels_);
+
+//	clock_t end_t = clock();
+//	LOG(INFO) << "compute_parameter_deriv done in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC);
+}
+
+
+template <typename Dtype>
+void GaussianConvLayer<Dtype>::forward_cpu_gpu_gemm(const Dtype* input, const Dtype* weights, Dtype* output, bool skip_im2col) {
+	if (using_gpu)
+		this->forward_gpu_gemm(input, weights, output, skip_im2col);
+	else
+		this->forward_cpu_gemm(input, weights, output, skip_im2col);
+}
+
+template <typename Dtype>
+void GaussianConvLayer<Dtype>::forward_cpu_gpu_bias(Dtype* output, const Dtype* bias) {
+	if (using_gpu)
+		this->forward_gpu_bias(output, bias);
+	else
+		this->forward_cpu_bias(output, bias);
+}
+
+template <typename Dtype>
+void GaussianConvLayer<Dtype>::backward_cpu_gpu_gemm(const Dtype* output, const Dtype* weights, Dtype* input) {
+	if (using_gpu)
+		this->backward_gpu_gemm(output, weights, input);
+	else
+		this->backward_cpu_gemm(output, weights, input);
+}
+
+template <typename Dtype>
+void GaussianConvLayer<Dtype>::weight_cpu_gpu_gemm(const Dtype* input, const Dtype* output, Dtype* weights) {
+	if (using_gpu)
+		this->weight_gpu_gemm(input, output, weights);
+	else
+		this->weight_cpu_gemm(input, output, weights);
+}
+
+template <typename Dtype>
+void GaussianConvLayer<Dtype>::backward_cpu_gpu_bias(Dtype* bias, const Dtype* input) {
+	if (using_gpu)
+		this->backward_gpu_bias(bias, input);
+	else
+		this->backward_cpu_bias(bias, input);
+}
+
+
+template <typename Dtype>
+void GaussianConvLayer<Dtype>::caffe_cpu_gpu_gemm(const CBLAS_TRANSPOSE TransA, const CBLAS_TRANSPOSE TransB, const int M, const int N, const int K, const Dtype alpha, const Dtype* A, const Dtype* B, const Dtype beta, Dtype* C) {
+	if (using_gpu)
+		caffe_gpu_gemm<Dtype>(TransA, TransB, M, N, K, alpha, A, B, beta, C);
+	else
+		caffe_cpu_gemm<Dtype>(TransA, TransB, M, N, K, alpha, A, B, beta, C);
+
+}
+
+template <typename Dtype>
+void GaussianConvLayer<Dtype>::caffe_cpu_gpu_gemm_batched(const CBLAS_TRANSPOSE TransA, const CBLAS_TRANSPOSE TransB, const int M, const int N, const int K, const Dtype alpha, const Dtype** A, const Dtype** B, const Dtype beta, Dtype** C, int batch_count) {
+	if (using_gpu) {
+		caffe_gpu_gemm_batched<Dtype>(TransA, TransB, M, N, K, alpha, A, B, beta, C, batch_count);
+	} else {
+		for (int i = 0; i < batch_count; ++i)
+			caffe_cpu_gemm<Dtype>(TransA, TransB, M, N, K, alpha, A[i], B[i], beta, C[i]);
+	}
+
 }
 
 template <typename Dtype>
 void GaussianConvLayer<Dtype>::Forward_gpu(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top) {
+	using_gpu = true;
 	Forward_cpu(bottom, top);
+	using_gpu = false;
 }
 template <typename Dtype>
 void GaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom) {
-	Backward_gpu(top, propagate_down, bottom);
+	using_gpu = true;
+	Backward_cpu(top, propagate_down, bottom);
+	using_gpu = false;
 }
 
 INSTANTIATE_CLASS(GaussianConvLayer);

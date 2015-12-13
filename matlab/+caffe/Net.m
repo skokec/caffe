@@ -117,6 +117,9 @@ classdef Net < handle
         res{n} = self.blobs(self.inputs{n}).get_diff();
       end
     end
+    function share_trained_layers_with(self, net)
+	caffe_('net_share_trained_layers', self.hNet_self, net.hNet_self);
+    end
     function copy_from(self, weights_file)
       CHECK(ischar(weights_file), 'weights_file must be a string');
       CHECK_FILE_EXIST(weights_file);

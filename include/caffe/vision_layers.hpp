@@ -240,7 +240,25 @@ class GaussianConvLayer : public BaseConvolutionLayer<Dtype> {
  public:
   
   explicit GaussianConvLayer(const LayerParameter& param)
-      : BaseConvolutionLayer<Dtype>(param) {}
+      : BaseConvolutionLayer<Dtype>(param), using_gpu(0), A(0), B(0), C(0), d_A(0), d_B(0), d_C(0) {}
+
+  virtual ~GaussianConvLayer() {
+	  for (int i = 0; i < this->tmp_buffer_.size(); ++i)
+		  if (this->tmp_buffer_[i] != NULL)
+			  delete this->tmp_buffer_[i];
+
+	  if (A != NULL) delete A;
+	  if (B != NULL) delete B;
+	  if (C != NULL) delete C;
+
+#ifndef CPU_ONLY
+	  if (d_A != NULL) cudaFree(d_A);
+	  if (d_B != NULL) cudaFree(d_B);
+	  if (d_C != NULL) cudaFree(d_C);
+
+#endif
+
+  }
 
   virtual inline const char* type() const { return "GaussianConv"; }
   virtual void LayerSetUp(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top);
@@ -283,12 +301,32 @@ class GaussianConvLayer : public BaseConvolutionLayer<Dtype> {
   shared_ptr<Blob<Dtype> > deriv_mu1_buffer_;
   shared_ptr<Blob<Dtype> > deriv_mu2_buffer_;
 
-  Blob<Dtype> tmp_buffer_;
+  std::vector<Blob<Dtype>*> tmp_buffer_;
   Blob<Dtype> tmp_deriv_weight_buffer_;
   Blob<Dtype> tmp_bottom_buffer_;
 
   Blob<Dtype> tmp_w_sign_;
   Blob<Dtype> tmp_w_fabs_;
+
+  bool using_gpu;
+
+
+  const  Dtype** A;
+  const Dtype** B;
+  Dtype** C;
+
+  Dtype **d_A, **d_B, **d_C;
+
+  void forward_cpu_gpu_gemm(const Dtype* input, const Dtype* weights, Dtype* output, bool skip_im2col = false);
+  void forward_cpu_gpu_bias(Dtype* output, const Dtype* bias);
+
+  void weight_cpu_gpu_gemm(const Dtype* input, const Dtype* output, Dtype* weights);
+
+  void backward_cpu_gpu_gemm(const Dtype* output, const Dtype* weights, Dtype* input);
+  void backward_cpu_gpu_bias(Dtype* bias, const Dtype* input);
+
+  void caffe_cpu_gpu_gemm(const CBLAS_TRANSPOSE TransA, const CBLAS_TRANSPOSE TransB, const int M, const int N, const int K, const Dtype alpha, const Dtype* A, const Dtype* B, const Dtype beta, Dtype* C);
+  void caffe_cpu_gpu_gemm_batched(const CBLAS_TRANSPOSE TransA, const CBLAS_TRANSPOSE TransB, const int M, const int N, const int K, const Dtype alpha, const Dtype** A, const Dtype** B, const Dtype beta, Dtype** C, int batch_count);
 };
 
 /**
