@@ -20,6 +20,7 @@ include(cmake/Misc.cmake)
 include(cmake/Summary.cmake)
 include(cmake/ConfigGen.cmake)
 
+ADD_DEFINITIONS(-std=c++0x)
 
 SET(OPENMP_ENABLE TRUE CACHE BOOL "Enable OpenMP support")
 

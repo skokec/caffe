@@ -77,7 +77,10 @@ void BasePrefetchingDataLayer<Dtype>::InternalThreadEntry() {
 
   try {
     while (!must_stop()) {
+      // this is not OK since prefetch_free_ will block untill it gets something
+      // but cannot handle when thread should be stop (relying on interuption is not OK!!)
       Batch<Dtype>* batch = prefetch_free_.pop();
+      if (batch == 0) continue;
       load_batch(batch);
 #ifndef CPU_ONLY
       if (Caffe::mode() == Caffe::GPU) {

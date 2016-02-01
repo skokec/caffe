@@ -18,7 +18,7 @@ namespace caffe {
  */
 class InternalThread {
  public:
-  InternalThread() : thread_() {}
+  InternalThread() : thread_(), interruption_requested(0) {}
   virtual ~InternalThread();
 
   /**
@@ -46,6 +46,7 @@ class InternalThread {
       bool root_solver);
 
   shared_ptr<boost::thread> thread_;
+  bool interruption_requested;
 };
 
 }  // namespace caffe
