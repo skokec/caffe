@@ -6,6 +6,9 @@
 #include "caffe/util/math_functions.hpp"
 #include "caffe/vision_layers.hpp"
 
+#include <ctime>
+#include <algorithm>
+
 //#define NUM_GAUSS 4
 #define NUM_GAUSS_COMPONENT_PARAM 4
 #define NUM_GAUSS_PARAM 1
@@ -163,6 +166,9 @@ void GaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
 		this->conv_in_channels_ = this->channels_;
 	}
 
+	this->gmm_component_border_bound = this->layer_param_.convolution_param().gmm_component_border_bound();
+	this->gmm_sigma_lower_bound = this->layer_param_.convolution_param().gmm_sigma_lower_bound();
+
 	// Handle the parameters: weights and biases.
 	// - blobs_[0] holds the filter weights
 	// - blobs_[1] holds the biases (optional)
@@ -218,18 +224,30 @@ void GaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
 		Dtype* mu2_buf = tmp_mu2.mutable_cpu_data();
 
 		//int num_gauss_per_axis = NUM_GAUSS /2;
-		int* offset_x = new int[NUM_GAUSS_PER_AXIS];
-		int* offset_y = new int[NUM_GAUSS_PER_AXIS];
+		Dtype* offset_x = new Dtype[NUM_GAUSS_PER_AXIS];
+		Dtype* offset_y = new Dtype[NUM_GAUSS_PER_AXIS];
+
+		// use gmm_component_border_bound as start and stop position of where components are allowed to be within the kernel
+		Dtype gmm_kernel_h_ = (Dtype)this->kernel_h_ - 2*this->gmm_component_border_bound;
+		Dtype gmm_kernel_w_ = (Dtype)this->kernel_w_ - 2*this->gmm_component_border_bound;
 
 		for (int i = 0; i < NUM_GAUSS_PER_AXIS; i++) {
-			offset_x[i] = (i+1)*this->kernel_w_ /(NUM_GAUSS_PER_AXIS+1);
-			offset_y[i] = (i+1)*this->kernel_h_ /(NUM_GAUSS_PER_AXIS+1);
+			//offset_x[i] = (i+1)*this->kernel_w_ /(Dtype)(NUM_GAUSS_PER_AXIS+1);
+			//offset_y[i] = (i+1)*this->kernel_h_ /(Dtype)(NUM_GAUSS_PER_AXIS+1);
+			offset_x[i] = this->gmm_component_border_bound + (i)*gmm_kernel_w_ /(Dtype)(NUM_GAUSS_PER_AXIS) + (- 0.5+(gmm_kernel_w_)/(Dtype)(2*NUM_GAUSS_PER_AXIS));
+			offset_y[i] = this->gmm_component_border_bound + (i)*gmm_kernel_h_ /(Dtype)(NUM_GAUSS_PER_AXIS) + (- 0.5+(gmm_kernel_h_)/(Dtype)(2*NUM_GAUSS_PER_AXIS));
 		}
+
+		// add offset to mean so that (0,0) is at center
+		//int kernel_center_w = this->kernel_w_ / 2;
+		//int kernel_center_h = this->kernel_h_ / 2;
+		int kernel_center_w = 0;
+		int kernel_center_h = 0;
 
 		for (int i = 0; i < this->conv_in_channels_*this->conv_out_channels_; ++i) {
 			for (int j = 0; j < NUM_GAUSS; j++) {
-				mu1_buf[i * NUM_GAUSS + j] = offset_x[j / NUM_GAUSS_PER_AXIS];
-				mu2_buf[i * NUM_GAUSS + j] = offset_y[j %  NUM_GAUSS_PER_AXIS];
+				mu1_buf[i * NUM_GAUSS + j] = offset_x[j / NUM_GAUSS_PER_AXIS] - kernel_center_w;
+				mu2_buf[i * NUM_GAUSS + j] = offset_y[j %  NUM_GAUSS_PER_AXIS] - kernel_center_h;
 			}
 		}
 		delete [] offset_x;
@@ -269,11 +287,19 @@ void GaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
 
 	// decide if needed to perform gmm weight normalization
 	this->use_gmm_weight_normalization = this->layer_param_.convolution_param().gmm_weight_normalization();
+
+	// decide if needed to perform gmm gauss normalization
+	this->use_gmm_gauss_normalization = this->layer_param_.convolution_param().gmm_gauss_normalization();
+
+	this->gmm_mean_iteration_step = this->layer_param_.convolution_param().gmm_mean_iteration_step();
+	this->gmm_sigma_iteration_step = this->layer_param_.convolution_param().gmm_sigma_iteration_step();
 }
 
 template <typename Dtype>
 void GaussianConvLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
 		const vector<Blob<Dtype>*>& top) {
+
+	this->current_iteration_index = 0;
 	const int first_spatial_axis = this->channel_axis_ + 1;
 	int NUM_GAUSS_PER_AXIS = this->layer_param_.convolution_param().number_gauss();
 	int NUM_GAUSS =  NUM_GAUSS_PER_AXIS * NUM_GAUSS_PER_AXIS;
@@ -420,7 +446,6 @@ double caffe_sum(const int N, const double* X) {
 	return sum;
 }
 
-#include <ctime>
 
 template <typename Dtype>
 void GaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_pass) {
@@ -477,6 +502,11 @@ void GaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_pass
 	const Dtype* gauss_params_mu2 = gauss_param_buffer_mu2.cpu_data();
 	const Dtype* gauss_params_sigma = gauss_param_buffer_sigma.cpu_data();
 
+	//int kernel_center_w = this->kernel_w_ / 2;
+	//int kernel_center_h = this->kernel_h_ / 2;
+	int kernel_center_w = 0;
+	int kernel_center_h = 0;
+
 	int kernel_size = this->kernel_h_ * this->kernel_w_;
 
 	Dtype* weight_tmp = (Dtype*)malloc(sizeof(Dtype)*kernel_size);
@@ -505,9 +535,19 @@ void GaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_pass
 
 			for (int k = 0; k < NUM_GAUSS; ++k) {
 				Dtype w = 	gauss_params_w[gauss_param_buffer_w.offset(0,j,i,k)];
-				Dtype mu1 = 	gauss_params_mu1[gauss_param_buffer_mu1.offset(0,j,i,k)];
-				Dtype mu2 = 	gauss_params_mu2[gauss_param_buffer_mu2.offset(0,j,i,k)];
+				Dtype mu1 = 	gauss_params_mu1[gauss_param_buffer_mu1.offset(0,j,i,k)] + kernel_center_w;
+				Dtype mu2 = 	gauss_params_mu2[gauss_param_buffer_mu2.offset(0,j,i,k)] + kernel_center_h;
 				Dtype sigma = 	gauss_params_sigma[gauss_param_buffer_sigma.offset(0,j,i,k)];
+
+				// do not allow sigma bellow 0.1 threshold !!
+				sigma = std::max(this->gmm_sigma_lower_bound,sigma);
+
+				// do not allow mean outside of kernel bounds reduced by gmm_component_border_bound
+				mu1 = std::max((Dtype)this->gmm_component_border_bound,mu1);
+				mu2 = std::max((Dtype)this->gmm_component_border_bound,mu2);
+
+				mu1 = std::min(this->kernel_w_-1 - (Dtype)this->gmm_component_border_bound,mu1);
+				mu2 = std::min(this->kernel_h_-1 - (Dtype)this->gmm_component_border_bound,mu2);
 
 				Dtype w_org = w;
 				w = w/w_sum;
@@ -535,6 +575,7 @@ void GaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_pass
 				Dtype sigma2_inv_half = sigma2_inv/2;
 
 				Dtype gauss_sum = 0;
+				Dtype gauss_square_sum = 0;
 
 				int weights_index = 0;
 				for (int y = 0; y < this->kernel_h_; ++y) {
@@ -559,9 +600,15 @@ void GaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_pass
 						}
 
 						gauss_sum += gauss_value;
+						gauss_square_sum += gauss_value*gauss_value;
 
 						++weights_index;
 					}
+				}
+
+				if (this->use_gmm_gauss_normalization == false) {
+					gauss_sum = 1;
+					gauss_square_sum = 1;
 				}
 
 				// normalize current gauss and add it to final weight kernel buffer and add subfeature weight factor
@@ -588,15 +635,15 @@ void GaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_pass
 					gauss_mu1_sum = abs(gauss_mu1_sum) > 1e-10 ? gauss_mu1_sum : 0;
 					gauss_mu2_sum = abs(gauss_mu2_sum) > 1e-10 ? gauss_mu2_sum : 0;
 
-					caffe_cpu_axpby(kernel_size, -1* gauss_mu1_sum, tmp_deriv_weight + tmp_deriv_weight_offset, gauss_sum, deriv_mu1 + deriv_mu1_offset);
-					caffe_cpu_axpby(kernel_size, -1* gauss_mu2_sum, tmp_deriv_weight + tmp_deriv_weight_offset, gauss_sum, deriv_mu2 + deriv_mu2_offset);
-					caffe_cpu_axpby(kernel_size, -1* gauss_sigma_sum, tmp_deriv_weight + tmp_deriv_weight_offset, gauss_sum, deriv_sigma + deriv_sigma_offset);
+					caffe_cpu_axpby(kernel_size, -1* gauss_mu1_sum, tmp_deriv_weight + tmp_deriv_weight_offset, gauss_square_sum, deriv_mu1 + deriv_mu1_offset);
+					caffe_cpu_axpby(kernel_size, -1* gauss_mu2_sum, tmp_deriv_weight + tmp_deriv_weight_offset, gauss_square_sum, deriv_mu2 + deriv_mu2_offset);
+					caffe_cpu_axpby(kernel_size, -1* gauss_sigma_sum, tmp_deriv_weight + tmp_deriv_weight_offset, gauss_square_sum, deriv_sigma + deriv_sigma_offset);
 
 
-					caffe_scal(kernel_size, (Dtype)1.0/gauss_sum, tmp_deriv_weight + tmp_deriv_weight_offset);
-					caffe_scal(kernel_size, (Dtype)w/(gauss_sum*gauss_sum), deriv_mu1 + deriv_mu1_offset);
-					caffe_scal(kernel_size, (Dtype)w/(gauss_sum*gauss_sum), deriv_mu2 + deriv_mu2_offset);
-					caffe_scal(kernel_size, (Dtype)w/(gauss_sum*gauss_sum), deriv_sigma + deriv_sigma_offset);
+					caffe_scal(kernel_size, (Dtype)1.0/gauss_square_sum, tmp_deriv_weight + tmp_deriv_weight_offset);
+					caffe_scal(kernel_size, (Dtype)w/(gauss_square_sum*gauss_square_sum), deriv_mu1 + deriv_mu1_offset);
+					caffe_scal(kernel_size, (Dtype)w/(gauss_square_sum*gauss_square_sum), deriv_mu2 + deriv_mu2_offset);
+					caffe_scal(kernel_size, (Dtype)w/(gauss_square_sum*gauss_square_sum), deriv_sigma + deriv_sigma_offset);
 
 
 				}
@@ -665,6 +712,11 @@ template <typename Dtype>
 void GaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
 		const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom) {
 	LOG(INFO) << "called Backward_cpu";
+	bool do_mean_optmization = this->gmm_mean_iteration_step > 0 && this->current_iteration_index % this->gmm_mean_iteration_step == 0 ? true : false;
+	bool do_sigma_optmization = this->gmm_sigma_iteration_step > 0 && this->current_iteration_index % this->gmm_sigma_iteration_step == 0 ? true : false;
+
+	this->current_iteration_index++;
+
 	// backward CPU:
 	{
 		for (int i = 0; i < this->blobs_.size(); ++i) {
@@ -711,6 +763,15 @@ void GaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
 
 		Dtype* bottom_diff = using_gpu ? bottom[i]->mutable_gpu_diff() : bottom[i]->mutable_cpu_diff();
 
+
+		// Bias gradient, if necessary.
+		if (this->bias_term_ && this->param_propagate_down_[1]) {
+			Dtype* bias_diff = using_gpu ? this->param_buffer_bias_->mutable_gpu_diff() : this->param_buffer_bias_->mutable_cpu_diff();
+			for (int n = 0; n < this->num_; ++n) {
+				this->backward_cpu_gpu_bias(bias_diff, top_diff + n * this->top_dim_);
+			}
+		}
+
 		if (this->param_propagate_down_[0] || propagate_down[i]) {
 
 			for (int n = 0; n < this->num_; ++n) {
@@ -755,9 +816,12 @@ void GaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
 					compute_parameter_deriv(n, this->col_buffer_, *deriv_weight_buffer_, *top[i], gauss_param_buffer_w, 0);
 
 					// do the same for means (mu1, mu1) and sigma
-					compute_parameter_deriv(n, this->col_buffer_, *deriv_mu1_buffer_, *top[i], gauss_param_buffer_mu1, 0);
-					compute_parameter_deriv(n, this->col_buffer_, *deriv_mu2_buffer_, *top[i], gauss_param_buffer_mu2, 0);
-					compute_parameter_deriv(n, this->col_buffer_, *deriv_sigma_buffer_, *top[i], gauss_param_buffer_sigma, 0);
+					if (do_mean_optmization) {
+						compute_parameter_deriv(n, this->col_buffer_, *deriv_mu1_buffer_, *top[i], gauss_param_buffer_mu1, 0);
+						compute_parameter_deriv(n, this->col_buffer_, *deriv_mu2_buffer_, *top[i], gauss_param_buffer_mu2, 0);
+					}
+					if (do_sigma_optmization)
+						compute_parameter_deriv(n, this->col_buffer_, *deriv_sigma_buffer_, *top[i], gauss_param_buffer_sigma, 0);
 
 				}
 			}
@@ -820,7 +884,8 @@ void GaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
 
 	//Dtype norm_factor = 1.0 / (Dtype)(this->conv_in_height_ * this->conv_in_width_* this->kernel_h_ * this->kernel_w_);
 	//Dtype norm_factor = 1.0 / (Dtype)(this->conv_in_height_ * this->conv_in_width_);
-	Dtype norm_factor = 1.0 / (Dtype)this->conv_out_spatial_dim_; // THIS SHOULD BE CORRECT ONE !!!
+	//Dtype norm_factor = 1.0 / (Dtype)this->conv_out_spatial_dim_; // THIS SHOULD BE CORRECT ONE !!!
+	Dtype norm_factor = 1.0;
 
 	Dtype* gauss_w_deriv = gauss_param_buffer_w.mutable_cpu_diff();
 	Dtype* gauss_mu1_deriv = gauss_param_buffer_mu1.mutable_cpu_diff();

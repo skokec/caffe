@@ -522,10 +522,15 @@ message ConvolutionParameter {
 
   optional FillerParameter weight_filler = 7; // The filler for the weight  
   optional FillerParameter bias_filler = 8; // The filler for the bias
-  optional FillerParameter mu_filler = 20; // The filler for the gaussian mean 
-  optional FillerParameter sigma_filler = 21; // The filler for the gaussian sigma
-  optional uint32 number_gauss = 22; // The number of gaussian kernels per patch
-  optional bool gmm_weight_normalization = 23 [default = true]; // Should GMM be normalized or not 
+  optional FillerParameter mu_filler = 120; // The filler for the gaussian mean 
+  optional FillerParameter sigma_filler = 121; // The filler for the gaussian sigma
+  optional uint32 number_gauss = 122; // The number of gaussian kernels per patch
+  optional bool gmm_weight_normalization = 123 [default = true]; // Should weights of GMM be normalized (i.e. should sum to 1)
+  optional bool gmm_gauss_normalization = 124 [default = true]; // Should gaussian GMM be normalized or not  (i.e. area under gauss should sum to 1)
+  optional uint32 gmm_mean_iteration_step = 125 [default = 1]; // step between optimization of mean in gaussian
+  optional uint32 gmm_sigma_iteration_step = 126 [default = 1]; // step between optimization of sigma in gaussian
+  optional float gmm_component_border_bound = 127 [default = 0]; // how close to kernel border is gaussian component allowed to be
+  optional float gmm_sigma_lower_bound = 128 [default = 0.1]; // lower bound for sigma
   
   enum Engine {
     DEFAULT = 0;

@@ -287,6 +287,15 @@ class GaussianConvLayer : public BaseConvolutionLayer<Dtype> {
   int weight_offset_;
 
   bool use_gmm_weight_normalization;
+  bool use_gmm_gauss_normalization;
+
+  Dtype gmm_component_border_bound;
+  Dtype gmm_sigma_lower_bound;
+
+  int current_iteration_index;
+
+  int gmm_mean_iteration_step;
+  int gmm_sigma_iteration_step;
 
   shared_ptr<Blob<Dtype> > param_buffer_w_;
   shared_ptr<Blob<Dtype> > param_buffer_mu1_;
