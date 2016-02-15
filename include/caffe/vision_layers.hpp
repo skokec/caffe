@@ -288,6 +288,7 @@ class GaussianConvLayer : public BaseConvolutionLayer<Dtype> {
 
   bool use_gmm_weight_normalization;
   bool use_gmm_gauss_normalization;
+  bool use_gmm_square_gauss_normalization;
 
   Dtype gmm_component_border_bound;
   Dtype gmm_sigma_lower_bound;

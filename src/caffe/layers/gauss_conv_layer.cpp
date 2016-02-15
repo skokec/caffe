@@ -290,7 +290,7 @@ void GaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
 
 	// decide if needed to perform gmm gauss normalization
 	this->use_gmm_gauss_normalization = this->layer_param_.convolution_param().gmm_gauss_normalization();
-
+	this->use_gmm_square_gauss_normalization = this->layer_param_.convolution_param().gmm_square_gauss_normalization();
 	this->gmm_mean_iteration_step = this->layer_param_.convolution_param().gmm_mean_iteration_step();
 	this->gmm_sigma_iteration_step = this->layer_param_.convolution_param().gmm_sigma_iteration_step();
 }
@@ -498,9 +498,13 @@ void GaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_pass
 	Blob<Dtype>& gauss_param_buffer_sigma = *this->param_buffer_sigma_;
 
 	const Dtype* gauss_params_w = gauss_param_buffer_w.cpu_data();
-	const Dtype* gauss_params_mu1 = gauss_param_buffer_mu1.cpu_data();
-	const Dtype* gauss_params_mu2 = gauss_param_buffer_mu2.cpu_data();
-	const Dtype* gauss_params_sigma = gauss_param_buffer_sigma.cpu_data();
+	//const Dtype* gauss_params_mu1 = gauss_param_buffer_mu1.cpu_data();
+	//const Dtype* gauss_params_mu2 = gauss_param_buffer_mu2.cpu_data();
+	//const Dtype* gauss_params_sigma = gauss_param_buffer_sigma.cpu_data();
+
+	Dtype* gauss_params_mu1 = gauss_param_buffer_mu1.mutable_cpu_data();
+	Dtype* gauss_params_mu2 = gauss_param_buffer_mu2.mutable_cpu_data();
+	Dtype* gauss_params_sigma = gauss_param_buffer_sigma.mutable_cpu_data();
 
 	//int kernel_center_w = this->kernel_w_ / 2;
 	//int kernel_center_h = this->kernel_h_ / 2;
@@ -535,9 +539,11 @@ void GaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_pass
 
 			for (int k = 0; k < NUM_GAUSS; ++k) {
 				Dtype w = 	gauss_params_w[gauss_param_buffer_w.offset(0,j,i,k)];
-				Dtype mu1 = 	gauss_params_mu1[gauss_param_buffer_mu1.offset(0,j,i,k)] + kernel_center_w;
-				Dtype mu2 = 	gauss_params_mu2[gauss_param_buffer_mu2.offset(0,j,i,k)] + kernel_center_h;
-				Dtype sigma = 	gauss_params_sigma[gauss_param_buffer_sigma.offset(0,j,i,k)];
+				//Dtype& mu1 = 	gauss_params_mu1[gauss_param_buffer_mu1.offset(0,j,i,k)] + kernel_center_w;
+				//Dtype& mu2 = 	gauss_params_mu2[gauss_param_buffer_mu2.offset(0,j,i,k)] + kernel_center_h;
+				Dtype& mu1 = 	gauss_params_mu1[gauss_param_buffer_mu1.offset(0,j,i,k)];
+				Dtype& mu2 = 	gauss_params_mu2[gauss_param_buffer_mu2.offset(0,j,i,k)];
+				Dtype& sigma = 	gauss_params_sigma[gauss_param_buffer_sigma.offset(0,j,i,k)];
 
 				// do not allow sigma bellow 0.1 threshold !!
 				sigma = std::max(this->gmm_sigma_lower_bound,sigma);
@@ -606,27 +612,41 @@ void GaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_pass
 					}
 				}
 
+
 				if (this->use_gmm_gauss_normalization == false) {
 					gauss_sum = 1;
 					gauss_square_sum = 1;
 				}
+				Dtype norm_factor = gauss_sum;
+				if (this->use_gmm_square_gauss_normalization) {
+					norm_factor = gauss_square_sum;
+				}
 
 				// normalize current gauss and add it to final weight kernel buffer and add subfeature weight factor
-				Dtype normalize_factor = (Dtype)1.0/gauss_sum;
+				Dtype normalize_factor = (Dtype)1.0/norm_factor;
+				//Dtype normalize_factor = (Dtype)1.0/gauss_sum; // wrong version for normalization with gauss square - but it worked !!
 				caffe_axpy(kernel_size, normalize_factor, weight_tmp, weight + weights_offset);
 
 				if (is_backward_pass) {
 					// normalize weight, mu1, mu2 and sigma kernels with the sum over gaussian
 					// by definition we could use 1/(2*pi*sigma^2) but due to discretization error
 					// we need to use actual sum
-					//Dtype gauss_sum = 1.0 / caffe_cpu_asum(kernel_size, deriv_weight + deriv_weight_offset);
-					Dtype gauss_mu1_sum_abs = caffe_cpu_asum(kernel_size, deriv_mu1 + deriv_mu1_offset);
-					Dtype gauss_mu2_sum_abs = caffe_cpu_asum(kernel_size, deriv_mu2 + deriv_mu2_offset);
-					Dtype gauss_sigma_sum_abs = caffe_cpu_asum(kernel_size, deriv_sigma + deriv_sigma_offset);
+					Dtype gauss_mu1_sum, gauss_mu2_sum, gauss_sigma_sum;
+					if (this->use_gmm_square_gauss_normalization == false) {
+						//gauss_sum = 1.0 / caffe_cpu_asum(kernel_size, deriv_weight + deriv_weight_offset);
+						//gauss_mu1_sum_abs = caffe_cpu_asum(kernel_size, deriv_mu1 + deriv_mu1_offset);
+						//gauss_mu2_sum_abs = caffe_cpu_asum(kernel_size, deriv_mu2 + deriv_mu2_offset);
+						//gauss_sigma_sum_abs = caffe_cpu_asum(kernel_size, deriv_sigma + deriv_sigma_offset);
+						// wrong version for normalization with gauss square - but it worked !!
+						gauss_mu1_sum = caffe_sum(kernel_size, deriv_mu1 + deriv_mu1_offset);
+						gauss_mu2_sum = caffe_sum(kernel_size, deriv_mu2 + deriv_mu2_offset);
+						gauss_sigma_sum = caffe_sum(kernel_size, deriv_sigma + deriv_sigma_offset);
+					} else {
 
-					Dtype gauss_mu1_sum = caffe_sum(kernel_size, deriv_mu1 + deriv_mu1_offset);
-					Dtype gauss_mu2_sum = caffe_sum(kernel_size, deriv_mu2 + deriv_mu2_offset);
-					Dtype gauss_sigma_sum = caffe_sum(kernel_size, deriv_sigma + deriv_sigma_offset);
+						gauss_mu1_sum = 2*caffe_cpu_dot(kernel_size, deriv_weight + tmp_deriv_weight_offset, deriv_mu1 + deriv_mu1_offset);
+						gauss_mu2_sum = 2*caffe_cpu_dot(kernel_size, deriv_weight + tmp_deriv_weight_offset, deriv_mu2 + deriv_mu2_offset);
+						gauss_sigma_sum = 2*caffe_cpu_dot(kernel_size, deriv_weight + tmp_deriv_weight_offset, deriv_sigma + deriv_sigma_offset);
+					}
 
 					// add derivatives of normalization factor
 					// i.e. G(x)/N(x) from GMM equation has derivate as N(x)*G'(x) - G(x) * N'(x)
@@ -635,15 +655,15 @@ void GaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_pass
 					gauss_mu1_sum = abs(gauss_mu1_sum) > 1e-10 ? gauss_mu1_sum : 0;
 					gauss_mu2_sum = abs(gauss_mu2_sum) > 1e-10 ? gauss_mu2_sum : 0;
 
-					caffe_cpu_axpby(kernel_size, -1* gauss_mu1_sum, tmp_deriv_weight + tmp_deriv_weight_offset, gauss_square_sum, deriv_mu1 + deriv_mu1_offset);
-					caffe_cpu_axpby(kernel_size, -1* gauss_mu2_sum, tmp_deriv_weight + tmp_deriv_weight_offset, gauss_square_sum, deriv_mu2 + deriv_mu2_offset);
-					caffe_cpu_axpby(kernel_size, -1* gauss_sigma_sum, tmp_deriv_weight + tmp_deriv_weight_offset, gauss_square_sum, deriv_sigma + deriv_sigma_offset);
+					caffe_cpu_axpby(kernel_size, -1* gauss_mu1_sum, tmp_deriv_weight + tmp_deriv_weight_offset, norm_factor, deriv_mu1 + deriv_mu1_offset);
+					caffe_cpu_axpby(kernel_size, -1* gauss_mu2_sum, tmp_deriv_weight + tmp_deriv_weight_offset, norm_factor, deriv_mu2 + deriv_mu2_offset);
+					caffe_cpu_axpby(kernel_size, -1* gauss_sigma_sum, tmp_deriv_weight + tmp_deriv_weight_offset, norm_factor, deriv_sigma + deriv_sigma_offset);
 
 
-					caffe_scal(kernel_size, (Dtype)1.0/gauss_square_sum, tmp_deriv_weight + tmp_deriv_weight_offset);
-					caffe_scal(kernel_size, (Dtype)w/(gauss_square_sum*gauss_square_sum), deriv_mu1 + deriv_mu1_offset);
-					caffe_scal(kernel_size, (Dtype)w/(gauss_square_sum*gauss_square_sum), deriv_mu2 + deriv_mu2_offset);
-					caffe_scal(kernel_size, (Dtype)w/(gauss_square_sum*gauss_square_sum), deriv_sigma + deriv_sigma_offset);
+					caffe_scal(kernel_size, (Dtype)1.0/norm_factor, tmp_deriv_weight + tmp_deriv_weight_offset);
+					caffe_scal(kernel_size, (Dtype)w/(norm_factor*norm_factor), deriv_mu1 + deriv_mu1_offset);
+					caffe_scal(kernel_size, (Dtype)w/(norm_factor*norm_factor), deriv_mu2 + deriv_mu2_offset);
+					caffe_scal(kernel_size, (Dtype)w/(norm_factor*norm_factor), deriv_sigma + deriv_sigma_offset);
 
 
 				}
