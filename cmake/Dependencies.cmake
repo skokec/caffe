@@ -54,6 +54,16 @@ if(USE_LEVELDB)
   list(APPEND Caffe_LINKER_LIBS ${Snappy_LIBRARIES})
 endif()
 
+# ---[ ArrayFire
+find_package(ArrayFire)
+include_directories(${ArrayFire_INCLUDE_DIRS})
+list(APPEND Caffe_LINKER_LIBS ${ArrayFire_LIBRARIES})
+if (${ArrayFire_FOUND})
+  message(STATUS "ArrayFire found")
+else()
+  message(STATUS "ArrayFire not found")
+endif()
+
 # ---[ CUDA
 include(cmake/Cuda.cmake)
 if(NOT HAVE_CUDA)
@@ -65,6 +75,15 @@ if(NOT HAVE_CUDA)
 
   # TODO: remove this not cross platform define in future. Use caffe_config.h instead.
   add_definitions(-DCPU_ONLY)
+endif()
+
+if(${ArrayFire_CUDA_FOUND} AND ${CUDA_FOUND})
+    # We need to find CUDA and NVVM as transitive linking is disabled on some OSes
+    find_package(CUDA REQUIRED)
+    find_package(NVVM REQUIRED)
+    message(STATUS ${CUDA_TOOLKIT_ROOT_DIR})
+    message(STATUS "ArrayFire CUDA found. Enabling CUDA.")
+    list(APPEND Caffe_LINKER_LIBS ${ArrayFire_CUDA_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT} ${CUDA_LIBRARIES} ${NVVM_LIB})
 endif()
 
 # ---[ OpenCV

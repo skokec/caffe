@@ -1,10 +1,12 @@
 #include "caffe/common.hpp"
-#include "caffe/syncedmem.hpp"
+#include "caffe/arrayfiremem.hpp"
 #include "caffe/util/math_functions.hpp"
+
+#include <af/cuda.h>
 
 namespace caffe {
 
-SyncedMemory::~SyncedMemory() {
+ArrayFireMemory::~ArrayFireMemory() {
   if (cpu_ptr_ && own_cpu_data_) {
     CaffeFreeHost(cpu_ptr_, cpu_malloc_use_cuda_);
   }
@@ -16,22 +18,22 @@ SyncedMemory::~SyncedMemory() {
     if (gpu_device_ != -1) {
       CUDA_CHECK(cudaSetDevice(gpu_device_));
     }
-    CUDA_CHECK(cudaFree(gpu_ptr_));
+    //CUDA_CHECK(cudaFree(gpu_ptr_));
     cudaSetDevice(initial_device);
   }
 #endif  // CPU_ONLY
 }
 
-inline void SyncedMemory::to_cpu() {
+inline void ArrayFireMemory::to_cpu() {
   switch (head_) {
-  case UNINITIALIZED:
+  case SyncedMemory::UNINITIALIZED:
 	LOG(INFO) << "initializing cpu data";
     CaffeMallocHost(&cpu_ptr_, size_, &cpu_malloc_use_cuda_);
     caffe_memset(size_, 0, cpu_ptr_);
-    head_ = HEAD_AT_CPU;
+    head_ = SyncedMemory::HEAD_AT_CPU;
     own_cpu_data_ = true;
     break;
-  case HEAD_AT_GPU:
+  case SyncedMemory::HEAD_AT_GPU:
 #ifndef CPU_ONLY
 	LOG(INFO) << "copying to cpu";
     if (cpu_ptr_ == NULL) {
@@ -39,40 +41,55 @@ inline void SyncedMemory::to_cpu() {
       own_cpu_data_ = true;
     }
     caffe_gpu_memcpy(size_, gpu_ptr_, cpu_ptr_);
-    head_ = SYNCED;
+    head_ = SyncedMemory::SYNCED;
 #else
     NO_GPU;
 #endif
     break;
-  case HEAD_AT_CPU:
-  case SYNCED:
+  case SyncedMemory::HEAD_AT_CPU:
+  case SyncedMemory::SYNCED:
     break;
   }
 }
 
-inline void SyncedMemory::to_gpu() {
+inline void ArrayFireMemory::to_gpu() {
 #ifndef CPU_ONLY
   switch (head_) {
-  case UNINITIALIZED:
+  case SyncedMemory::UNINITIALIZED:
 	LOG(INFO) << "initializing gpu data";
     CUDA_CHECK(cudaGetDevice(&gpu_device_));
-    CUDA_CHECK(cudaMalloc(&gpu_ptr_, size_));
+    //CUDA_CHECK(cudaMalloc(&gpu_ptr_, size_));
+
+    afcu::setNativeId(gpu_device_);
+    gpu_data_.reset(new af::array((int)(size_ / 4), f32));
+    gpu_ptr_ = gpu_data_->device<float>();
+
+    CHECK(gpu_ptr_);
+
     caffe_gpu_memset(size_, 0, gpu_ptr_);
-    head_ = HEAD_AT_GPU;
+
+    head_ = SyncedMemory::HEAD_AT_GPU;
     own_gpu_data_ = true;
     break;
-  case HEAD_AT_CPU:
+  case SyncedMemory::HEAD_AT_CPU:
 	LOG(INFO) << "copying to gpu";
     if (gpu_ptr_ == NULL) {
       CUDA_CHECK(cudaGetDevice(&gpu_device_));
-      CUDA_CHECK(cudaMalloc(&gpu_ptr_, size_));
+      //CUDA_CHECK(cudaMalloc(&gpu_ptr_, size_));
+
+      afcu::setNativeId(gpu_device_);
+      gpu_data_.reset(new af::array((int)(size_ / 4), f32));
+      gpu_ptr_ = gpu_data_->device<float>();
+
+      CHECK(gpu_ptr_);
+
       own_gpu_data_ = true;
     }
     caffe_gpu_memcpy(size_, cpu_ptr_, gpu_ptr_);
-    head_ = SYNCED;
+    head_ = SyncedMemory::SYNCED;
     break;
-  case HEAD_AT_GPU:
-  case SYNCED:
+  case SyncedMemory::HEAD_AT_GPU:
+  case SyncedMemory::SYNCED:
     break;
   }
 #else
@@ -80,22 +97,22 @@ inline void SyncedMemory::to_gpu() {
 #endif
 }
 
-const void* SyncedMemory::cpu_data() {
+const void* ArrayFireMemory::cpu_data() {
   to_cpu();
   return (const void*)cpu_ptr_;
 }
 
-void SyncedMemory::set_cpu_data(void* data) {
+void ArrayFireMemory::set_cpu_data(void* data) {
   CHECK(data);
   if (own_cpu_data_) {
     CaffeFreeHost(cpu_ptr_, cpu_malloc_use_cuda_);
   }
   cpu_ptr_ = data;
-  head_ = HEAD_AT_CPU;
+  head_ = SyncedMemory::HEAD_AT_CPU;
   own_cpu_data_ = false;
 }
 
-const void* SyncedMemory::gpu_data() {
+const void* ArrayFireMemory::gpu_data() {
 #ifndef CPU_ONLY
   to_gpu();
   return (const void*)gpu_ptr_;
@@ -105,7 +122,7 @@ const void* SyncedMemory::gpu_data() {
 #endif
 }
 
-void SyncedMemory::set_gpu_data(void* data) {
+void ArrayFireMemory::set_gpu_data(void* data) {
 #ifndef CPU_ONLY
   CHECK(data);
   if (own_gpu_data_) {
@@ -114,27 +131,28 @@ void SyncedMemory::set_gpu_data(void* data) {
     if (gpu_device_ != -1) {
       CUDA_CHECK(cudaSetDevice(gpu_device_));
     }
-    CUDA_CHECK(cudaFree(gpu_ptr_));
+    gpu_data_.reset();
+    //CUDA_CHECK(cudaFree(gpu_ptr_));
     cudaSetDevice(initial_device);
   }
   gpu_ptr_ = data;
-  head_ = HEAD_AT_GPU;
+  head_ = SyncedMemory::HEAD_AT_GPU;
   own_gpu_data_ = false;
 #else
   NO_GPU;
 #endif
 }
 
-void* SyncedMemory::mutable_cpu_data() {
+void* ArrayFireMemory::mutable_cpu_data() {
   to_cpu();
-  head_ = HEAD_AT_CPU;
+  head_ = SyncedMemory::HEAD_AT_CPU;
   return cpu_ptr_;
 }
 
-void* SyncedMemory::mutable_gpu_data() {
+void* ArrayFireMemory::mutable_gpu_data() {
 #ifndef CPU_ONLY
   to_gpu();
-  head_ = HEAD_AT_GPU;
+  head_ = SyncedMemory::HEAD_AT_GPU;
   return gpu_ptr_;
 #else
   NO_GPU;
@@ -143,8 +161,8 @@ void* SyncedMemory::mutable_gpu_data() {
 }
 
 #ifndef CPU_ONLY
-void SyncedMemory::async_gpu_push(const cudaStream_t& stream) {
-  CHECK(head_ == HEAD_AT_CPU);
+void ArrayFireMemory::async_gpu_push(const cudaStream_t& stream) {
+  CHECK(head_ == SyncedMemory::HEAD_AT_CPU);
   if (gpu_ptr_ == NULL) {
     CUDA_CHECK(cudaGetDevice(&gpu_device_));
     CUDA_CHECK(cudaMalloc(&gpu_ptr_, size_));
@@ -153,7 +171,7 @@ void SyncedMemory::async_gpu_push(const cudaStream_t& stream) {
   const cudaMemcpyKind put = cudaMemcpyHostToDevice;
   CUDA_CHECK(cudaMemcpyAsync(gpu_ptr_, cpu_ptr_, size_, put, stream));
   // Assume caller will synchronize on the stream before use
-  head_ = SYNCED;
+  head_ = SyncedMemory::SYNCED;
 }
 #endif
 

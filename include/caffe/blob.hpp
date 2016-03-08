@@ -8,6 +8,7 @@
 #include "caffe/common.hpp"
 #include "caffe/proto/caffe.pb.h"
 #include "caffe/syncedmem.hpp"
+#include "caffe/arrayfiremem.hpp"
 
 const int kMaxBlobAxes = 32;
 
@@ -137,6 +138,7 @@ class Blob {
   /// @brief Deprecated legacy shape accessor width: use shape(3) instead.
   inline int width() const { return LegacyShape(3); }
   inline int LegacyShape(int index) const {
+#ifdef NDEBUG
     CHECK_LE(num_axes(), 4)
         << "Cannot use legacy accessors on Blobs with > 4 axes.";
     CHECK_LT(index, 4);
@@ -147,11 +149,13 @@ class Blob {
       // extraneous axes of legacy blobs.
       return 1;
     }
+#endif
     return shape(index);
   }
 
   inline int offset(const int n, const int c = 0, const int h = 0,
       const int w = 0) const {
+#ifdef NDEBUG
     CHECK_GE(n, 0);
     CHECK_LE(n, num());
     CHECK_GE(channels(), 0);
@@ -160,17 +164,22 @@ class Blob {
     CHECK_LE(h, height());
     CHECK_GE(width(), 0);
     CHECK_LE(w, width());
+#endif
     return ((n * channels() + c) * height() + h) * width() + w;
   }
 
   inline int offset(const vector<int>& indices) const {
+#ifdef NDEBUG
     CHECK_LE(indices.size(), num_axes());
+#endif
     int offset = 0;
     for (int i = 0; i < num_axes(); ++i) {
       offset *= shape(i);
       if (indices.size() > i) {
+#ifdef NDEBUG
         CHECK_GE(indices[i], 0);
         CHECK_LT(indices[i], shape(i));
+#endif
         offset += indices[i];
       }
     }
@@ -206,12 +215,12 @@ class Blob {
     return cpu_diff()[offset(index)];
   }
 
-  inline const shared_ptr<SyncedMemory>& data() const {
+  inline const shared_ptr<ArrayFireMemory>& data() const {
     CHECK(data_);
     return data_;
   }
 
-  inline const shared_ptr<SyncedMemory>& diff() const {
+  inline const shared_ptr<ArrayFireMemory>& diff() const {
     CHECK(diff_);
     return diff_;
   }
@@ -269,9 +278,9 @@ class Blob {
   bool ShapeEquals(const BlobProto& other);
 
  protected:
-  shared_ptr<SyncedMemory> data_;
-  shared_ptr<SyncedMemory> diff_;
-  shared_ptr<SyncedMemory> shape_data_;
+  shared_ptr<ArrayFireMemory> data_;
+  shared_ptr<ArrayFireMemory> diff_;
+  shared_ptr<ArrayFireMemory> shape_data_;
   vector<int> shape_;
   int count_;
   int capacity_;

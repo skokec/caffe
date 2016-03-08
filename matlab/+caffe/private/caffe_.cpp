@@ -284,6 +284,7 @@ static void solver_update(MEX_ARGS) {
   Solver<float>* solver = handle_to_ptr<Solver<float> >(prhs[0]);
   int iters = mxGetScalar(prhs[1]);
   solver->ApplyUpdate();
+  solver->iter_++;
 }
 
 // Usage: caffe_('get_net', model_file, phase_name)

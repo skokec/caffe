@@ -17,12 +17,12 @@ class BlockingQueue {
 
   // This logs a message if the threads needs to be blocked
   // useful for detecting e.g. when data feeding is too slow
-  T pop(const string& log_on_wait = "");
+  T pop(const string& log_on_wait = "", const bool wait_indefinetly = true);
 
   bool try_peek(T* t);
 
   // Return element without removing it
-  T peek();
+  T peek(const bool wait_indefinetly = true);
 
   size_t size() const;
 

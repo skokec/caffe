@@ -14,6 +14,8 @@
 #include "caffe/neuron_layers.hpp"
 #include "caffe/proto/caffe.pb.h"
 
+#include <arrayfire.h>
+
 namespace caffe {
 
 /**
@@ -243,9 +245,9 @@ class GaussianConvLayer : public BaseConvolutionLayer<Dtype> {
       : BaseConvolutionLayer<Dtype>(param), using_gpu(0), A(0), B(0), C(0), d_A(0), d_B(0), d_C(0) {}
 
   virtual ~GaussianConvLayer() {
-	  for (int i = 0; i < this->tmp_buffer_.size(); ++i)
-		  if (this->tmp_buffer_[i] != NULL)
-			  delete this->tmp_buffer_[i];
+	  //for (int i = 0; i < this->tmp_buffer_.size(); ++i)
+		//  if (this->tmp_buffer_[i] != NULL)
+			//  delete this->tmp_buffer_[i];
 
 	  if (A != NULL) delete A;
 	  if (B != NULL) delete B;
@@ -304,6 +306,12 @@ class GaussianConvLayer : public BaseConvolutionLayer<Dtype> {
   shared_ptr<Blob<Dtype> > param_buffer_sigma_;
   shared_ptr<Blob<Dtype> > param_buffer_bias_;
 
+  shared_ptr<af::array > param_buffer_w_af;
+  shared_ptr<af::array > param_buffer_mu1_af;
+  shared_ptr<af::array > param_buffer_mu2_af;
+  shared_ptr<af::array > param_buffer_sigma_af;
+  shared_ptr<af::array > param_buffer_bias_af;
+
   shared_ptr<Blob<Dtype> > weight_buffer_;
   shared_ptr<Blob<Dtype> > deriv_error_buffer_;
   shared_ptr<Blob<Dtype> > deriv_weight_buffer_;
@@ -311,7 +319,7 @@ class GaussianConvLayer : public BaseConvolutionLayer<Dtype> {
   shared_ptr<Blob<Dtype> > deriv_mu1_buffer_;
   shared_ptr<Blob<Dtype> > deriv_mu2_buffer_;
 
-  std::vector<Blob<Dtype>*> tmp_buffer_;
+  Blob<Dtype> tmp_buffer_;
   Blob<Dtype> tmp_deriv_weight_buffer_;
   Blob<Dtype> tmp_bottom_buffer_;
 
