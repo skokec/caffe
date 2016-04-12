@@ -277,7 +277,8 @@ class GaussianConvLayer : public BaseConvolutionLayer<Dtype> {
   void precompute_guassian_weights(bool precompute_derivs);
   
   void compute_parameter_deriv(int num_iter,const Blob<Dtype>& col_activations_buffer, const Blob<Dtype>& deriv_kernels_buffer, 
-				const Blob<Dtype>& top_error_buffer, Blob<Dtype>& param_output_buffer, int param_output_offset);
+				//const Blob<Dtype>& top_error_buffer, Blob<Dtype>& param_output_buffer, int param_output_offset);
+		  	  	  Blob<Dtype>& top_error_buffer, Blob<Dtype>& param_output_buffer, int param_output_offset);
   
   int kernel_h_, kernel_w_;
   int stride_h_, stride_w_;
@@ -300,6 +301,8 @@ class GaussianConvLayer : public BaseConvolutionLayer<Dtype> {
   int gmm_mean_iteration_step;
   int gmm_sigma_iteration_step;
 
+  int NUM_GAUSS;
+
   shared_ptr<Blob<Dtype> > param_buffer_w_;
   shared_ptr<Blob<Dtype> > param_buffer_mu1_;
   shared_ptr<Blob<Dtype> > param_buffer_mu2_;
@@ -313,18 +316,28 @@ class GaussianConvLayer : public BaseConvolutionLayer<Dtype> {
   shared_ptr<af::array > param_buffer_bias_af;
 
   shared_ptr<Blob<Dtype> > weight_buffer_;
+  shared_ptr<Blob<Dtype> > weight_vert_buffer_;
+  shared_ptr<Blob<Dtype> > weight_horiz_buffer_;
   shared_ptr<Blob<Dtype> > deriv_error_buffer_;
   shared_ptr<Blob<Dtype> > deriv_weight_buffer_;
   shared_ptr<Blob<Dtype> > deriv_sigma_buffer_;
   shared_ptr<Blob<Dtype> > deriv_mu1_buffer_;
   shared_ptr<Blob<Dtype> > deriv_mu2_buffer_;
 
+  Blob<Dtype> accum_bottom_;
+
+  int* tmp_index_gpu;
+  Blob<Dtype> tmp_blob_;
   Blob<Dtype> tmp_buffer_;
+  Blob<int> tmp_index_;
   Blob<Dtype> tmp_deriv_weight_buffer_;
   Blob<Dtype> tmp_bottom_buffer_;
 
   Blob<Dtype> tmp_w_sign_;
   Blob<Dtype> tmp_w_fabs_;
+
+  // for separable forward pass
+  Blob<Dtype> tmp_buffer_sepe_;
 
   bool using_gpu;
 
@@ -336,6 +349,7 @@ class GaussianConvLayer : public BaseConvolutionLayer<Dtype> {
   Dtype **d_A, **d_B, **d_C;
 
   void forward_cpu_gpu_gemm(const Dtype* input, const Dtype* weights, Dtype* output, bool skip_im2col = false);
+  void forward_cpu_gpu_seperable(const Dtype* input, const Dtype* weights_vert, const Dtype* weights_horiz, Dtype* output, bool skip_im2col = false);
   void forward_cpu_gpu_bias(Dtype* output, const Dtype* bias);
 
   void weight_cpu_gpu_gemm(const Dtype* input, const Dtype* output, Dtype* weights);
@@ -345,6 +359,9 @@ class GaussianConvLayer : public BaseConvolutionLayer<Dtype> {
 
   void caffe_cpu_gpu_gemm(const CBLAS_TRANSPOSE TransA, const CBLAS_TRANSPOSE TransB, const int M, const int N, const int K, const Dtype alpha, const Dtype* A, const Dtype* B, const Dtype beta, Dtype* C);
   void caffe_cpu_gpu_gemm_batched(const CBLAS_TRANSPOSE TransA, const CBLAS_TRANSPOSE TransB, const int M, const int N, const int K, const Dtype alpha, const Dtype** A, const Dtype** B, const Dtype beta, Dtype** C, int batch_count);
+
+  void conv_seperable_im2col_cpu(const Dtype* data, Dtype* col_buff, int dim, int num_chanels = 0, int* src_channel_permute = NULL);
+
 };
 
 /**

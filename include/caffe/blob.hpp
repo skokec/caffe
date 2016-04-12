@@ -8,7 +8,6 @@
 #include "caffe/common.hpp"
 #include "caffe/proto/caffe.pb.h"
 #include "caffe/syncedmem.hpp"
-#include "caffe/arrayfiremem.hpp"
 
 const int kMaxBlobAxes = 32;
 
@@ -215,12 +214,12 @@ class Blob {
     return cpu_diff()[offset(index)];
   }
 
-  inline const shared_ptr<ArrayFireMemory>& data() const {
+  inline const shared_ptr<SyncedMemory>& data() const {
     CHECK(data_);
     return data_;
   }
 
-  inline const shared_ptr<ArrayFireMemory>& diff() const {
+  inline const shared_ptr<SyncedMemory>& diff() const {
     CHECK(diff_);
     return diff_;
   }
@@ -278,9 +277,9 @@ class Blob {
   bool ShapeEquals(const BlobProto& other);
 
  protected:
-  shared_ptr<ArrayFireMemory> data_;
-  shared_ptr<ArrayFireMemory> diff_;
-  shared_ptr<ArrayFireMemory> shape_data_;
+  shared_ptr<SyncedMemory> data_;
+  shared_ptr<SyncedMemory> diff_;
+  shared_ptr<SyncedMemory> shape_data_;
   vector<int> shape_;
   int count_;
   int capacity_;

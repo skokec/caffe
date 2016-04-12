@@ -11,12 +11,18 @@ template <typename Dtype>
 void CuDNNConvolutionLayer<Dtype>::Forward_gpu(
     const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top) {
   const Dtype* weight = this->blobs_[0]->gpu_data();
+  //cudaDeviceSynchronize();
+
+  clock_t start_t = clock();
   for (int i = 0; i < bottom.size(); ++i) {
     const Dtype* bottom_data = bottom[i]->gpu_data();
     Dtype* top_data = top[i]->mutable_gpu_data();
 
     // Forward through cuDNN in parallel over groups.
-    for (int g = 0; g < this->group_; g++) {
+    //for (int g = 0; g < this->group_; g++) {
+    int g = 0;
+    for (int gg = 0; gg < 10; gg++) {
+    //	clock_t start_t = clock();
       // Filters.
       CUDNN_CHECK(cudnnConvolutionForward(handle_[g],
             cudnn::dataType<Dtype>::one,
@@ -26,7 +32,8 @@ void CuDNNConvolutionLayer<Dtype>::Forward_gpu(
             fwd_algo_[i], workspace[g], workspace_fwd_sizes_[i],
             cudnn::dataType<Dtype>::zero,
             top_descs_[i], top_data + top_offset_ * g));
-
+      //clock_t end_t = clock();
+      //LOG(INFO) << "cudnn forward pass in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC);
       // Bias.
       if (this->bias_term_) {
         const Dtype* bias_data = this->blobs_[1]->gpu_data();
@@ -43,6 +50,13 @@ void CuDNNConvolutionLayer<Dtype>::Forward_gpu(
     // NOLINT_NEXT_LINE(whitespace/operators)
     sync_conv_groups<<<1, 1>>>();
   }
+
+  //cudaDeviceSynchronize();
+  clock_t end_t = clock();
+  LOG(INFO) << "size of input " << bottom[0]->count() << " = " << bottom[0]->shape(0) << " x " << bottom[0]->shape(1) << " x " << bottom[0]->shape(2) << " x " << bottom[0]->shape(3);
+  LOG(INFO) << "size of filters " << this->blobs_[0]->count() << " = " << this->blobs_[0]->shape(0) << " x " << this->blobs_[0]->shape(1) << " x " << this->blobs_[0]->shape(2) << " x " << this->blobs_[0]->shape(3);
+  LOG(INFO) << "number of tops: " << top.size() << " number of groups: " << top.size();
+  LOG(INFO) << "forward pass done in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC);
 }
 
 template <typename Dtype>
@@ -58,6 +72,8 @@ void CuDNNConvolutionLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
   if (this->bias_term_ && this->param_propagate_down_[1]) {
     bias_diff = this->blobs_[1]->mutable_gpu_diff();
   }
+  //cudaDeviceSynchronize();
+  clock_t start_t = clock();
   for (int i = 0; i < top.size(); ++i) {
     const Dtype* top_diff = top[i]->gpu_diff();
     // Backward through cuDNN in parallel over groups and gradients.
@@ -105,10 +121,17 @@ void CuDNNConvolutionLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
       }
     }
 
+    //cudaDeviceSynchronize();
     // Synchronize the work across groups, each of which went into its own
     // stream, by launching an empty kernel into the default (null) stream.
     // NOLINT_NEXT_LINE(whitespace/operators)
     sync_conv_groups<<<1, 1>>>();
+    clock_t end_t = clock();
+    LOG(INFO) << "size of input " << bottom[0]->count() << " = " << bottom[0]->shape(0) << " x " << bottom[0]->shape(1) << " x " << bottom[0]->shape(2) << " x " << bottom[0]->shape(3);
+    LOG(INFO) << "size of error " << top[0]->count() << " = " << top[0]->shape(0) << " x " << top[0]->shape(1) << " x " << top[0]->shape(2) << " x " << top[0]->shape(3);
+
+    LOG(INFO) << "number of tops: " << top.size() << " number of groups: " << top.size();
+    LOG(INFO) << "backward pass done in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC);
   }
 }
 

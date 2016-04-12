@@ -4,7 +4,6 @@
 #include "caffe/blob.hpp"
 #include "caffe/common.hpp"
 #include "caffe/syncedmem.hpp"
-#include "caffe/arrayfiremem.hpp"
 #include "caffe/util/math_functions.hpp"
 
 namespace caffe {
@@ -26,7 +25,7 @@ void Blob<Dtype>::Reshape(const vector<int>& shape) {
   count_ = 1;
   shape_.resize(shape.size());
   if (!shape_data_ || shape_data_->size() < shape.size() * sizeof(int)) {
-    shape_data_.reset(new ArrayFireMemory(shape.size() * sizeof(int)));
+    shape_data_.reset(new SyncedMemory(shape.size() * sizeof(int)));
   }
   int* shape_data = static_cast<int*>(shape_data_->mutable_cpu_data());
   for (int i = 0; i < shape.size(); ++i) {
@@ -38,8 +37,8 @@ void Blob<Dtype>::Reshape(const vector<int>& shape) {
   }
   if (count_ > capacity_) {
     capacity_ = count_;
-    data_.reset(new ArrayFireMemory(capacity_ * sizeof(Dtype)));
-    diff_.reset(new ArrayFireMemory(capacity_ * sizeof(Dtype)));
+    data_.reset(new SyncedMemory(capacity_ * sizeof(Dtype)));
+    diff_.reset(new SyncedMemory(capacity_ * sizeof(Dtype)));
   }
 }
 

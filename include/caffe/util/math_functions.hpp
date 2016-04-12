@@ -117,6 +117,7 @@ int caffe_cpu_hamming_distance(const int n, const Dtype* x, const Dtype* y);
 template <typename Dtype>
 Dtype caffe_cpu_asum(const int n, const Dtype* x);
 
+
 // the branchless, type-safe version from
 // http://stackoverflow.com/questions/1903954/is-there-a-standard-sign-function-signum-sgn-in-c-c
 template<typename Dtype>
@@ -201,10 +202,17 @@ template <typename Dtype>
 void caffe_gpu_add(const int N, const Dtype* a, const Dtype* b, Dtype* y);
 
 template <typename Dtype>
+void caffe_gpu_add_elementwise(const int N, const Dtype* x, Dtype* y, const int M);
+
+template <typename Dtype>
 void caffe_gpu_sub(const int N, const Dtype* a, const Dtype* b, Dtype* y);
 
 template <typename Dtype>
-void caffe_gpu_mul(const int N, const Dtype* a, const Dtype* b, Dtype* y);
+void caffe_gpu_mul(const int N, const Dtype* a, const Dtype* b, Dtype* y, const int M = 0);
+
+//template <typename Dtype>
+//void caffe_gpu_mul_batched(const int N, const int M, const Dtype* a, const Dtype* b, Dtype* y);
+
 
 template <typename Dtype>
 void caffe_gpu_div(const int N, const Dtype* a, const Dtype* b, Dtype* y);
@@ -246,6 +254,25 @@ void caffe_gpu_dot(const int n, const Dtype* x, const Dtype* y, Dtype* out);
 template <typename Dtype>
 uint32_t caffe_gpu_hamming_distance(const int n, const Dtype* x,
                                     const Dtype* y);
+
+template <typename Dtype>
+void caffe_gpu_sum(const int n, const Dtype* x, Dtype* y, const int m = 0);
+
+template <typename Dtype>
+void caffe_gpu_sum(const int n, const Dtype* x, Dtype* y, const int num_segments, int* offsets_gpu, cudaStream_t streamId);
+
+template <typename Dtype>
+void caffe_cpu_mul_batch(const int N, const Dtype* a, const Dtype* b, Dtype* y, const int M = 0) {
+	for (unsigned int batch_offset = 0; batch_offset < N; batch_offset+=M)
+	 {
+		for (int index = 0; index < M; ++index)
+			y[index + batch_offset] = a[index + batch_offset] * b[index];
+
+	 }
+}
+
+template <typename Dtype>
+void caffe_cpu_sum(const int n, const Dtype* x, Dtype* y, int m = 0) ;
 
 template <typename Dtype>
 void caffe_gpu_asum(const int n, const Dtype* x, Dtype* y);
