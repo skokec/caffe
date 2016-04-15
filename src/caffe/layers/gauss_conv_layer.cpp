@@ -27,6 +27,7 @@ void GaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
 	{
 		af::info();
 	}
+	openblas_set_num_threads(1);
 	int NUM_GAUSS_PER_AXIS = this->layer_param_.convolution_param().number_gauss();
 	NUM_GAUSS =  NUM_GAUSS_PER_AXIS * NUM_GAUSS_PER_AXIS;
 
@@ -285,6 +286,8 @@ void GaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
 			precomputed_blobs_offset++;
 
 		weight_buffer_.reset(new Blob<Dtype>());
+		weight_vert_buffer_.reset(new Blob<Dtype>());
+		weight_horiz_buffer_.reset(new Blob<Dtype>());
 		deriv_error_buffer_.reset(new Blob<Dtype>());
 		deriv_weight_buffer_.reset(new Blob<Dtype>());
 		deriv_sigma_buffer_.reset(new Blob<Dtype>());
@@ -388,8 +391,8 @@ void GaussianConvLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
 	this->weight_buffer_->Reshape(this->conv_out_channels_, this->conv_in_channels_, this->kernel_h_, this->kernel_w_);
 
 	// seperable kernels
-	this->weight_vert_buffer_->Reshape(this->conv_out_channels_, this->conv_in_channels_, NUM_GAUSS, this->kernel_h_);
-	this->weight_horiz_buffer_->Reshape(this->conv_in_channels_, this->conv_out_channels_,  NUM_GAUSS, this->kernel_w_);
+	this->weight_vert_buffer_->Reshape(this->conv_out_channels_, NUM_GAUSS, this->conv_in_channels_, this->kernel_h_);
+	this->weight_horiz_buffer_->Reshape(this->conv_out_channels_, NUM_GAUSS, this->conv_in_channels_, this->kernel_w_);
 
 	this->deriv_error_buffer_->Reshape(this->conv_in_channels_, this->conv_out_channels_, this->kernel_h_, this->kernel_w_);
 	this->deriv_weight_buffer_->Reshape(this->conv_in_channels_, NUM_GAUSS, this->conv_out_channels_, this->kernel_h_ * this->kernel_w_);
@@ -398,6 +401,20 @@ void GaussianConvLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
 	this->deriv_mu2_buffer_->Reshape(this->conv_in_channels_, NUM_GAUSS, this->conv_out_channels_, this->kernel_h_ * this->kernel_w_);
 
 	this->tmp_blob_.Reshape(1, this->conv_in_channels_, NUM_GAUSS, this->conv_out_channels_);
+
+	//this->tmp_buffer_sepe_.Reshape(this->conv_in_channels_* NUM_GAUSS* this->conv_out_channels_, this->kernel_h_, this->height_out_, this->width_out_);
+	this->tmp_buffer_sepe_1_.Reshape(this->conv_in_channels_, NUM_GAUSS* this->conv_out_channels_, this->height_ + 2* this->pad_h_, this->width_ + 2* this->pad_w_);
+	this->tmp_buffer_sepe_2_.Reshape(this->conv_in_channels_, NUM_GAUSS* this->conv_out_channels_, this->height_ + 2* this->pad_h_, this->width_ + 2* this->pad_w_);
+
+	if (chanel_permute != NULL) delete chanel_permute;
+	chanel_permute = new int[this->conv_out_channels_ * this->conv_in_channels_ * this->NUM_GAUSS];
+
+	for (int f = 0; f < this->conv_out_channels_; ++f)
+		for (int s = 0; s < this->conv_in_channels_; ++s)
+			for (int g = 0; g < this->NUM_GAUSS; ++g)
+				chanel_permute[(f*this->conv_in_channels_ + s) * this->NUM_GAUSS + g] = (s*this->conv_out_channels_ + f) * this->NUM_GAUSS + g;
+
+
 	/*
 	if (this->tmp_buffer_.size() != this->conv_in_channels_) {
 		for (int i = 0; i < this->tmp_buffer_.size(); ++i)
@@ -718,18 +735,23 @@ void GaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_pass
 
 
 				// generate seperable kernels
-				Dtype w_normed = w * normalize_factor;
+				Dtype w_normed = sqrt(std::abs<Dtype>(w*normalize_factor));
 
-				weights_index = this->weight_horiz_buffer_->offset(j,i,k); //((j*this->conv_out_channels_ + i) * NUM_GAUSS + k) * this->kernel_w_;
+				// since normed weight is a square-root of w*normalize_factor we loose a sign so we need to bring it back in
+				// add it only to one horizotnal or vertical one, but NOT BOTH since they will cancel each-other in final equation
+				Dtype w_sign = w*normalize_factor < 0 ? -1 : 1;
+
+				weights_index = this->weight_horiz_buffer_->offset(i,k,j); //((j*this->conv_out_channels_ + i) * NUM_GAUSS + k) * this->kernel_w_;
 				for (int x = 0; x < this->kernel_w_; ++x) {
 
 					Dtype dist_x = x - mu1;
 					Dtype dist_x_2 = dist_x*dist_x;
 
-					weight_horiz[weights_index++] = w_normed * exp( -dist_x_2 * sigma2_inv_half);
+
+					weight_horiz[weights_index++] = w_normed * w_sign * exp( -dist_x_2 * sigma2_inv_half);
 				}
 
-				weights_index = this->weight_vert_buffer_->offset(i,j,k); //((i*this->conv_in_channels_ + j)* NUM_GAUSS + k) * this->kernel_h_;
+				weights_index = this->weight_vert_buffer_->offset(i,k,j); //((j*this->conv_in_channels_ + i)* NUM_GAUSS + k) * this->kernel_h_;
 				for (int y = 0; y < this->kernel_h_; ++y) {
 
 					Dtype dist_y = y - mu2;
@@ -786,19 +808,47 @@ void GaussianConvLayer<Dtype>::Forward_cpu(const vector<Blob<Dtype>*>& bottom,
 	const Dtype* weight_vert = using_gpu ? this->weight_vert_buffer_->gpu_data() : this->weight_vert_buffer_->cpu_data();
 	const Dtype* weight_horiz = using_gpu ? this->weight_horiz_buffer_->gpu_data() : this->weight_horiz_buffer_->cpu_data();
 
+	//Dtype* col_buff = this->col_buffer_.mutable_cpu_data();
+	//Dtype* tmp_buff = this->tmp_buffer_.mutable_cpu_data();
+	//Dtype* second_col_buff = this->tmp_buffer_sepe_.mutable_cpu_data();
+
+	Dtype* col_buff = this->tmp_buffer_sepe_1_.mutable_cpu_data();
+	Dtype* tmp_buff = this->tmp_buffer_.mutable_cpu_data();
+	Dtype* second_col_buff = this->tmp_buffer_sepe_2_.mutable_cpu_data();
+
+
+	clock_t time_org = 0, time_seperable = 0;
+
 	for (int i = 0; i < bottom.size(); ++i) {
 
 		const Dtype* bottom_data = using_gpu ? bottom[i]->gpu_data() : bottom[i]->cpu_data();
 		Dtype* top_data = using_gpu ? top[i]->mutable_gpu_data() : top[i]->mutable_cpu_data();
+		Dtype* top_diff = using_gpu ? top[i]->mutable_gpu_diff() : top[i]->mutable_cpu_diff();
 
 		for (int n = 0; n < this->num_; ++n) {
-			//this->forward_cpu_gpu_gemm(bottom_data + bottom[i]->offset(n), weight, top_data + top[i]->offset(n));
-			this->forward_cpu_gpu_seperable(bottom_data + bottom[i]->offset(n), weight_vert, weight_horiz, top_data + top[i]->offset(n));
+			clock_t time_org = 0, time_seperable = 0;
+
+			clock_t start_t = clock();
+			this->forward_cpu_gpu_gemm(bottom_data + bottom[i]->offset(n), weight, top_data + top[i]->offset(n));
+			time_org += clock() - start_t;
+
+			start_t = clock();
+			this->forward_cpu_gpu_seperable(bottom_data + bottom[i]->offset(n), weight_vert, weight_horiz, top_diff + top[i]->offset(n), col_buff, tmp_buff, second_col_buff);
+			time_seperable += clock() - start_t;
+
+			LOG(INFO) << "all forward_cpu_gpu_gemm done in " << (((float)(time_org))/CLOCKS_PER_SEC);
+			LOG(INFO) << "all forward_cpu_gpu_seperable done in " << (((float)(time_seperable))/CLOCKS_PER_SEC);
+
 			if (this->bias_term_) {
 				this->forward_cpu_gpu_bias(top_data + top[i]->offset(n), bias);
 			}
 		}
+		caffe_sub(top[i]->count(), top_data, top_diff, top_diff);
+		Dtype mean_error = caffe_cpu_asum(top[i]->count(), top_diff) /top[i]->count();
+
+		LOG(INFO) << "mean error  " << mean_error;
 	}
+
 	LOG(INFO) << "finished Forward_cpu";
 }
 
@@ -1480,7 +1530,9 @@ void GaussianConvLayer<Dtype>::conv_seperable_im2col_cpu(const Dtype* data, Dtyp
 	im2col_permute_cpu(data, num_chanels,
 			  this->conv_input_shape_.cpu_data()[1], this->conv_input_shape_.cpu_data()[2],
 			  dim == 0 ? this->kernel_shape_.cpu_data()[0] : 1, dim == 1 ? this->kernel_shape_.cpu_data()[1] : 1,
-			  this->pad_.cpu_data()[0], this->pad_.cpu_data()[1],
+			  //this->kernel_shape_.cpu_data()[0], this->kernel_shape_.cpu_data()[1],
+			  //this->pad_.cpu_data()[0], this->pad_.cpu_data()[1],
+		      dim == 0 ? this->pad_.cpu_data()[0] : 0, dim == 1 ? this->pad_.cpu_data()[1] : 0,
 			  this->stride_.cpu_data()[0], this->stride_.cpu_data()[1], col_buff, src_channel_permute);
 }
 
@@ -1493,45 +1545,164 @@ void GaussianConvLayer<Dtype>::transpose_batch_cpu(const Dtype* data, Dtype* out
 	}
 }
 */
+template <typename Dtype>
+void convolution_1D(const Dtype* input, const Dtype* weights, Dtype* output, int dim, int num_samples, int num_repeat_samples, int num_group_output, int width, int height, int kernel_size) {
+	// input = [Sx(FxG)x(HxW)]
+	// output = [Sx(FxG)x(K_w)]
+
+	const int kernel_half_size = kernel_size / 2;
+	const int sample_data_size = width * height;
+	Dtype* input_i = (Dtype*)input;
+	Dtype* kernel_i = (Dtype*)weights + kernel_half_size;
+	Dtype* output_i = output;
+	Dtype sum = 0;
+
+	const int unpadded_width = width - 2*kernel_half_size;
+	const int unpadded_height = height - 2*kernel_half_size;
+
+	// copy only with padded width, but padding in height is not needed
+	const int copy_size = width * unpadded_height - 2*kernel_half_size; // since src/dst are aligned to unpadded we need to remove last two padded blocks to avoid out-of-bound copy
+
+	// add initial padded border to input_i and output_i
+	output_i += width * kernel_half_size + kernel_half_size;
+
+	// if output of several seqeuntial convolutions are summed element-wise then
+	// the loop before samples (i.e., g-loop) needs to loop over each group
+	// while samples loop needs needs to reduce the number of samples it goes over
+	// (num_samples MUST be devisable by num_group_output must)
+	num_samples = num_samples / num_group_output;
+
+	const int output_start_offset = dim == 0 ? 1 : width;
+
+	for (int j = 0; j < num_repeat_samples; ++j) {
+		Dtype* input_i = (Dtype*)input;
+
+		input_i += width * kernel_half_size + kernel_half_size;
+
+		for (int g = 0; g < num_group_output; g++) {
+			for (int i = 0; i < num_samples; ++i) {
+
+				for (int k = -kernel_half_size; k <= kernel_half_size; ++k) {
+
+					Dtype* output_i_k = (Dtype*)output_i - k * output_start_offset;
+					const Dtype kernel_value = kernel_i[k]; // kernel_i should point to center of pointer by default
+
+					// multiply input with kernel value at k and save it to output shifted by k
+					caffe_axpy(copy_size, kernel_value, input_i, output_i_k);
+				}
+
+				input_i += sample_data_size;
+				kernel_i += kernel_size;
+			}
+			output_i += sample_data_size;
+		}
+	}
+}
+template <typename Dtype>
+void add_image_padding(const Dtype* image, int num_images, int width, int height, int pad_w, int pad_h, Dtype* output) {
+	Dtype* src_ptr = (Dtype*)image;
+	Dtype* dst_ptr = (Dtype*)output;
+
+	// border offset on both sides
+	const int border_x_offset = 2*pad_w;
+	const int border_y_offset = (2 * pad_w + width) * pad_h * 2;
+
+	// first offset for dst should be only half of calculated border offsets
+	dst_ptr += border_x_offset/2 + border_y_offset/2;
+
+	for (int i = 0; i < num_images; ++i) {
+		for (int y = 0; y < height; ++y) {
+			memcpy(dst_ptr, src_ptr, sizeof(Dtype) * width);
+			dst_ptr += width + border_x_offset;
+			src_ptr += width;
+		}
+		dst_ptr += border_y_offset;
+	}
+}
 
 template <typename Dtype>
-void GaussianConvLayer<Dtype>::forward_cpu_gpu_seperable(const Dtype* input, const Dtype* weights_vert, const Dtype* weights_horiz, Dtype* output, bool skip_im2col) {
-	if (using_gpu) {
+void remove_image_padding(const Dtype* image, int num_images, int width, int height, int pad_w, int pad_h, Dtype* output) {
+	Dtype* src_ptr = (Dtype*)image;
+	Dtype* dst_ptr = (Dtype*)output;
+
+	// border offset on both sides
+	const int border_x_offset = 2*pad_w;
+	const int border_y_offset = (2 * pad_w + width) * pad_h * 2;
+
+	// first offset for src should be only half of calculated border offsets
+	src_ptr += border_x_offset/2 + border_y_offset/2;
+
+	for (int i = 0; i < num_images; ++i) {
+		for (int y = 0; y < height; ++y) {
+			memcpy(dst_ptr, src_ptr, sizeof(Dtype) * width);
+			dst_ptr += width;
+			src_ptr += width+border_x_offset;
+		}
+		src_ptr += border_y_offset;
+	}
+}
+template <typename Dtype>
+void GaussianConvLayer<Dtype>::forward_cpu_gpu_seperable(const Dtype* input, const Dtype* weights_vert, const Dtype* weights_horiz, Dtype* output, Dtype* col_buff, Dtype* tmp_buff, Dtype* second_col_buff, bool skip_im2col) {
+	if (using_gpu && 0) {
 		//this->forward_gpu_gemm(input, weights, output, skip_im2col);
 
 		// 1. convert input images to column format for horizontal kernles, i.e., from [SxHxW] to [SxK_wxHxW]
 
-		Dtype* col_buff = this->col_buffer_.mutable_cpu_data();
+		// use im2col to generate input data for convolution-as-matrix-multiply;
+		// normally this is done in 2 dimensions but for seperable we do it first in
+		// on dimension and then in second dimension after first convolution
+		// this means that output from first im2col call will have the size of [SxK_wx(hxW)]
+		// where h is input size and W is output size (i.e., padding/stripe must be done only in one dimension)
 
-		Dtype* tmp_buff = this->tmp_buffer_.mutable_cpu_data();
+		clock_t start_t = clock();
+		/*
+		im2col_permute_cpu(input, this->conv_in_channels_,
+				  this->conv_input_shape_.cpu_data()[1], this->conv_input_shape_.cpu_data()[2],
+				  1, this->kernel_shape_.cpu_data()[0],
+			      0, this->pad_.cpu_data()[0],
+				  1, this->stride_.cpu_data()[0], col_buff);
+		*/
+		im2col_permute_cpu(input, this->conv_in_channels_,
+						  this->conv_input_shape_.cpu_data()[1], this->conv_input_shape_.cpu_data()[2],
+						  this->kernel_shape_.cpu_data()[0], 1,
+					      this->pad_.cpu_data()[0], this->pad_.cpu_data()[1],
+						  this->stride_.cpu_data()[0], 1, col_buff);
 
-		conv_seperable_im2col_cpu(input, col_buff, 0);
+		clock_t im2col_first = clock() - start_t;
 
 		// 2. do first conv1d as batched matrix multiplication S-times of [(FxG)x(K_w)] * [(K_w)x(HxW)] => [(FxG)x(HxW)]
-		size_t kernel_horiz_offset = 0;
+		size_t kernel_vert_offset = 0;
 		size_t col_offset = 0;
 		size_t out_first_conv_offset = 0;
 
 		size_t num_all_convolutions = 0;
+
+		start_t = clock();
+
 		for (int s = 0; s < this->conv_in_channels_; ++s) {
 
 			int num_convolutions = this->conv_out_channels_ * NUM_GAUSS;
 
+			// dimension of input data for first 1d convolution should be [hxW] where h is !input! height and W is !output! weight
+			int conv_first_out_spatial_dim = this->height_out_ * this->width_;
+
 			caffe_cpu_gemm<Dtype>(CblasNoTrans, CblasNoTrans,
 								num_convolutions,
-								this->conv_out_spatial_dim_,
-								this->kernel_w_,
-								(Dtype)1., weights_horiz + kernel_horiz_offset, col_buff + col_offset,
-								(Dtype)0., tmp_buff + out_first_conv_offset);
+								conv_first_out_spatial_dim,
+								this->kernel_h_,
+								(Dtype)1., weights_vert + kernel_vert_offset, col_buff + col_offset,
+								(Dtype)0., tmp_buff + out_first_conv_offset); // TODO change S and F dimensions on weights_vert
 
-			kernel_horiz_offset += num_convolutions * this->kernel_w_;
+			kernel_vert_offset += num_convolutions * this->kernel_w_;
 
-			col_offset += this->conv_out_spatial_dim_ * this->kernel_w_;
+			col_offset += conv_first_out_spatial_dim * this->kernel_w_;
 
-			out_first_conv_offset += num_convolutions * this->conv_out_spatial_dim_;
+			out_first_conv_offset += num_convolutions * conv_first_out_spatial_dim;
 
 			num_all_convolutions += num_convolutions;
 		}
+
+		clock_t conv1d_first = clock() - start_t;
 
 
 		// 3. translate each output feature: [(SxFxG)x(HxW)] => [(SxFxG)x(WxH)]
@@ -1539,22 +1710,43 @@ void GaussianConvLayer<Dtype>::forward_cpu_gpu_seperable(const Dtype* input, con
 		// 4. convert intermediate results to column format for vertical kernles, i.e., from [(SxFxG)x(WxH)] to [(SxFxGxK_h)x(HxW)]
 
 		// calculate permutation for im2col chanels to switch F and S dimensions
-		int* chanel_permute = new int[num_all_convolutions];
+		/*int* chanel_permute = new int[num_all_convolutions];
 
 		for (int f = 0; f < this->conv_out_channels_; ++f)
-			for (int s = 0; s < this->conv_in_channels_; ++f)
+			for (int s = 0; s < this->conv_in_channels_; ++s)
 				for (int g = 0; g < this->NUM_GAUSS; ++g)
 					chanel_permute[(f*this->conv_in_channels_ + s) * this->NUM_GAUSS + g] = (s*this->conv_out_channels_ + f) * this->NUM_GAUSS + g;
+		*/
+		// the second im2col will take input of the form [(SxFxG)x(hXW)] where h is input height and
+		// W is output width; we now ignore padding/stripe in the first dimension (since this one was already
+		// considered in the first call to im2col) and use padding/stripe only in the second dimension
+		// which was left intact during the first call to im2col
+		// the output of second im2col should be  [(SxFxG)xK_hx(HXW)]
 
-
-		conv_seperable_im2col_cpu(tmp_buff, col_buff, 1, num_all_convolutions, chanel_permute);
+		start_t = clock();
+		/*
+		im2col_permute_cpu(tmp_buff, num_all_convolutions,
+						  this->height_, this->conv_input_shape_.cpu_data()[2],
+						  this->kernel_shape_.cpu_data()[1], 1,
+					      this->pad_.cpu_data()[1], 0,
+						  this->stride_.cpu_data()[1], 1, second_col_buff);
+						  //this->stride_.cpu_data()[1], 1, second_col_buff, this->chanel_permute);
+		*//*
+		im2col_permute_cpu(tmp_buff, num_all_convolutions,
+								  this->conv_input_shape_.cpu_data()[1],this->width_,
+								  1, this->kernel_shape_.cpu_data()[1],
+							      0, this->pad_.cpu_data()[1],
+								  1, this->stride_.cpu_data()[1], second_col_buff);*/
+		clock_t im2col_second = clock() - start_t;
 
 		// 5. do second conv1d as matched matrix multiplication or multiple dot products??
-		size_t kernel_vert_offset = 0;
+		size_t kernel_horiz_offset = 0;
 		size_t out_second_conv_offset = 0;
 
 		col_offset = 0;
 
+		start_t = clock();
+/*
 		for (int f = 0; f < this->conv_out_channels_; ++f) {
 
 			int num_convolutions = this->conv_in_channels_ * NUM_GAUSS;
@@ -1562,19 +1754,86 @@ void GaussianConvLayer<Dtype>::forward_cpu_gpu_seperable(const Dtype* input, con
 			caffe_cpu_gemm<Dtype>(CblasNoTrans, CblasNoTrans,
 								1,
 								this->conv_out_spatial_dim_,
-								this->kernel_h_ * num_convolutions,
-								(Dtype)1., weights_vert + kernel_vert_offset, col_buff + col_offset,
+								this->kernel_w_ * num_convolutions,
+								(Dtype)1., weights_horiz + kernel_horiz_offset, second_col_buff + col_offset,
 								(Dtype)0., output + out_second_conv_offset);
 
-			kernel_vert_offset += num_convolutions * this->kernel_h_;
+			kernel_horiz_offset += num_convolutions * this->kernel_w_;
 
-			col_offset += this->conv_out_spatial_dim_ * this->kernel_h_ * num_convolutions;
+			col_offset += this->conv_out_spatial_dim_ * this->kernel_w_ * num_convolutions;
 
 			out_second_conv_offset += this->conv_out_spatial_dim_;
-		}
+		}*/
+		//convolution_1D(second_col_buff, weights_horiz, tmp_buff, 0, this->conv_out_channels_*this->conv_in_channels_ * NUM_GAUSS, this->width_out_, 1,1, this->height_out_, this->kernel_w_);
+		clock_t conv1d_second = clock() - start_t;
+
+		LOG(INFO) << "im2col_first done in " << (((float)(im2col_first))/CLOCKS_PER_SEC);
+		LOG(INFO) << "conv1d_first done in " << (((float)(conv1d_first))/CLOCKS_PER_SEC);
+		LOG(INFO) << "im2col_second done in " << (((float)(im2col_second))/CLOCKS_PER_SEC);
+		LOG(INFO) << "conv1d_second done in " << (((float)(conv1d_second))/CLOCKS_PER_SEC);
 
 	} else {
 		//this->forward_cpu_gemm(input, weights, output, skip_im2col);
+
+		int width_padded = this->width_ + this->pad_w_*2;
+		int height_padded = this->height_ + this->pad_h_*2;
+
+		//width_padded * height_padded * this->conv_in_channels_
+
+//		clock_t start_t = clock();
+		// set zero memory for input buffer in first convolution
+		caffe_set(width_padded * height_padded * this->conv_in_channels_, (Dtype)0, col_buff);
+//		clock_t zero_first = clock() - start_t;
+
+		//this->tmp_buffer_sepe_1_.Reshape(1, this->conv_in_channels_, this->height_ + 2 * this->pad_h_, this->width_ + 2 * this->pad_w_);
+		//this->tmp_buffer_sepe_2_.Reshape(this->conv_in_channels_, this->conv_out_channels_ * NUM_GAUSS, this->height_ + 2 * this->pad_h_, this->width_ + 2 * this->pad_w_);
+
+		//col_buff = this->tmp_buffer_sepe_1_.mutable_cpu_data();
+		//second_col_buff = this->tmp_buffer_sepe_2_.mutable_cpu_data();
+
+//		start_t = clock();
+		// add padding to image and copy it to col_buff
+		add_image_padding(input, this->conv_in_channels_, this->width_, this->height_, this->pad_w_, this->pad_h_, col_buff);
+//		clock_t add_padding = clock() - start_t;
+
+//		start_t = clock();
+		// clear output memory for the first convolution
+		caffe_set(width_padded * height_padded * this->conv_in_channels_ * this->conv_out_channels_ * this->NUM_GAUSS, (Dtype)0, second_col_buff);
+//		clock_t zero_second = clock() - start_t;
+
+//		start_t = clock();
+		// perform first convolution with vertical kernel
+		convolution_1D(col_buff, weights_vert, second_col_buff, 1, this->conv_in_channels_, this->conv_out_channels_* NUM_GAUSS, this->conv_in_channels_, width_padded, height_padded, this->kernel_h_);
+//		clock_t conv1d_first = clock() - start_t;
+
+		//this->tmp_buffer_sepe_1_.Reshape(1, this->conv_out_channels_, this->height_ + 2 * this->pad_h_, this->width_ + 2 * this->pad_w_);
+		//col_buff = this->tmp_buffer_sepe_1_.mutable_cpu_data();
+
+//		start_t = clock();
+		// clear output memory for the second convolution
+		caffe_set(width_padded * height_padded * this->conv_out_channels_, (Dtype)0, col_buff);
+//		clock_t zero_third = clock() - start_t;
+
+//		start_t = clock();
+		// perform second convolution with horizontal kernel
+		convolution_1D(second_col_buff, weights_horiz, col_buff, 0, this->conv_out_channels_ * this->conv_in_channels_ * NUM_GAUSS, 1, this->conv_out_channels_, width_padded, height_padded, this->kernel_w_);
+//		clock_t conv1d_second = clock() - start_t;
+
+//		start_t = clock();
+		// remove image padding and save it to output buffer
+		remove_image_padding(col_buff, this->conv_out_channels_, this->width_, this->height_, this->pad_w_, this->pad_h_, output);
+//		clock_t remove_padding = clock() - start_t;
+/*
+		LOG(INFO) << "zero_first  done in " << (((float)(zero_first))/CLOCKS_PER_SEC);
+		LOG(INFO) << "add_padding done in " << (((float)(add_padding))/CLOCKS_PER_SEC);
+		LOG(INFO) << "zero_second done in " << (((float)(zero_second))/CLOCKS_PER_SEC);
+		LOG(INFO) << "conv1d_first done in " << (((float)(conv1d_first))/CLOCKS_PER_SEC);
+		LOG(INFO) << "zero_third done in " << (((float)(zero_third))/CLOCKS_PER_SEC);
+		LOG(INFO) << "conv1d_second done in " << (((float)(conv1d_second))/CLOCKS_PER_SEC);
+		LOG(INFO) << "remove_padding done in " << (((float)(remove_padding))/CLOCKS_PER_SEC);
+*/
+		//this->tmp_buffer_sepe_1_.Reshape(this->conv_in_channels_, NUM_GAUSS* this->conv_out_channels_, this->height_ + 2* this->pad_h_, this->width_ + 2* this->pad_w_);
+		//this->tmp_buffer_sepe_2_.Reshape(this->conv_in_channels_, NUM_GAUSS* this->conv_out_channels_, this->height_ + 2* this->pad_h_, this->width_ + 2* this->pad_w_);
 
 	}
 }

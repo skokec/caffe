@@ -242,13 +242,14 @@ class GaussianConvLayer : public BaseConvolutionLayer<Dtype> {
  public:
   
   explicit GaussianConvLayer(const LayerParameter& param)
-      : BaseConvolutionLayer<Dtype>(param), using_gpu(0), A(0), B(0), C(0), d_A(0), d_B(0), d_C(0) {}
+      : BaseConvolutionLayer<Dtype>(param), using_gpu(0), A(0), B(0), C(0), d_A(0), d_B(0), d_C(0), chanel_permute(0) {}
 
   virtual ~GaussianConvLayer() {
 	  //for (int i = 0; i < this->tmp_buffer_.size(); ++i)
 		//  if (this->tmp_buffer_[i] != NULL)
 			//  delete this->tmp_buffer_[i];
 
+	  if (chanel_permute != NULL) delete chanel_permute;
 	  if (A != NULL) delete A;
 	  if (B != NULL) delete B;
 	  if (C != NULL) delete C;
@@ -338,6 +339,9 @@ class GaussianConvLayer : public BaseConvolutionLayer<Dtype> {
 
   // for separable forward pass
   Blob<Dtype> tmp_buffer_sepe_;
+  Blob<Dtype> tmp_buffer_sepe_1_;
+  Blob<Dtype> tmp_buffer_sepe_2_;
+  int* chanel_permute;
 
   bool using_gpu;
 
@@ -349,7 +353,7 @@ class GaussianConvLayer : public BaseConvolutionLayer<Dtype> {
   Dtype **d_A, **d_B, **d_C;
 
   void forward_cpu_gpu_gemm(const Dtype* input, const Dtype* weights, Dtype* output, bool skip_im2col = false);
-  void forward_cpu_gpu_seperable(const Dtype* input, const Dtype* weights_vert, const Dtype* weights_horiz, Dtype* output, bool skip_im2col = false);
+  void forward_cpu_gpu_seperable(const Dtype* input, const Dtype* weights_vert, const Dtype* weights_horiz, Dtype* output, Dtype* col_buff, Dtype* tmp_buff, Dtype* second_col_buff, bool skip_im2col = false);
   void forward_cpu_gpu_bias(Dtype* output, const Dtype* bias);
 
   void weight_cpu_gpu_gemm(const Dtype* input, const Dtype* output, Dtype* weights);
