@@ -19,9 +19,7 @@ void CuDNNConvolutionLayer<Dtype>::Forward_gpu(
     Dtype* top_data = top[i]->mutable_gpu_data();
 
     // Forward through cuDNN in parallel over groups.
-    //for (int g = 0; g < this->group_; g++) {
-    int g = 0;
-    for (int gg = 0; gg < 10; gg++) {
+    for (int g = 0; g < this->group_; g++) {
     //	clock_t start_t = clock();
       // Filters.
       CUDNN_CHECK(cudnnConvolutionForward(handle_[g],

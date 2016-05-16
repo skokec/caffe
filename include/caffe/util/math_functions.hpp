@@ -213,6 +213,15 @@ void caffe_gpu_mul(const int N, const Dtype* a, const Dtype* b, Dtype* y, const 
 //template <typename Dtype>
 //void caffe_gpu_mul_batched(const int N, const int M, const Dtype* a, const Dtype* b, Dtype* y);
 
+template <typename Dtype>
+void caffe_gpu_clip_lower(const int N, const Dtype lower_bound, const Dtype* x, Dtype* y);
+
+template <typename Dtype>
+void caffe_gpu_clip_upper(const int N, const Dtype upper_bound, const Dtype* x, Dtype* y);
+
+template <typename Dtype>
+void caffe_gpu_clip_eps(const int N, const Dtype eps_bound, const Dtype* x, Dtype* y);
+
 
 template <typename Dtype>
 void caffe_gpu_div(const int N, const Dtype* a, const Dtype* b, Dtype* y);
@@ -259,7 +268,7 @@ template <typename Dtype>
 void caffe_gpu_sum(const int n, const Dtype* x, Dtype* y, const int m = 0);
 
 template <typename Dtype>
-void caffe_gpu_sum(const int n, const Dtype* x, Dtype* y, const int num_segments, int* offsets_gpu, cudaStream_t streamId);
+void caffe_gpu_sum(const int n, const Dtype* x, Dtype* y, const int num_segments, int* offsets_gpu, cudaStream_t streamId = NULL);
 
 template <typename Dtype>
 void caffe_cpu_mul_batch(const int N, const Dtype* a, const Dtype* b, Dtype* y, const int M = 0) {

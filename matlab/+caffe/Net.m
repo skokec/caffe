@@ -81,8 +81,14 @@ classdef Net < handle
       CHECK(isscalar(blob_index), 'blob_index must be a scalar');
       blob = self.layer_vec(self.name2layer_index(layer_name)).params(blob_index);
     end
-    function forward_prefilled(self)
-      caffe_('net_forward', self.hNet_self);
+    function forward_prefilled(self, from, to)
+      if nargin < 2,
+          from = -1;
+      end
+      if nargin < 3,
+          to = -1;
+      end
+      caffe_('net_forward', self.hNet_self, from, to);
     end
     function backward_prefilled(self)
       caffe_('net_backward', self.hNet_self);

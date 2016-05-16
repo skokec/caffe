@@ -350,6 +350,78 @@ void caffe_gpu_mul<double>(const int N, const double* a,
 	  mul_kernel_batched<double><<<CAFFE_GET_BLOCKS(M), CAFFE_CUDA_NUM_THREADS>>>(N, a, b, y, M);
 }
 
+
+__global__ void clip_lower_kernel_double(const int n, const double lower_bound, const double* x, double* y) {
+  CUDA_KERNEL_LOOP(index, n) {
+    y[index] = fmax(x[index], lower_bound);
+  }
+}
+
+__global__ void clip_lower_kernel_float(const int n, const float lower_bound, const float* x, float* y) {
+  CUDA_KERNEL_LOOP(index, n) {
+    y[index] = fmaxf(x[index], lower_bound);
+  }
+}
+
+template <>
+void caffe_gpu_clip_lower<float>(const int N, const float lower_bound, const float* x, float* y) {
+	clip_lower_kernel_float<<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS>>>(N, lower_bound, x, y);
+}
+
+template <>
+void caffe_gpu_clip_lower<double>(const int N, const double lower_bound, const double* x, double* y) {
+	clip_lower_kernel_double<<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS>>>(N, lower_bound, x, y);
+}
+
+
+__global__ void clip_upper_kernel_double(const int n, const double lower_bound, const double* x, double* y) {
+  CUDA_KERNEL_LOOP(index, n) {
+    y[index] = fmin(x[index], lower_bound);
+  }
+}
+
+__global__ void clip_upper_kernel_float(const int n, const float lower_bound, const float* x, float* y) {
+  CUDA_KERNEL_LOOP(index, n) {
+    y[index] = fminf(x[index], lower_bound);
+  }
+}
+
+template <>
+void caffe_gpu_clip_upper<float>(const int N, const float lower_bound, const float* x, float* y) {
+	clip_upper_kernel_float<<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS>>>(N, lower_bound, x, y);
+}
+
+template <>
+void caffe_gpu_clip_upper<double>(const int N, const double lower_bound, const double* x, double* y) {
+	clip_upper_kernel_double<<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS>>>(N, lower_bound, x, y);
+}
+
+
+
+template <typename Dtype>
+void caffe_gpu_clip_upper(const int N, const Dtype upper_bound, const Dtype* x, Dtype* y) {
+
+}
+
+
+template <typename Dtype>
+__global__ void clip_eps_kernel(const int n, const Dtype eps_bound, const Dtype* x, Dtype* y) {
+  CUDA_KERNEL_LOOP(index, n) {
+	Dtype val = x[index];
+    y[index] = abs(val) > eps_bound ? val : 0;
+  }
+}
+
+
+template <>
+void caffe_gpu_clip_eps<float>(const int N, const float eps_bound, const float* x, float* y) {
+	clip_eps_kernel<float><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS>>>(N, eps_bound, x, y);
+}
+template <>
+void caffe_gpu_clip_eps<double>(const int N, const double eps_bound, const double* x, double* y) {
+	clip_eps_kernel<double><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS>>>(N, eps_bound, x, y);
+}
+
 template <typename Dtype>
 __global__ void div_kernel(const int n, const Dtype* a,
     const Dtype* b, Dtype* y) {

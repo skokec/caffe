@@ -336,11 +336,27 @@ static void net_get_attr(MEX_ARGS) {
 
 // Usage: caffe_('net_forward', hNet)
 static void net_forward(MEX_ARGS) {
-  mxCHECK(nrhs == 1 && mxIsStruct(prhs[0]),
+  mxCHECK(nrhs == 3 && mxIsStruct(prhs[0]) && 
+	mxIsDouble(prhs[1]) && mxGetNumberOfElements(prhs[1]) == 1 &&
+	mxIsDouble(prhs[2]) && mxGetNumberOfElements(prhs[2]) == 1,
       "Usage: caffe_('net_forward', hNet)");
+  Net<float>* net = handle_to_ptr<Net<float> >(prhs[0]);
+  
+  int from = (int)mxGetScalar(prhs[1]);
+  int to = (int)mxGetScalar(prhs[2]);
+  if (from >= 0 && to >= 0)
+    net->ForwardFromTo(from, to);  
+  else
+    net->ForwardPrefilled();
+}
+// Usage: caffe_('net_forward', hNet, [from, to])
+static void net_forward_from_to(MEX_ARGS) {
+  mxCHECK(nrhs == 3 && mxIsStruct(prhs[0]), 
+      "Usage: caffe_('net_forward', hNet, [from, to])");
   Net<float>* net = handle_to_ptr<Net<float> >(prhs[0]);
   net->ForwardPrefilled();
 }
+
 
 // Usage: caffe_('net_backward', hNet)
 static void net_backward(MEX_ARGS) {
