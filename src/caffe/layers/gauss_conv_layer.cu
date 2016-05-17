@@ -2,7 +2,9 @@
 #include <vector>
 
 #include "caffe/util/math_functions.hpp"
-#include "caffe/vision_layers.hpp"
+#include "caffe/util/math_functions_extra.hpp"
+
+#include "caffe/layers/gauss_conv_layer.hpp"
 
 #include <ctime>
 #include <algorithm>

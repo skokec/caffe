@@ -4,7 +4,8 @@
 #include "caffe/layer.hpp"
 #include "caffe/util/im2col.hpp"
 #include "caffe/util/math_functions.hpp"
-#include "caffe/vision_layers.hpp"
+#include "caffe/util/math_functions_extra.hpp"
+#include "caffe/layers/gauss_conv_layer.hpp"
 
 #include <ctime>
 #include <algorithm>
@@ -1354,7 +1355,7 @@ void GaussianConvLayer<Dtype>::compute_parameter_deriv(int num_iter,
 	clock_t start_t = clock();
 #endif
 
-	caffe_gpu_mul(tmp_buffer_count, tmp_buff_all, top_error + top_error_buffer.offset(num_iter),  tmp_buff_all, batch_mul_size);
+	caffe_gpu_mul_batched(tmp_buffer_count, tmp_buff_all, top_error + top_error_buffer.offset(num_iter),  tmp_buff_all, batch_mul_size);
 	//caffe_gpu_mul(1024, tmp_buff_all, tmp_buff_all,  tmp_buff_all);
 #ifdef CHECK_GPU_SUM_MUL
 	clock_t end_t = clock();
