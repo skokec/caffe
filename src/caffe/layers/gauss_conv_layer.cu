@@ -368,7 +368,7 @@ void GaussianConvLayer<Dtype>::precompute_guassian_weights_gpu(bool is_backward_
 
 	mirror_kernel<Dtype><<<numBlocks,threadsPerBlock>>>(S, F, K_w*K_h, weight, deriv_error);
 
-	//cudaDeviceSynchronize();
+	cudaDeviceSynchronize();
 
 	clock_t end_t = clock();
 

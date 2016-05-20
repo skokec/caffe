@@ -1,17 +1,24 @@
+#include <boost/smart_ptr/shared_ptr.hpp>
+#include <caffe/blob.hpp>
+#include <caffe/common.hpp>
+#include <caffe/filler.hpp>
+#include <caffe/layers/gauss_conv_layer.hpp>
+#include <caffe/proto/caffe.pb.h>
+#include <caffe/test/test_caffe_main.hpp>
+#include <glog/logging.h>
+#include <gtest/gtest.h>
 #include <vector>
 
-#include "gtest/gtest.h"
-
-#include "caffe/blob.hpp"
-#include "caffe/common.hpp"
-#include "caffe/filler.hpp"
-#include "caffe/vision_layers.hpp"
-#include "caffe/layers/gauss_conv_layer.hpp"
-
-#include "caffe/test/test_caffe_main.hpp"
-#include "caffe/test/test_gradient_check_util.hpp"
-
 namespace caffe {
+
+template <typename Dtype>
+void compare_blobs(Blob<Dtype>& a, Blob<Dtype>& b, bool compare_diff, Dtype eps) {
+	Dtype* data_a = compare_diff ? a.mutable_cpu_diff() : a.mutable_cpu_data();
+	Dtype* data_b = compare_diff ? b.mutable_cpu_diff() : b.mutable_cpu_data();
+	for (int i = 0; i < a.count(); ++i) {
+		EXPECT_NEAR(data_a[i], data_b[i], eps);
+	}
+}
 
 // Reference convolution for checking results:
 // accumulate through explicit loops over input, output, and filters.
@@ -440,6 +447,126 @@ TYPED_TEST(GaussConvolutionLayerTest, TestSeperableConvolution) {
 	Dtype mean_error = caffe_cpu_asum(top_org.count(), data_diff) /top_org.count();
 	EXPECT_NEAR(mean_error, 0, 1e-4);
   }
+}
+
+TYPED_TEST(GaussConvolutionLayerTest, TestCuDNNConvolution) {
+
+ if (Caffe::mode() == Caffe::CPU)
+	 return;
+
+  typedef typename TypeParam::Dtype Dtype;
+  vector<Blob<Dtype>*> blob_bottom_vec_;
+  vector<Blob<Dtype>*> blob_top_vec_;
+
+  vector<Blob<Dtype>*> blob_bottom_vec_org_;
+  vector<Blob<Dtype>*> blob_top_vec_org_;
+
+  vector<bool> propagate_down;
+
+  propagate_down.push_back(true);
+  blob_bottom_vec_.push_back(this->blob_bottom_3_);
+  blob_top_vec_.push_back(this->blob_top_3_);
+
+  FillerParameter filler_param;
+  filler_param.set_value(0.1);
+
+  Blob<Dtype>* blob_top_diff = new Blob<Dtype>();
+
+  Blob<Dtype>* blob_bottom_3_org_ = new Blob<Dtype>();
+  Blob<Dtype>* blob_top_3_org_ = new Blob<Dtype>();
+
+  blob_bottom_3_org_->CopyFrom(*this->blob_bottom_3_, false, true);
+
+  blob_bottom_vec_org_.push_back(blob_bottom_3_org_);
+  blob_top_vec_org_.push_back(blob_top_3_org_);
+
+
+  LayerParameter layer_param;
+  ConvolutionParameter* convolution_param =
+	  layer_param.mutable_convolution_param();
+
+  convolution_param->add_kernel_size(7);
+  convolution_param->add_stride(1);
+  convolution_param->add_pad(3);
+
+  convolution_param->set_number_gauss(2);
+
+  convolution_param->set_num_output(16);
+
+  convolution_param->mutable_weight_filler()->set_type("gaussian");
+  convolution_param->mutable_weight_filler()->set_std(0.01);
+
+  convolution_param->mutable_bias_filler()->set_type("constant");
+  convolution_param->mutable_bias_filler()->set_value(0.1);
+
+  convolution_param->mutable_sigma_filler()->set_type("constant");
+  convolution_param->mutable_sigma_filler()->set_value(0.8);
+
+  convolution_param->set_gmm_component_border_bound(1.5);
+  convolution_param->set_gmm_sigma_lower_bound(0.5);
+
+  convolution_param->set_gmm_weight_normalization(false);
+  convolution_param->set_gmm_gauss_normalization(true);
+
+  for (int gmm_sqrt_norm = 0; gmm_sqrt_norm < 1; gmm_sqrt_norm++) {
+	  convolution_param->set_gmm_square_gauss_normalization((bool)gmm_sqrt_norm);
+
+	shared_ptr<GaussianConvLayer<Dtype> > layer(new CuDNNGaussianConvLayer<Dtype>(layer_param));
+	shared_ptr<GaussianConvLayer<Dtype> > layer_org(new GaussianConvLayer<Dtype>(layer_param));
+
+	layer->SetUp(blob_bottom_vec_, blob_top_vec_);
+	layer_org->SetUp(blob_bottom_vec_org_, blob_top_vec_org_);
+
+	layer_org->param_buffer_w_->CopyFrom(*layer->param_buffer_w_, false, false);
+	layer_org->param_buffer_mu1_->CopyFrom(*layer->param_buffer_mu1_, false, false);
+	layer_org->param_buffer_mu2_->CopyFrom(*layer->param_buffer_mu2_, false, false);
+	layer_org->param_buffer_sigma_->CopyFrom(*layer->param_buffer_sigma_, false, false);
+	layer_org->param_buffer_bias_->CopyFrom(*layer->param_buffer_bias_, false, false);
+
+	// RUN forward
+	layer->Forward(blob_bottom_vec_, blob_top_vec_);
+
+	layer_org->Forward(blob_bottom_vec_org_, blob_top_vec_org_);
+
+	blob_top_diff->ReshapeLike(*blob_top_vec_[0]);
+	GaussianFiller<Dtype> filler(filler_param);
+	filler.Fill(blob_top_diff);
+
+	caffe_copy( blob_top_vec_[0]->count(), blob_top_diff->cpu_data(), blob_top_vec_[0]->mutable_cpu_diff());
+
+	blob_top_vec_[0]->cpu_data();
+	blob_top_vec_[0]->gpu_diff();
+
+	blob_top_vec_org_[0]->CopyFrom(*blob_top_vec_[0], true, true);
+
+//	blob_top_vec_org_[0]->cpu_diff();
+
+	const Dtype* gpu_data = blob_top_vec_[0]->cpu_data();
+	const Dtype* cpu_data = blob_top_vec_org_[0]->cpu_data();
+	for (int i = 0; i < blob_top_vec_[0]->count(); ++i) { EXPECT_NEAR(gpu_data[i], cpu_data[i], 1e-4); }
+
+	// RUN backward
+	layer->Backward(blob_top_vec_, propagate_down, blob_bottom_vec_);
+
+	layer_org->Backward(blob_top_vec_org_, propagate_down, blob_bottom_vec_org_);
+
+	const Dtype* gpu_diff = blob_bottom_vec_[0]->cpu_diff();
+	const Dtype* cpu_diff = blob_bottom_vec_org_[0]->cpu_diff();
+	for (int i = 0; i < blob_bottom_vec_[0]->count(); ++i) { EXPECT_NEAR(gpu_diff[i], cpu_diff[i], 1e-4); }
+
+//	layer->param_buffer_w_->cpu_data();
+//	layer_org->param_buffer_w_->cpu_data();
+
+	compare_blobs(*layer->param_buffer_w_, *layer_org->param_buffer_w_, true, (Dtype)1e-4);
+	compare_blobs(*layer->param_buffer_mu1_, *layer_org->param_buffer_mu1_, true, (Dtype)1e-4);
+	compare_blobs(*layer->param_buffer_mu2_, *layer_org->param_buffer_mu2_, true, (Dtype)1e-4);
+	compare_blobs(*layer->param_buffer_sigma_, *layer_org->param_buffer_sigma_, true, (Dtype)1e-4);
+
+  }
+
+  delete blob_bottom_3_org_;
+  delete blob_top_3_org_;
+  delete blob_top_diff;
 }
 
 /*

@@ -73,15 +73,6 @@ __global__ void mul_kernel_batched_v2(const int n, const Dtype* a,
  }
 }
 
-
-template <typename Dtype>
-__global__ void mul_kernel(const int n, const Dtype* a,
-    const Dtype* b, Dtype* y) {
-  CUDA_KERNEL_LOOP(index, n) {
-    y[index] = a[index] * b[index];
-  }
-}
-
 template <>
 void caffe_gpu_mul_batched<float>(const int N, const float* a,
     const float* b, float* y, const int M) {
@@ -515,28 +506,29 @@ template void caffe_gpu_sum<double>(const int n, const double* x, double* y, con
 template void caffe_gpu_sum<float>(const int n, const float* x, float* y, const int m);
 template void caffe_gpu_sum<double>(const int n, const double* x, double* y, const int m);
 
-
+// TODO: sum_elementwise should be implemented more efficently!!
 template <typename Dtype>
-void caffe_cpu_sum(const int n, const Dtype* x, Dtype* y, int m) {
-	if (m <= 0)
-		m = n;
-	int num_segments = n/m;
-
-	int input_offset = 0;
-	for (int i = 0; i < num_segments; ++i) {
-
-		Dtype sum_value = 0;
-
-		for (int j = 0; j < m; ++j) {
-			sum_value += x[input_offset];
-			input_offset++;
-		}
-
-		y[i] += sum_value;
-	}
+__global__ void sum_elementwise_kernel(const int n, const Dtype* x, Dtype* y, const int m) {
+  CUDA_KERNEL_LOOP(index, m) {
+	  Dtype sum = 0;
+	  for (unsigned int batch_offset = 0; batch_offset < n; batch_offset+=m) {
+		  sum += x[index + batch_offset];
+  	  }
+	  y[index] = sum;
+  }
 }
 
-template void caffe_cpu_sum(const int n, const double* x, double* y, int m);
-template void caffe_cpu_sum(const int n, const float* x, float* y, int m);
+template <>
+void caffe_gpu_sum_elementwise<float>(const int N, const float* x, float* y, const int M) {
+  // NOLINT_NEXT_LINE(whitespace/operators)
+	sum_elementwise_kernel<float><<<CAFFE_GET_BLOCKS(M), CAFFE_CUDA_NUM_THREADS>>>(N, x, y, M);
+}
+
+template <>
+void caffe_gpu_sum_elementwise<double>(const int N, const double* x, double* y, const int M) {
+  // NOLINT_NEXT_LINE(whitespace/operators)
+	sum_elementwise_kernel<double><<<CAFFE_GET_BLOCKS(M), CAFFE_CUDA_NUM_THREADS>>>(N, x, y, M);
+}
+
 
 }  // namespace caffe

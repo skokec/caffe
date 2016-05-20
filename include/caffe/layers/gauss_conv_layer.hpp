@@ -126,8 +126,6 @@ class GaussianConvLayer : public BaseConvolutionLayer<Dtype> {
   Blob<Dtype> deriv_mu2_times_gauss_dist_buffer_;
   Blob<Dtype> deriv_sigma_times_gauss_dist_buffer_;
 
-
-
   Blob<Dtype> guass_norm_buffer_;
   Blob<Dtype> deriv_mu1_sums_buffer_;
   Blob<Dtype> deriv_mu2_sums_buffer_;
@@ -186,15 +184,22 @@ class CuDNNGaussianConvLayer : public GaussianConvLayer<Dtype> {
   virtual void Backward_gpu(const vector<Blob<Dtype>*>& top,
         const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
 
+  void compute_parameter_deriv(const int sample_index,
+						  	   const int group_index,
+							   const int subfeature_index,
+							   const Dtype* bottom_data,
+							   const Dtype* top_diff, const int top_count,
+							   const Blob<Dtype>* deriv_kernel, const Dtype* deriv_kernel_data,
+							   Blob<Dtype>* param_buffer, Dtype* param_buffer_diff,
+							   Dtype* intermediate_buff, Dtype* intermediate_sum_buff, int* intermediate_sum_index); 
+  
 
   bool handles_setup_;
   cudnnHandle_t* handle_;
   cudaStream_t*  stream_;
 
-  // algorithms for forward and backwards convolutions
+  // algos and descriptors for forward convolution
   cudnnConvolutionFwdAlgo_t *fwd_algo_;
-  cudnnConvolutionBwdFilterAlgo_t *bwd_filter_algo_;
-  cudnnConvolutionBwdDataAlgo_t *bwd_data_algo_;
 
   vector<cudnnTensorDescriptor_t> bottom_descs_, top_descs_;
   cudnnTensorDescriptor_t    bias_desc_;
@@ -202,9 +207,16 @@ class CuDNNGaussianConvLayer : public GaussianConvLayer<Dtype> {
   vector<cudnnConvolutionDescriptor_t> conv_descs_;
   int bottom_offset_, top_offset_, bias_offset_;
 
+  // algos and descriptors for backward convolution
+  cudnnConvolutionFwdAlgo_t *bwd_filter_algo_;
+  cudnnConvolutionBwdDataAlgo_t *bwd_data_algo_;
+
+  vector<cudnnTensorDescriptor_t> backward_bottom_desc_, backward_intermed_desc_;
+  cudnnFilterDescriptor_t      backward_filter_desc_;
+
   size_t *workspace_fwd_sizes_;
-  size_t *workspace_bwd_data_sizes_;
   size_t *workspace_bwd_filter_sizes_;
+  size_t *workspace_bwd_data_sizes_;
   size_t workspaceSizeInBytes;  // size of underlying storage
   void *workspaceData;  // underlying storage
   void **workspace;  // aliases into workspaceData

@@ -314,13 +314,14 @@ void GaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
 	this->gmm_sigma_iteration_step = this->layer_param_.convolution_param().gmm_sigma_iteration_step();
 
 	this->use_gmm_seperable_kernels = this->layer_param_.convolution_param().gmm_seperable_forward_pass();
+
+	this->current_iteration_index = 0;
 }
 
 template <typename Dtype>
 void GaussianConvLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
 		const vector<Blob<Dtype>*>& top) {
 
-	this->current_iteration_index = 0;
 	const int first_spatial_axis = this->channel_axis_ + 1;
 	int NUM_GAUSS_PER_AXIS = this->layer_param_.convolution_param().number_gauss();
 	int NUM_GAUSS =  NUM_GAUSS_PER_AXIS * NUM_GAUSS_PER_AXIS;
@@ -927,8 +928,8 @@ void GaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
 				caffe_set(this->blobs_[i]->count(), Dtype(0), this->blobs_[i]->mutable_cpu_diff());
 		}
 	}
-	int NUM_GAUSS_PER_AXIS = this->layer_param_.convolution_param().number_gauss();
-	int NUM_GAUSS =  NUM_GAUSS_PER_AXIS * NUM_GAUSS_PER_AXIS;
+	//int NUM_GAUSS_PER_AXIS = this->layer_param_.convolution_param().number_gauss();
+	//int NUM_GAUSS =  NUM_GAUSS_PER_AXIS * NUM_GAUSS_PER_AXIS;
 
 	// precompute kernels from gaussian parameters for forward and backward pass
 	//this->precompute_guassian_weights(true);
@@ -1218,6 +1219,7 @@ void GaussianConvLayer<Dtype>::compute_parameter_deriv(int num_iter,
 	int batch_sum_size = this->height_out_ * this->width_out_;
 	int size_params = this->conv_in_channels_ * this->conv_out_channels_ * NUM_GAUSS;
 
+	tmp_buffer_.cpu_data();
 
 	//Blob<Dtype> top_error_buffer_(top_error_buffer.shape());
 	Blob<Dtype>& top_error_buffer_ = top_error_buffer;
@@ -1725,6 +1727,6 @@ void GaussianConvLayer<Dtype>::forward_cpu_gpu_seperable(const Dtype* input, con
 }
 
 INSTANTIATE_CLASS(GaussianConvLayer);
-REGISTER_LAYER_CLASS(GaussianConv);
+//REGISTER_LAYER_CLASS(GaussianConv);
 
 }  // namespace caffe
