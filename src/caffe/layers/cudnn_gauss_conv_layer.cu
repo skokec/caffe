@@ -18,9 +18,9 @@ void CuDNNGaussianConvLayer<Dtype>::Forward_gpu(
   clock_t start_t = clock();
 
   // compile guassian parameters into kernels for regular CNN
-  if (this->current_iteration_index == 0)
+  //if (this->current_iteration_index == 0)
   this->precompute_guassian_weights_gpu(true);
-  return ;
+  //return ;
   for (int i = 0; i < bottom.size(); ++i) {
     const Dtype* bottom_data = bottom[i]->gpu_data();
     Dtype* top_data = top[i]->mutable_gpu_data();
