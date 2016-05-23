@@ -220,6 +220,8 @@ class CuDNNGaussianConvLayer : public GaussianConvLayer<Dtype> {
   size_t workspaceSizeInBytes;  // size of underlying storage
   void *workspaceData;  // underlying storage
   void **workspace;  // aliases into workspaceData
+  
+  int num_guass_per_compute;
 };
 #endif
 

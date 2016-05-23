@@ -80,9 +80,11 @@ void CuDNNGaussianConvLayer<Dtype>::LayerSetUp(
     conv_descs_.push_back(conv_desc);
   }
 
+  this->num_guass_per_compute = 1;
+
   // Descriptors for backward pass:
   // Kernel descriptor should have only one chanel
-  cudnn::createFilterDesc<Dtype>(&backward_filter_desc_, this->num_output_ / this->group_, 1, kernel_h, kernel_w);
+  cudnn::createFilterDesc<Dtype>(&backward_filter_desc_, this->num_output_ * this->num_guass_per_compute/ this->group_, 1, kernel_h, kernel_w);
 
   // input descriptor and intermediate output will need to have different size then other descriptors
   for (int i = 0; i < bottom.size(); i++) {
@@ -167,8 +169,8 @@ void CuDNNGaussianConvLayer<Dtype>::Reshape(
 
 	cudnn::setTensor4dDesc<Dtype>(&backward_intermed_desc_[i],
 		this->num_,
-		this->num_output_ / this->group_, height_out, width_out,
-		this->num_output_ * this->out_spatial_dim_,
+		this->num_output_ * this->num_guass_per_compute / this->group_, height_out, width_out,
+		this->num_output_ * this->num_guass_per_compute * this->out_spatial_dim_,
 		this->out_spatial_dim_, width_out, 1);
 
 	// choose backward algorithm for filter
@@ -264,12 +266,12 @@ void CuDNNGaussianConvLayer<Dtype>::Reshape(
   }
 
   // resize temporary buffers from parent
-  this->tmp_buffer_.Reshape(this->num_, this->conv_out_channels_, this->height_out_, this->width_out_);
+  this->tmp_buffer_.Reshape(this->num_, this->conv_out_channels_ * this->num_guass_per_compute, this->height_out_, this->width_out_);
 
-  this->tmp_blob_.Reshape(1, 1, this->num_, this->conv_out_channels_);
+  this->tmp_blob_.Reshape(1, 1, this->num_, this->conv_out_channels_ * this->num_guass_per_compute);
 
   // pre-computed offset indexes for batched sums (when using caffe_gpu_sum)
-  this->tmp_index_.Reshape(1, 1, 1,  this->num_ * this->conv_out_channels_ + 1);
+  this->tmp_index_.Reshape(1, 1, 1,  this->num_ *this->num_guass_per_compute* this->conv_out_channels_ + 1);
 
   int* tmp_index_cpu = this->tmp_index_.mutable_cpu_data();
 
