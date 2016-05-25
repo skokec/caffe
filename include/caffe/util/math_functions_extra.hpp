@@ -40,6 +40,9 @@ template <typename Dtype>
 void caffe_gpu_mul_batched(const int N, const Dtype* a, const Dtype* b, Dtype* y, const int M = 0);
 
 template <typename Dtype>
+void caffe_gpu_mul_split(const int N, const Dtype* a, const Dtype* b, Dtype* y, const int M, const int K, const int L);
+
+template <typename Dtype>
 void caffe_gpu_sum(const int N, const Dtype* x, Dtype* y, const int M = 0);
 
 template <typename Dtype>
@@ -47,6 +50,9 @@ void caffe_gpu_sum(const int N, const Dtype* x, Dtype* y, const int num_segments
 
 template <typename Dtype>
 void caffe_gpu_dot_batched(const int n, const Dtype* a, const Dtype* b, Dtype* y, const int num_segments, int* offsets_gpu, cudaStream_t streamId = 0);
+
+template <typename Dtype>
+void caffe_gpu_dot_batched_mapped(const int n, const Dtype* a, const int* mapping, const Dtype* b, Dtype* y, const int num_segments, int* offsets_gpu, cudaStream_t streamId = 0);
 
 template <typename Dtype>
 void caffe_gpu_sum_elementwise(const int N, const Dtype* x, Dtype* y, const int M);

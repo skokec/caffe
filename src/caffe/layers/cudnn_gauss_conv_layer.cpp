@@ -80,7 +80,7 @@ void CuDNNGaussianConvLayer<Dtype>::LayerSetUp(
     conv_descs_.push_back(conv_desc);
   }
 
-  this->num_guass_per_compute = 1;
+  this->num_guass_per_compute = this->NUM_GAUSS;
 
   // Descriptors for backward pass:
   // Kernel descriptor should have only one chanel
@@ -107,6 +107,16 @@ void CuDNNGaussianConvLayer<Dtype>::LayerSetUp(
 template <typename Dtype>
 void CuDNNGaussianConvLayer<Dtype>::Reshape(
     const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top) {
+
+  const int first_spatial_axis = this->channel_axis_ + 1;
+
+  if (this->bottom_dim_ == bottom[0]->count(this->channel_axis_)  && this->top_dim_ == top[0]->count(this->channel_axis_) &&
+		  this->num_ == bottom[0]->num() &&
+		  this->height_ == bottom[0]->height() &&
+		  this->width_ == bottom[0]->width() ) {
+	  return;
+  }
+
   GaussianConvLayer<Dtype>::Reshape(bottom, top);
   CHECK_EQ(2, this->num_spatial_axes_)
       << "CuDNNConvolution input must have 2 spatial axes "
@@ -267,6 +277,21 @@ void CuDNNGaussianConvLayer<Dtype>::Reshape(
 
   // resize temporary buffers from parent
   this->tmp_buffer_.Reshape(this->num_, this->conv_out_channels_ * this->num_guass_per_compute, this->height_out_, this->width_out_);
+  memset(&this->tmp_buffer_1, 0, sizeof(this->tmp_buffer_1)); // HACK: there is a bug in Blob; shape_data is not zeroed correctly so we do this manually
+  this->tmp_buffer_1.Reshape(this->num_, this->conv_out_channels_ * this->num_guass_per_compute, this->height_out_, this->width_out_);
+
+  int* tmp_buffer_1_cpu = this->tmp_buffer_1.mutable_cpu_data();
+
+  int index = 0;
+  for (int i = 0; i < this->num_; ++i) {
+	  for (int g = 0; g < this->num_guass_per_compute; ++g) {
+		  for (int j = 0; j < this->conv_out_channels_ * this->height_out_* this->width_out_; j++) {
+			  tmp_buffer_1_cpu[index++] = i * (this->conv_out_channels_ * this->height_out_* this->width_out_) + j;
+		  }
+	  }
+  }
+  this->tmp_buffer_1_gpu = this->tmp_buffer_1.mutable_gpu_data();
+
 
   this->tmp_blob_.Reshape(1, 1, this->num_, this->conv_out_channels_ * this->num_guass_per_compute);
 
@@ -280,6 +305,7 @@ void CuDNNGaussianConvLayer<Dtype>::Reshape(
   for (int i = 0; i < this->tmp_index_.count()-1; i++) tmp_index_cpu[i+1] = this->height_out_ * this->width_out_*(i+1);
 
   this->tmp_index_gpu = this->tmp_index_.mutable_gpu_data();
+
 }
 
 template <typename Dtype>

@@ -113,7 +113,8 @@ struct Mul
 template <
     typename ValueType,
     typename ConversionOp,
-    typename InputIteratorT,
+    typename InputIteratorT1,
+	typename InputIteratorT2,
     typename OffsetT = ptrdiff_t>
 class BinaryTransformInputIterator
 {
@@ -141,15 +142,15 @@ public:
 private:
 
     ConversionOp    conversion_op;
-    InputIteratorT  input_itr_a;
-    InputIteratorT  input_itr_b;
+    InputIteratorT1  input_itr_a;
+    InputIteratorT2  input_itr_b;
 
 public:
 
     /// Constructor
     __host__ __device__ __forceinline__ BinaryTransformInputIterator(
-    InputIteratorT      input_itr_a,          ///< Input iterator to wrap
-	InputIteratorT      input_itr_b,          ///< Input iterator to wrap
+    InputIteratorT1      input_itr_a,          ///< Input iterator to wrap
+	InputIteratorT2      input_itr_b,          ///< Input iterator to wrap
         ConversionOp        conversion_op)      ///< Conversion functor to wrap
     :
         conversion_op(conversion_op),
@@ -253,6 +254,145 @@ public:
 };
 
 
+/**
+ * Mapping of input based on index array. It will rearange indexes based on mapping table.
+ */
+template <
+    typename ValueType,
+    typename InputIteratorT,
+	typename MappingIteratorT,
+    typename OffsetT = ptrdiff_t>
+class InputMappingIterator
+{
+public:
+
+    // Required iterator traits
+    typedef InputMappingIterator              self_type;              ///< My own type
+    typedef OffsetT                             difference_type;        ///< Type to express the result of subtracting one iterator from another
+    typedef ValueType                           value_type;             ///< The type of the element the iterator can point to
+    typedef ValueType*                          pointer;                ///< The type of a pointer to an element the iterator can point to
+    typedef ValueType                           reference;              ///< The type of a reference to an element the iterator can point to
+
+#if (THRUST_VERSION >= 100700)
+    // Use Thrust's iterator categories so we can use these iterators in Thrust 1.7 (or newer) methods
+    typedef typename thrust::detail::iterator_facade_category<
+        thrust::any_system_tag,
+        thrust::random_access_traversal_tag,
+        value_type,
+        reference
+      >::type iterator_category;                                        ///< The iterator category
+#else
+    typedef std::random_access_iterator_tag     iterator_category;      ///< The iterator category
+#endif  // THRUST_VERSION
+
+private:
+
+    InputIteratorT  input_itr;
+    MappingIteratorT  mapping_itr;
+
+public:
+
+    /// Constructor
+    __host__ __device__ __forceinline__ InputMappingIterator(
+    InputIteratorT      input_itr,          ///< Input iterator to wrap
+	MappingIteratorT  	mapping_itr)      ///< Mapping for input interator
+
+    :
+        input_itr(input_itr),
+		mapping_itr(mapping_itr)
+    {}
+
+    /// Postfix increment
+    __host__ __device__ __forceinline__ self_type operator++(int)
+    {
+        self_type retval = *this;
+        mapping_itr++;
+        return retval;
+    }
+
+    /// Prefix increment
+    __host__ __device__ __forceinline__ self_type operator++()
+    {
+    	mapping_itr++;
+        return *this;
+    }
+
+    /// Indirection
+    __host__ __device__ __forceinline__ reference operator*() const
+    {
+    	return input_itr[*mapping_itr];
+    }
+
+    /// Addition
+    template <typename Distance>
+    __host__ __device__ __forceinline__ self_type operator+(Distance n) const
+    {
+        self_type retval(input_itr, mapping_itr + n);
+        return retval;
+    }
+
+    /// Addition assignment
+    template <typename Distance>
+    __host__ __device__ __forceinline__ self_type& operator+=(Distance n)
+    {
+    	mapping_itr += n;
+        return *this;
+    }
+
+    /// Subtraction
+    template <typename Distance>
+    __host__ __device__ __forceinline__ self_type operator-(Distance n) const
+    {
+        self_type retval(input_itr, mapping_itr - n);
+        return retval;
+    }
+
+    /// Subtraction assignment
+    template <typename Distance>
+    __host__ __device__ __forceinline__ self_type& operator-=(Distance n)
+    {
+    	mapping_itr -= n;
+        return *this;
+    }
+
+    /// Distance
+    __host__ __device__ __forceinline__ difference_type operator-(self_type other) const
+    {
+        return mapping_itr - other.mapping_itr;
+    }
+
+    /// Array subscript
+    template <typename Distance>
+    __host__ __device__ __forceinline__ reference operator[](Distance n) const
+    {
+    	return input_itr[mapping_itr[n]];
+    }
+
+    /// Structure dereference
+    __host__ __device__ __forceinline__ pointer operator->()
+    {
+        return &input_itr[*mapping_itr];
+    }
+
+    /// Equal to
+    __host__ __device__ __forceinline__ bool operator==(const self_type& rhs)
+    {
+        return (input_itr == rhs.input_itr && mapping_itr == rhs.mapping_itr);
+    }
+
+    /// Not equal to
+    __host__ __device__ __forceinline__ bool operator!=(const self_type& rhs)
+    {
+        return (input_itr != rhs.input_itr && mapping_itr != rhs.mapping_itr);
+    }
+
+    /// ostream operator
+    friend std::ostream& operator<<(std::ostream& os, const self_type& itr)
+    {
+        return os;
+    }
+
+};
 
 /**
  * Segmented reduction that uses d_out values as intialization values (one block per segment)

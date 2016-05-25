@@ -72,13 +72,51 @@ void CuDNNGaussianConvLayer<Dtype>::compute_parameter_deriv(const int sample_ind
 															const Dtype* top_diff, const int top_count,
 															const Blob<Dtype>* deriv_kernel, const Dtype* deriv_kernel_data,
 															Blob<Dtype>* param_buffer, Dtype* param_buffer_diff,
-															Dtype* intermediate_buff, Dtype* intermediate_sum_buff, int* intermediate_sum_index) {
-
+															Dtype* intermediate_buff, Dtype* intermediate_sum_buff, int* intermediate_sum_index, int * top_remapping_index) {
   const int I = this->num_;
   const int S = this->conv_in_channels_;
   const int F = this->conv_out_channels_;
   const int G = this->NUM_GAUSS;
 
+
+#define DOT_PRODUCT_AS_CUB_SUM_AND_ITERATOR 1
+#define BATCHED_GAUSS 1
+
+#ifdef BATCHED_GAUSS
+
+  const int kernel_channel_offset = deriv_kernel->offset(subfeature_index, 0);
+  const int param_channel_offset = param_buffer->offset(0, subfeature_index, 0);
+
+  // 1. convolve [I x 1 x H x W] sub-feature inputs with [1 x G*F x K_h x K_w] deriv kernels to get [I x G*F x H x W] outputs
+  CUDNN_CHECK(cudnnConvolutionForward(handle_[group_index], // handle
+			  cudnn::dataType<Dtype>::one, // scale factor for input
+			  backward_bottom_desc_[sample_index], bottom_data + bottom_offset_ * group_index, // input data; descriptor + data ptr
+			  backward_filter_desc_, deriv_kernel_data + kernel_channel_offset + this->weight_offset_ * group_index, // filter data; descriptor + data ptr
+			  conv_descs_[sample_index], // convolution descriptor
+			  bwd_filter_algo_[sample_index], // algorithm selection
+			  workspace[group_index], workspace_bwd_filter_sizes_[sample_index], // pre-allocated workspace
+			  cudnn::dataType<Dtype>::zero, // scale factor for output
+			  backward_intermed_desc_[sample_index], intermediate_buff + top_offset_ * group_index)); // output
+
+  caffe_gpu_set(I*F*G, (Dtype)0, intermediate_sum_buff);
+
+  // 2. multiply [I x G*F x H x W] outputs with [I x F x H x W] back-propagated error
+  // 3. sum [I x G*F x H x W] into [ 1 x G*F x 1 x 1] gradients and copy to [1 x S x G x F]
+#ifdef DOT_PRODUCT_AS_CUB_SUM_AND_ITERATOR
+  // when DOT_PRODUCT_AS_CUB_SUM_AND_ITERATOR is defined then use implementation of dot product with
+  // CUB library using segmented SUM and wrapper around input iterators to perform multiplication and rearanging of top data
+  // 2+3
+  caffe_gpu_dot_batched_mapped(top_count*G, top_diff, top_remapping_index,  intermediate_buff, intermediate_sum_buff, I * F*G, intermediate_sum_index);
+#else
+  // we can do multiplcation and sum seperately - but for higher number of features it will be slightly slower than using caffe_gpu_dot_batched_mapped
+  // 2.
+  caffe_gpu_mul_split(top_count * G, intermediate_buff, top_diff, intermediate_buff, top_count, top_count/I, G*top_count/I);
+  // 3.
+  caffe_gpu_sum(top_count*G, intermediate_buff, intermediate_sum_buff, I * F*G, intermediate_sum_index);
+#endif
+  caffe_gpu_sum_elementwise(I * F*G, intermediate_sum_buff, param_buffer_diff + param_channel_offset, F*G);
+
+#else
 
   for (int gg = 0; gg < G; ++gg) {
 	  const int kernel_channel_offset = deriv_kernel->offset(subfeature_index, gg);
@@ -95,58 +133,24 @@ void CuDNNGaussianConvLayer<Dtype>::compute_parameter_deriv(const int sample_ind
 				  cudnn::dataType<Dtype>::zero, // scale factor for output
 				  backward_intermed_desc_[sample_index], intermediate_buff + top_offset_ * group_index)); // output
 
-//    bottom[0]->cpu_data(); top[0]->cpu_data(); top[0]->cpu_diff(); this->deriv_weight_buffer_->cpu_data(); this->tmp_buffer_.cpu_data();
-//    this->tmp_buffer_.mutable_gpu_data();
-
-	  // 2. multiply [I x F x H x W] outputs with [I x F  x H x W] back-propagated error
-	  //caffe_gpu_mul(top_count, top_diff, intermediate_buff, intermediate_buff); // we can use caffe_gpu_dot_batched instead to perform caffe_gpu_mul and caffe_gpu_sum at the same time !!
-
-
-//    bottom[0]->cpu_data(); top[0]->cpu_data(); top[0]->cpu_data(); this->deriv_weight_buffer_->cpu_data(); this->tmp_buffer_.cpu_data();
-
-	  // 3. sum [I x F x H x W] into [ 1 x F x 1 x 1] gradients and copy to [1 x S x G x F]
 	  caffe_gpu_set(I*F, (Dtype)0, intermediate_sum_buff);
 
-	  //caffe_gpu_sum(top_count, intermediate_buff, intermediate_sum_buff, I * F, intermediate_sum_index); // we can use caffe_gpu_dot_batched to perform caffe_gpu_mul and caffe_gpu_sum at the same time !!
+	  // 2. multiply [I x F x H x W] outputs with [I x F  x H x W] back-propagated error
+	  // 3. sum [I x F x H x W] into [ 1 x F x 1 x 1] gradients and copy to [1 x S x G x F]
+#ifdef DOT_PRODUCT_AS_CUB_SUM_AND_ITERATOR
+	  // 2+3
 	  caffe_gpu_dot_batched(top_count, intermediate_buff, top_diff, intermediate_sum_buff, I * F, intermediate_sum_index);
+#else
+	  // 2.
+	  caffe_gpu_mul(top_count, top_diff, intermediate_buff, intermediate_buff);
+	  // 3.
+	  caffe_gpu_sum(top_count, intermediate_buff, intermediate_sum_buff, I * F, intermediate_sum_index);
+#endif
 	  caffe_gpu_sum_elementwise(I * F, intermediate_sum_buff, param_buffer_diff + param_channel_offset, F);
 
-//    bottom[0]->cpu_data(); top[0]->cpu_data(); top[0]->cpu_data(); this->deriv_weight_buffer_->cpu_data(); this->tmp_buffer_.cpu_data(); this->tmp_blob_.cpu_data(); this->param_buffer_w_->cpu_diff();
-
   }
-/*
-  const int I = this->num_;
-  const int S = this->conv_in_channels_;
-  const int F = this->conv_out_channels_;
-  const int G = this->NUM_GAUSS;
 
-
-  const int kernel_channel_offset = deriv_kernel->offset(subfeature_index, 0);
-  const int param_channel_offset = param_buffer->offset(0, subfeature_index, 0);
-
-  // 1. convolve [I x 1 x H x W] sub-feature inputs with [1 x G*F x K_h x K_w] deriv kernels to get [I x G*F x H x W] outputs
-  CUDNN_CHECK(cudnnConvolutionForward(handle_[group_index], // handle
-			  cudnn::dataType<Dtype>::one, // scale factor for input
-			  backward_bottom_desc_[sample_index], bottom_data + bottom_offset_ * group_index, // input data; descriptor + data ptr
-			  backward_filter_desc_, deriv_kernel_data + kernel_channel_offset + this->weight_offset_ * group_index, // filter data; descriptor + data ptr
-			  conv_descs_[sample_index], // convolution descriptor
-			  bwd_filter_algo_[sample_index], // algorithm selection
-			  workspace[group_index], workspace_bwd_filter_sizes_[sample_index], // pre-allocated workspace
-			  cudnn::dataType<Dtype>::zero, // scale factor for output
-			  backward_intermed_desc_[sample_index], intermediate_buff + top_offset_ * group_index)); // output
-
-  // 2. multiply [I x F x H x W] outputs with [I x F  x H x W] back-propagated error
-  caffe_gpu_mul_batched(top_count * G, top_diff, intermediate_buff, intermediate_buff, top_count);
-  //caffe_gpu_mul_batched(top_count * G, intermediate_buff, intermediate_buff, intermediate_buff);
-
-
-  // 3. sum [I x G*F x H x W] into [ 1 x G*F x 1 x 1] gradients and copy to [1 x S x G x F]
-  caffe_gpu_set(I*F*G, (Dtype)0, intermediate_sum_buff);
-
-  caffe_gpu_sum(top_count, intermediate_buff, intermediate_sum_buff, I * F*G, intermediate_sum_index);
-  //caffe_gpu_dot_batched(top_count, intermediate_buff, intermediate_buff, intermediate_sum_buff, I * F*G, intermediate_sum_index);
-  caffe_gpu_sum_elementwise(I * F*G, intermediate_sum_buff, param_buffer_diff + param_channel_offset, F*G);
-  */
+#endif
 }
 
 
@@ -232,27 +236,29 @@ void CuDNNGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top
     		  // do compute_parameter_deriv for d_w, d_mu1, d_mu2, d_sigma
     		  int bottom_channel_offset = bottom[i]->offset(0,s);
 
+    		  bottom[0]->cpu_data(); top[0]->cpu_data(); top[0]->cpu_diff();
+
     		  this->compute_parameter_deriv(i, g, s, bottom_data + bottom_channel_offset, top_diff, top_count,
     				  	  	  	  	  	  	this->deriv_weight_buffer_.get(), deriv_weight_kernel,
 											this->param_buffer_w_.get(), param_w_diff,
-											intermediate_buff, intermediate_sum_buff, this->tmp_index_gpu);
+											intermediate_buff, intermediate_sum_buff, this->tmp_index_gpu, this->tmp_buffer_1_gpu);
 
     		  if (do_mean_optmization) {
     			  this->compute_parameter_deriv(i, g, s, bottom_data + bottom_channel_offset, top_diff, top_count,
     					  	  	  	  	  	  	this->deriv_mu1_buffer_.get(), deriv_mu1_kernel,
     		  									this->param_buffer_mu1_.get(), param_mu1_diff,
-    		  									intermediate_buff, intermediate_sum_buff, this->tmp_index_gpu);
+    		  									intermediate_buff, intermediate_sum_buff, this->tmp_index_gpu, this->tmp_buffer_1_gpu);
     			  this->compute_parameter_deriv(i, g, s, bottom_data + bottom_channel_offset, top_diff, top_count,
 												this->deriv_mu2_buffer_.get(), deriv_mu2_kernel,
 												this->param_buffer_mu2_.get(), param_mu2_diff,
-												intermediate_buff, intermediate_sum_buff, this->tmp_index_gpu);
+												intermediate_buff, intermediate_sum_buff, this->tmp_index_gpu, this->tmp_buffer_1_gpu);
     		  }
 
     		  if (do_sigma_optmization) {
 				  this->compute_parameter_deriv(i, g, s, bottom_data + bottom_channel_offset, top_diff, top_count,
 												this->deriv_sigma_buffer_.get(), deriv_sigma_kernel,
 												this->param_buffer_sigma_.get(), param_sigma_diff,
-												intermediate_buff, intermediate_sum_buff, this->tmp_index_gpu);
+												intermediate_buff, intermediate_sum_buff, this->tmp_index_gpu, this->tmp_buffer_1_gpu);
 			  }
     		  //cudaDeviceSynchronize();
 

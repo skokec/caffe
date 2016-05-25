@@ -47,6 +47,9 @@ void caffe_gpu_gemm_batched<double>(const CBLAS_TRANSPOSE TransA,
 
 #include <stdio.h>
 
+// N .. size of A
+// M .. size of B
+// assumed N = k*M where k > 1; B is replicated k-times and Y is element-wise multiplication of A and replicated B
 template <typename Dtype>
 __global__ void mul_kernel_batched(const int n, const Dtype* a,
     const Dtype* b, Dtype* y, const int m) {
@@ -56,6 +59,27 @@ __global__ void mul_kernel_batched(const int n, const Dtype* a,
 	  Dtype b_at_index = b[index];
 	  for (unsigned int batch_offset = 0; batch_offset < n; batch_offset+=m)
 		y[index + batch_offset] = a[index + batch_offset] * b_at_index;
+  }
+ }
+}
+
+template <typename Dtype>
+__global__ void mul_kernel_split(const int n, const Dtype* a,
+    const Dtype* b, Dtype* y, const int m, const int k, const int l) {
+	unsigned int batch_offset = 0;
+ {
+   CUDA_KERNEL_LOOP(index, m) {
+
+	  Dtype b_at_index = b[index];
+
+	  int split_index = index / k;
+	  int bb =  index - split_index * k;
+	  int split_start_offset = l * split_index + bb;
+	  int split_end_offset = l * (split_index+1) + bb;
+
+	  for (unsigned int batch_offset = split_start_offset; batch_offset < split_end_offset; batch_offset+=k)
+		y[batch_offset] = a[batch_offset] * b_at_index;
+		;
   }
  }
 }
@@ -129,6 +153,21 @@ void caffe_gpu_mul_batched<double>(const int N, const double* a,
 	  caffe_gpu_mul<double>(N, a, b, y);
   else
 	  mul_kernel_batched<double><<<CAFFE_GET_BLOCKS(M), CAFFE_CUDA_NUM_THREADS>>>(N, a, b, y, M);
+}
+
+
+template <>
+void caffe_gpu_mul_split<float>(const int N, const float* a,
+    const float* b, float* y, const int M, const int K, const int L) {
+  // NOLINT_NEXT_LINE(whitespace/operators)
+  mul_kernel_split<float><<<CAFFE_GET_BLOCKS(M), CAFFE_CUDA_NUM_THREADS>>>(N, a, b, y, M, K, L);
+}
+
+template <>
+void caffe_gpu_mul_split<double>(const int N, const double* a,
+  const double* b, double* y, const int M, const int K, const int L) {
+  // NOLINT_NEXT_LINE(whitespace/operators)
+  mul_kernel_split<double><<<CAFFE_GET_BLOCKS(M), CAFFE_CUDA_NUM_THREADS>>>(N, a, b, y, M, K, L);
 }
 
 
@@ -266,12 +305,35 @@ void caffe_gpu_dot_batched(const int n, const Dtype* a, const Dtype* b, Dtype* y
 	size_t temp_storage_bytes = 0;
 	void* temp_storage_d = (void*)1;
 
-	custom_cub::BinaryTransformInputIterator<Dtype, custom_cub::Mul, const Dtype*> input_data(a,b,custom_cub::Mul());
+	custom_cub::BinaryTransformInputIterator<Dtype, custom_cub::Mul, const Dtype*, const Dtype*> input_data(a,b,custom_cub::Mul());
 	CUDA_CHECK(custom_cub::segmentedSumWithAdd(temp_storage_d, temp_storage_bytes, input_data, y,  num_segments, offsets_gpu, offsets_gpu + 1, streamId, false));
 }
 
 template void caffe_gpu_dot_batched<float>(const int n, const float* a, const float* b, float* y, const int num_segments, int* offsets_gpu, cudaStream_t streamId);
 template void caffe_gpu_dot_batched<double>(const int n, const double* a, const double* b, double* y, const int num_segments, int* offsets_gpu, cudaStream_t streamId);
+
+
+
+template <typename Dtype>
+void caffe_gpu_dot_batched_mapped(const int n, const Dtype* a, const int* mapping, const Dtype* b, Dtype* y, const int num_segments, int* offsets_gpu, cudaStream_t streamId) {
+
+	// DeviceSegmentedReduce in version 1.5.1 always returns temp_storage_bytes=1 and never actually uses allocated storage
+	// so we can just use non-zero value for temp storage and avoid getting temp_storage_bytes size
+	size_t temp_storage_bytes = 0;
+	void* temp_storage_d = (void*)1;
+
+	// remap A based on mapping array indeces
+	custom_cub::InputMappingIterator<Dtype, const Dtype*, const int*> a_mapped(a, mapping);
+	// combine A and B with multiplicator (combined with sum this will effectevly perform dot product)
+	custom_cub::BinaryTransformInputIterator<Dtype, custom_cub::Mul, custom_cub::InputMappingIterator<Dtype, const Dtype*, const int* >, const Dtype*> input_data(a_mapped,b,custom_cub::Mul());
+	CUDA_CHECK(custom_cub::segmentedSumWithAdd(temp_storage_d, temp_storage_bytes, input_data, y,  num_segments, offsets_gpu, offsets_gpu + 1, streamId, false));
+
+}
+
+template void caffe_gpu_dot_batched_mapped<float>(const int n, const float* a, const int* mapping, const float* b, float* y, const int num_segments, int* offsets_gpu, cudaStream_t streamId);
+template void caffe_gpu_dot_batched_mapped<double>(const int n, const double* a, const int* mapping, const double* b, double* y, const int num_segments, int* offsets_gpu, cudaStream_t streamId);
+
+
 
 // TODO: sum_elementwise should be implemented more efficently!!
 template <typename Dtype>

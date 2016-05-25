@@ -485,9 +485,9 @@ TYPED_TEST(GaussConvolutionLayerTest, TestCuDNNConvolution) {
   ConvolutionParameter* convolution_param =
 	  layer_param.mutable_convolution_param();
 
-  convolution_param->add_kernel_size(7);
+  convolution_param->add_kernel_size(5);
   convolution_param->add_stride(1);
-  convolution_param->add_pad(3);
+  convolution_param->add_pad(2);
 
   convolution_param->set_number_gauss(2);
 

@@ -191,7 +191,7 @@ class CuDNNGaussianConvLayer : public GaussianConvLayer<Dtype> {
 							   const Dtype* top_diff, const int top_count,
 							   const Blob<Dtype>* deriv_kernel, const Dtype* deriv_kernel_data,
 							   Blob<Dtype>* param_buffer, Dtype* param_buffer_diff,
-							   Dtype* intermediate_buff, Dtype* intermediate_sum_buff, int* intermediate_sum_index); 
+							   Dtype* intermediate_buff, Dtype* intermediate_sum_buff, int* intermediate_sum_index, int * top_remapping_index); 
   
 
   bool handles_setup_;
@@ -222,6 +222,10 @@ class CuDNNGaussianConvLayer : public GaussianConvLayer<Dtype> {
   void **workspace;  // aliases into workspaceData
   
   int num_guass_per_compute;
+  
+  // buffer for indexes in top when doing backpropagation in compute_parameter_deriv
+  Blob<int> tmp_buffer_1;
+  int* tmp_buffer_1_gpu;
 };
 #endif
 
