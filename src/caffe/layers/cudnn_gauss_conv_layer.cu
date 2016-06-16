@@ -58,12 +58,12 @@ void CuDNNGaussianConvLayer<Dtype>::Forward_gpu(
 
   cudaDeviceSynchronize();
   clock_t end_t = clock();
-  LOG(INFO) << "size of input " << bottom[0]->count() << " = " << bottom[0]->shape(0) << " x " << bottom[0]->shape(1) << " x " << bottom[0]->shape(2) << " x " << bottom[0]->shape(3);
-  LOG(INFO) << "size of filters " << this->blobs_[0]->count() << " = " << this->blobs_[0]->shape(0) << " x " << this->blobs_[0]->shape(1) << " x " << this->blobs_[0]->shape(2) << " x " << this->blobs_[0]->shape(3);
-  LOG(INFO) << "number of tops: " << top.size() << " number of groups: " << top.size();
-  LOG(INFO) << "forward pass done in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC);
+//  LOG(INFO) << "size of input " << bottom[0]->count() << " = " << bottom[0]->shape(0) << " x " << bottom[0]->shape(1) << " x " << bottom[0]->shape(2) << " x " << bottom[0]->shape(3);
+//  LOG(INFO) << "size of filters " << this->blobs_[0]->count() << " = " << this->blobs_[0]->shape(0) << " x " << this->blobs_[0]->shape(1) << " x " << this->blobs_[0]->shape(2) << " x " << this->blobs_[0]->shape(3);
+//  LOG(INFO) << "number of tops: " << top.size() << " number of groups: " << top.size();
+//  LOG(INFO) << "forward pass done in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC);
 }
-
+/*
 template <typename Dtype>
 void CuDNNGaussianConvLayer<Dtype>::compute_parameter_deriv(const int sample_index,
 															const int group_index,
@@ -152,7 +152,40 @@ void CuDNNGaussianConvLayer<Dtype>::compute_parameter_deriv(const int sample_ind
 
 #endif
 }
+*/
+template <typename Dtype>
+void CuDNNGaussianConvLayer<Dtype>::compute_parameter_deriv(const int sample_index,
+															const int group_index,
+															const int subfeature_index,
+															const Dtype* bottom_data,
+															const Dtype* top_diff, const int top_count,
+															const Blob<Dtype>* deriv_kernel, const Dtype* deriv_kernel_data,
+															Blob<Dtype>* param_buffer, Dtype* param_buffer_diff,
+															Dtype* intermediate_buff, Dtype* intermediate_sum_buff, int* intermediate_sum_index, int * top_remapping_index, int stream_offset) {
+  const int I = this->num_;
+  const int S = this->conv_in_channels_;
+  const int F = this->conv_out_channels_;
+  const int G = this->NUM_GAUSS;
 
+  const int kernel_channel_offset = deriv_kernel->offset(subfeature_index, 0);
+  const int param_channel_offset = param_buffer->offset(0, subfeature_index, 0);
+
+
+
+  //for (int g = 0; g < G; ++g) {
+  { int g = 0;
+	  //for (int f = 0; f < F; ++f)
+	  { int f = 0;
+		  filterActs_YxX_color(bottom_data, top_diff, deriv_kernel->gpu_data(), param_buffer_diff,
+				  	  	  	  	  I, S, F, G, subfeature_index, f, g,
+								  this->conv_in_width_, this->conv_in_height_,
+								  this->width_out_, this->height_out_,
+								  this->kernel_w_, this->kernel_h_,
+								  this->pad_w_, 0, paralel_streams[stream_offset + g]);
+								  //this->pad_w_, 0);
+	  }
+  }
+}
 
 template <typename Dtype>
 void CuDNNGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
@@ -232,33 +265,36 @@ void CuDNNGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top
     	  // use cudnnConvolutionForward to calculate gradient of weight, mean and sigma
 
     	  // for each sub-feature s (and for each gauss g - for now)
-    	  for (int s = 0; s < S; ++s) {
-    		  // do compute_parameter_deriv for d_w, d_mu1, d_mu2, d_sigma
-    		  int bottom_channel_offset = bottom[i]->offset(0,s);
+    	  //for (int s = 0; s < S; ++s) {
+    	  { int s = 0;
 
-    		  bottom[0]->cpu_data(); top[0]->cpu_data(); top[0]->cpu_diff();
+    		  // do compute_parameter_deriv for d_w, d_mu1, d_mu2, d_sigma
+    		  //int bottom_channel_offset = bottom[i]->offset(0,s);
+    		  int bottom_channel_offset = 0;
+
+//    		  bottom[0]->cpu_data(); top[0]->cpu_data(); top[0]->cpu_diff();
 
     		  this->compute_parameter_deriv(i, g, s, bottom_data + bottom_channel_offset, top_diff, top_count,
     				  	  	  	  	  	  	this->deriv_weight_buffer_.get(), deriv_weight_kernel,
 											this->param_buffer_w_.get(), param_w_diff,
-											intermediate_buff, intermediate_sum_buff, this->tmp_index_gpu, this->tmp_buffer_1_gpu);
+											intermediate_buff, intermediate_sum_buff, this->tmp_index_gpu, this->tmp_buffer_1_gpu, 0);
 
     		  if (do_mean_optmization) {
     			  this->compute_parameter_deriv(i, g, s, bottom_data + bottom_channel_offset, top_diff, top_count,
     					  	  	  	  	  	  	this->deriv_mu1_buffer_.get(), deriv_mu1_kernel,
     		  									this->param_buffer_mu1_.get(), param_mu1_diff,
-    		  									intermediate_buff, intermediate_sum_buff, this->tmp_index_gpu, this->tmp_buffer_1_gpu);
+    		  									intermediate_buff, intermediate_sum_buff, this->tmp_index_gpu, this->tmp_buffer_1_gpu, 4);
     			  this->compute_parameter_deriv(i, g, s, bottom_data + bottom_channel_offset, top_diff, top_count,
 												this->deriv_mu2_buffer_.get(), deriv_mu2_kernel,
 												this->param_buffer_mu2_.get(), param_mu2_diff,
-												intermediate_buff, intermediate_sum_buff, this->tmp_index_gpu, this->tmp_buffer_1_gpu);
+												intermediate_buff, intermediate_sum_buff, this->tmp_index_gpu, this->tmp_buffer_1_gpu, 8);
     		  }
 
     		  if (do_sigma_optmization) {
 				  this->compute_parameter_deriv(i, g, s, bottom_data + bottom_channel_offset, top_diff, top_count,
 												this->deriv_sigma_buffer_.get(), deriv_sigma_kernel,
 												this->param_buffer_sigma_.get(), param_sigma_diff,
-												intermediate_buff, intermediate_sum_buff, this->tmp_index_gpu, this->tmp_buffer_1_gpu);
+												intermediate_buff, intermediate_sum_buff, this->tmp_index_gpu, this->tmp_buffer_1_gpu, 12);
 			  }
     		  //cudaDeviceSynchronize();
 
@@ -289,11 +325,11 @@ void CuDNNGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top
     // NOLINT_NEXT_LINE(whitespace/operators)
     sync_gauss_conv_groups<<<1, 1>>>();
     clock_t end_t = clock();
-    LOG(INFO) << "size of input " << bottom[0]->count() << " = " << bottom[0]->shape(0) << " x " << bottom[0]->shape(1) << " x " << bottom[0]->shape(2) << " x " << bottom[0]->shape(3);
-    LOG(INFO) << "size of error " << top[0]->count() << " = " << top[0]->shape(0) << " x " << top[0]->shape(1) << " x " << top[0]->shape(2) << " x " << top[0]->shape(3);
+//    LOG(INFO) << "size of input " << bottom[0]->count() << " = " << bottom[0]->shape(0) << " x " << bottom[0]->shape(1) << " x " << bottom[0]->shape(2) << " x " << bottom[0]->shape(3);
+//    LOG(INFO) << "size of error " << top[0]->count() << " = " << top[0]->shape(0) << " x " << top[0]->shape(1) << " x " << top[0]->shape(2) << " x " << top[0]->shape(3);
 
-    LOG(INFO) << "number of tops: " << top.size() << " number of groups: " << top.size();
-    LOG(INFO) << "backward pass done in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC);
+//    LOG(INFO) << "number of tops: " << top.size() << " number of groups: " << top.size();
+//    LOG(INFO) << "backward pass done in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC);
   }
 }
 

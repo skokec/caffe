@@ -51,10 +51,10 @@ void CuDNNConvolutionLayer<Dtype>::Forward_gpu(
 
   cudaDeviceSynchronize();
   clock_t end_t = clock();
-  LOG(INFO) << "size of input " << bottom[0]->count() << " = " << bottom[0]->shape(0) << " x " << bottom[0]->shape(1) << " x " << bottom[0]->shape(2) << " x " << bottom[0]->shape(3);
-  LOG(INFO) << "size of filters " << this->blobs_[0]->count() << " = " << this->blobs_[0]->shape(0) << " x " << this->blobs_[0]->shape(1) << " x " << this->blobs_[0]->shape(2) << " x " << this->blobs_[0]->shape(3);
-  LOG(INFO) << "number of tops: " << top.size() << " number of groups: " << top.size();
-  LOG(INFO) << "forward pass done in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC);
+//  LOG(INFO) << "size of input " << bottom[0]->count() << " = " << bottom[0]->shape(0) << " x " << bottom[0]->shape(1) << " x " << bottom[0]->shape(2) << " x " << bottom[0]->shape(3);
+//  LOG(INFO) << "size of filters " << this->blobs_[0]->count() << " = " << this->blobs_[0]->shape(0) << " x " << this->blobs_[0]->shape(1) << " x " << this->blobs_[0]->shape(2) << " x " << this->blobs_[0]->shape(3);
+//  LOG(INFO) << "number of tops: " << top.size() << " number of groups: " << top.size();
+//  LOG(INFO) << "forward pass done in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC);
 }
 
 template <typename Dtype>
@@ -126,11 +126,11 @@ void CuDNNConvolutionLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
     // NOLINT_NEXT_LINE(whitespace/operators)
     sync_conv_groups<<<1, 1>>>();
     clock_t end_t = clock();
-    LOG(INFO) << "size of input " << bottom[0]->count() << " = " << bottom[0]->shape(0) << " x " << bottom[0]->shape(1) << " x " << bottom[0]->shape(2) << " x " << bottom[0]->shape(3);
-    LOG(INFO) << "size of error " << top[0]->count() << " = " << top[0]->shape(0) << " x " << top[0]->shape(1) << " x " << top[0]->shape(2) << " x " << top[0]->shape(3);
+//    LOG(INFO) << "size of input " << bottom[0]->count() << " = " << bottom[0]->shape(0) << " x " << bottom[0]->shape(1) << " x " << bottom[0]->shape(2) << " x " << bottom[0]->shape(3);
+//    LOG(INFO) << "size of error " << top[0]->count() << " = " << top[0]->shape(0) << " x " << top[0]->shape(1) << " x " << top[0]->shape(2) << " x " << top[0]->shape(3);
 
-    LOG(INFO) << "number of tops: " << top.size() << " number of groups: " << top.size();
-    LOG(INFO) << "backward pass done in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC);
+//    LOG(INFO) << "number of tops: " << top.size() << " number of groups: " << top.size();
+//    LOG(INFO) << "backward pass done in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC);
   }
 }
 

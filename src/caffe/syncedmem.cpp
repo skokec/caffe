@@ -25,7 +25,7 @@ SyncedMemory::~SyncedMemory() {
 inline void SyncedMemory::to_cpu() {
   switch (head_) {
   case UNINITIALIZED:
-	LOG(INFO) << "initializing cpu data";
+//	LOG(INFO) << "initializing cpu data";
     CaffeMallocHost(&cpu_ptr_, size_, &cpu_malloc_use_cuda_);
     caffe_memset(size_, 0, cpu_ptr_);
     head_ = HEAD_AT_CPU;
@@ -33,7 +33,7 @@ inline void SyncedMemory::to_cpu() {
     break;
   case HEAD_AT_GPU:
 #ifndef CPU_ONLY
-	LOG(INFO) << "copying to cpu";
+//	LOG(INFO) << "copying to cpu";
     if (cpu_ptr_ == NULL) {
       CaffeMallocHost(&cpu_ptr_, size_, &cpu_malloc_use_cuda_);
       own_cpu_data_ = true;
@@ -54,7 +54,7 @@ inline void SyncedMemory::to_gpu() {
 #ifndef CPU_ONLY
   switch (head_) {
   case UNINITIALIZED:
-	LOG(INFO) << "initializing gpu data";
+//	LOG(INFO) << "initializing gpu data";
     CUDA_CHECK(cudaGetDevice(&gpu_device_));
     CUDA_CHECK(cudaMalloc(&gpu_ptr_, size_));
     caffe_gpu_memset(size_, 0, gpu_ptr_);
@@ -62,7 +62,7 @@ inline void SyncedMemory::to_gpu() {
     own_gpu_data_ = true;
     break;
   case HEAD_AT_CPU:
-	LOG(INFO) << "copying to gpu";
+//	LOG(INFO) << "copying to gpu";
     if (gpu_ptr_ == NULL) {
       CUDA_CHECK(cudaGetDevice(&gpu_device_));
       CUDA_CHECK(cudaMalloc(&gpu_ptr_, size_));

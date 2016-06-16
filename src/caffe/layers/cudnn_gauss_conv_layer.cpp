@@ -102,6 +102,11 @@ void CuDNNGaussianConvLayer<Dtype>::LayerSetUp(
   }
 
   handles_setup_ = true;
+
+  paralel_streams = new cudaStream_t[this->NUM_GAUSS*4];
+  for (int g = 0; g < this->NUM_GAUSS*4; ++g) {
+	  cudaStreamCreate(&paralel_streams[g]);
+  }
 }
 
 template <typename Dtype>

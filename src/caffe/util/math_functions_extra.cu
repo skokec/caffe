@@ -360,4 +360,6 @@ void caffe_gpu_sum_elementwise<double>(const int N, const double* x, double* y, 
 }
 
 
+
+
 }  // namespace caffe

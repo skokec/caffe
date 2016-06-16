@@ -372,7 +372,7 @@ void GaussianConvLayer<Dtype>::precompute_guassian_weights_gpu(bool is_backward_
 
 	clock_t end_t = clock();
 
-	LOG(INFO) << "precompute_guassian_weights (GPU) done in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC);
+//	LOG(INFO) << "precompute_guassian_weights (GPU) done in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC);
 
 	/*{
 		weight = this->weight_buffer_->mutable_gpu_data();
