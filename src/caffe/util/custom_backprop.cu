@@ -22,11 +22,13 @@ __global__ void filterActs_YxX_color_kernel(const float* images, const float* er
 								   const int kernel_width, const int kernel_height,
 								   const int padding, const int stride) {
 
+// TODO: using hardcoded warp size may not be portable (should use warpSize) but allows compiler optimization and avoids using dynamic memory allocation (for output_sum)
+#define WARP_SIZE 32
+
 //#define NUM_DERIVATIVE_FILTERS 4
 
 //#define BATCH_PIXELS_SIZE 8 // good value (<70ms?)
 #define BATCH_PIXELS_SIZE 4
-
 
 //#define BATCH_FILTERS_SIZE 4 	// good value (<70ms?)
 #define BATCH_FILTERS_SIZE 4	// (goes over G)
@@ -34,6 +36,8 @@ __global__ void filterActs_YxX_color_kernel(const float* images, const float* er
 
 #define NUM_FILTERS_PER_THREAD (BATCH_FILTERS_STRUCT*2)
 #define NUM_GAUSS_PER_THREAD BATCH_FILTERS_SIZE
+
+#define NUM_WAPRS ((Bx*By) / WARP_SIZE)
 
 #ifndef CUBIN_EMBEDDING
 
@@ -79,8 +83,10 @@ __global__ void filterActs_YxX_color_kernel(const float* images, const float* er
 	float* image_sh = reinterpret_cast<float*>(image_sh_align);
 
 	__shared__ float4 kernel_sh[Ky][Kx][NUM_FILTERS_PER_THREAD / BATCH_FILTERS_STRUCT][NUM_GAUSS_PER_THREAD];
-	__shared__ float4 output_sum[NUM_GAUSS_PER_THREAD][NUM_FILTERS_PER_THREAD / BATCH_FILTERS_STRUCT];
+	__shared__ float4 output_sum[NUM_WAPRS][NUM_GAUSS_PER_THREAD][NUM_FILTERS_PER_THREAD / BATCH_FILTERS_STRUCT];
 	__shared__ unsigned int image_sh_kernel_offsets[Ky*Kx+2];
+
+
 
 	int offset_x = BATCH_PIXELS_SIZE * (blockIdx.x * blockDim.x + threadIdx.x);
 	int offset_y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -90,21 +96,29 @@ __global__ void filterActs_YxX_color_kernel(const float* images, const float* er
 	// let first thread load all kernel values
 	if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0) {
 
+
 		for (unsigned int j = 0; j < Ky; ++j) {
 			for (unsigned int i = 0; i < Kx; ++i) {
 				image_sh_kernel_offsets[j*Kx + i] = i + j*(Bx*BATCH_PIXELS_SIZE + Kx);
 			}
 		}
-		for (unsigned int g = 0; g < NUM_GAUSS_PER_THREAD; ++g) {
-			for (unsigned int f = 0; f < NUM_FILTERS_PER_THREAD / BATCH_FILTERS_STRUCT; ++f) {
-				output_sum[g][f].x = 0; output_sum[g][f].y = 0; output_sum[g][f].z = 0; output_sum[g][f].w = 0;
+
+		const int tid = threadIdx.x +
+		          threadIdx.y * blockDim.x +
+		          threadIdx.z * blockDim.x * blockDim.y +
+		          blockIdx.x * blockDim.x * blockDim.y * blockDim.z;
+
+		for (unsigned int w = 0; w < NUM_WAPRS; ++w) {
+			for (unsigned int g = 0; g < NUM_GAUSS_PER_THREAD; ++g) {
+				for (unsigned int f = 0; f < NUM_FILTERS_PER_THREAD / BATCH_FILTERS_STRUCT; ++f) {
+					output_sum[w][g][f].x = 0; output_sum[w][g][f].y = 0; output_sum[w][g][f].z = 0; output_sum[w][g][f].w = 0;
+				}
 			}
 		}
 	}
 	// Specialize WarpReduce for type int
 	typedef cub::WarpReduce<float> WarpReduce;
 
-#define WARP_SIZE 32
 	// Allocate WarpReduce shared memory for one warp
 	__shared__ typename WarpReduce::TempStorage warp_reduce_storage[Bx*By / WARP_SIZE];
 
@@ -275,7 +289,6 @@ __global__ void filterActs_YxX_color_kernel(const float* images, const float* er
 									intermediate_sum[jj][ii].w +=  img_tmp[processing_k][jj] * loaded_kernel_vals[processing_k][ii].w;
 								}
 							}
-
 						}
 					}
 
@@ -329,21 +342,26 @@ __global__ void filterActs_YxX_color_kernel(const float* images, const float* er
 						filter_sums[ii].z = warp_reduce.Sum(filter_sums[ii].z);
 						filter_sums[ii].w = warp_reduce.Sum(filter_sums[ii].w);
 					}
+					const int tid = threadIdx.x +
+					          threadIdx.y * blockDim.x +
+					          threadIdx.z * blockDim.x * blockDim.y +
+					          blockIdx.x * blockDim.x * blockDim.y * blockDim.z;
 
-					if (threadIdx.x * threadIdx.y * threadIdx.z  % warpSize == 0) {
+					if (tid  % WARP_SIZE == 0) {
+						const int warp_id = tid/ WARP_SIZE;
+
 						#pragma unroll
 						for (int i = 0; i < BATCH_FILTERS_SIZE; ++i) {
 							// note, NUM_GAUSS_PER_THREAD == BATCH_FILTERS_SIZE
-							/*atomicAdd(&output_sum[i][f].x, (filter_sums[i].x));
-							atomicAdd(&output_sum[i][f].y, (filter_sums[i].y));
-							atomicAdd(&output_sum[i][f].z, (filter_sums[i].z));
-							atomicAdd(&output_sum[i][f].w, (filter_sums[i].w));*/
-							float4 tmp = output_sum[i][f];
+							float4 tmp = output_sum[warp_id][i][f];
+
 							tmp.x += filter_sums[i].x;
 							tmp.y += filter_sums[i].y;
 							tmp.z += filter_sums[i].z;
+
 							tmp.w += filter_sums[i].w;
-							output_sum[i][f] = tmp;
+
+							output_sum[warp_id][i][f] = tmp;
 						}
 					}
 
@@ -359,15 +377,35 @@ __global__ void filterActs_YxX_color_kernel(const float* images, const float* er
 	}
 
 	if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0) {
-		// NOTE: must be sync from before !!
+		// NOTE: must be sync from previous loop !!
 
-		// feat_i MUST be multiple of 4 !!!
+		// F and feat_i MUST be a multiple of 4 !!!
 		float4* current_output = reinterpret_cast<float4*>((float*)output + OFFSET(0,subfeat_i,gauss_i,feat_i, 1,S,G,F)); //( (  subfeat_i * G + gauss_i)*F + feat_i )
 
-		// if unrolling it will use F registers (use F_ to prevent unrolling)
+		// let first thread sum over results of all warps for each output i.e., (G,F) pair
+		float4 final_output_sum[NUM_GAUSS_PER_THREAD][NUM_FILTERS_PER_THREAD / BATCH_FILTERS_STRUCT];
+		for (int w = 0; w < NUM_WAPRS; ++w) {
+			for (unsigned int g = 0; g < NUM_GAUSS_PER_THREAD; ++g) {
+				for (unsigned int f = 0; f < NUM_FILTERS_PER_THREAD / BATCH_FILTERS_STRUCT; ++f) {
+					float4 tmp_in = output_sum[w][g][f];
+					float4 tmp_out = final_output_sum[g][f];
+					tmp_out.x += tmp_in.x;
+					tmp_out.y += tmp_in.y;
+					tmp_out.z += tmp_in.z;
+					tmp_out.w += tmp_in.w;
+					final_output_sum[g][f] = tmp_out;
+				}
+			}
+		}
+
+		// finally, store to appropriate output array
 		for (unsigned int g = 0; g < NUM_GAUSS_PER_THREAD; ++g) {
 			for (unsigned int f = 0; f < NUM_FILTERS_PER_THREAD / BATCH_FILTERS_STRUCT; ++f) {
-				current_output[g*F/BATCH_FILTERS_STRUCT + f] = output_sum[g][f];
+
+				atomicAdd(&current_output[g*F/BATCH_FILTERS_STRUCT + f].x, final_output_sum[g][f].x);
+				atomicAdd(&current_output[g*F/BATCH_FILTERS_STRUCT + f].y, final_output_sum[g][f].y);
+				atomicAdd(&current_output[g*F/BATCH_FILTERS_STRUCT + f].z, final_output_sum[g][f].z);
+				atomicAdd(&current_output[g*F/BATCH_FILTERS_STRUCT + f].w, final_output_sum[g][f].w);
 			}
 		}
 	}
