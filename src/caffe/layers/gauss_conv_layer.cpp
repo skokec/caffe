@@ -934,6 +934,16 @@ void GaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
 	// precompute kernels from gaussian parameters for forward and backward pass
 	//this->precompute_guassian_weights(true);
 
+/*
+	Dtype* kernel_cpu = this->deriv_weight_buffer_.get()->mutable_cpu_data();
+
+	//printf("all kernel cpus:\n");
+	for (unsigned int i = 0; i < this->deriv_weight_buffer_.get()->count(); ++i) {
+	  //printf("%f, ",kernel_cpu[i]);
+	  //if (i % 3 == 2) printf("\n");
+	  kernel_cpu[i] = 1;
+	}
+*/
 
 	Blob<Dtype>& gauss_param_buffer_w = *this->param_buffer_w_;
 	Blob<Dtype>& gauss_param_buffer_mu1 = *this->param_buffer_mu1_;

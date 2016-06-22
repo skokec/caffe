@@ -167,11 +167,6 @@ void CuDNNGaussianConvLayer<Dtype>::compute_parameter_deriv(const int sample_ind
   const int F = this->conv_out_channels_;
   const int G = this->NUM_GAUSS;
 
-  const int kernel_channel_offset = deriv_kernel->offset(subfeature_index, 0);
-  const int param_channel_offset = param_buffer->offset(0, subfeature_index, 0);
-
-
-
   //for (int g = 0; g < G; ++g) {
   { int g = 0;
 	  //for (int f = 0; f < F; ++f)
@@ -223,6 +218,9 @@ void CuDNNGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top
     param_mu2_diff = this->param_buffer_mu2_->mutable_gpu_diff();
     param_sigma_diff = this->param_buffer_sigma_->mutable_gpu_diff();
   }
+
+  caffe_gpu_set(this->param_buffer_w_->count(), (Dtype)0, param_w_diff);
+
   Dtype* bias_diff = NULL;
   if (this->bias_term_ && this->param_propagate_down_[1]) {
     bias_diff = this->param_buffer_bias_->mutable_gpu_diff();
@@ -274,11 +272,22 @@ void CuDNNGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top
 
 //    		  bottom[0]->cpu_data(); top[0]->cpu_data(); top[0]->cpu_diff();
 
+/*
+    		  Dtype* kernel_cpu = this->deriv_weight_buffer_.get()->mutable_cpu_data();
+
+			  //printf("all kernel cpus:\n");
+			  for (unsigned int i = 0; i < this->deriv_weight_buffer_.get()->count(); ++i) {
+				  //printf("%f, ",kernel_cpu[i]);
+				  //if (i % 3 == 2) printf("\n");
+				  kernel_cpu[i] = 1;
+			  }
+*/
     		  this->compute_parameter_deriv(i, g, s, bottom_data + bottom_channel_offset, top_diff, top_count,
     				  	  	  	  	  	  	this->deriv_weight_buffer_.get(), deriv_weight_kernel,
 											this->param_buffer_w_.get(), param_w_diff,
 											intermediate_buff, intermediate_sum_buff, this->tmp_index_gpu, this->tmp_buffer_1_gpu, 0);
 
+/*
     		  if (do_mean_optmization) {
     			  this->compute_parameter_deriv(i, g, s, bottom_data + bottom_channel_offset, top_diff, top_count,
     					  	  	  	  	  	  	this->deriv_mu1_buffer_.get(), deriv_mu1_kernel,
@@ -295,7 +304,7 @@ void CuDNNGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top
 												this->deriv_sigma_buffer_.get(), deriv_sigma_kernel,
 												this->param_buffer_sigma_.get(), param_sigma_diff,
 												intermediate_buff, intermediate_sum_buff, this->tmp_index_gpu, this->tmp_buffer_1_gpu, 12);
-			  }
+			  }*/
     		  //cudaDeviceSynchronize();
 
     	  }

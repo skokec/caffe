@@ -214,6 +214,8 @@ class CuDNNGaussianConvLayer : public GaussianConvLayer<Dtype> {
   vector<cudnnTensorDescriptor_t> backward_bottom_desc_, backward_intermed_desc_;
   cudnnFilterDescriptor_t      backward_filter_desc_;
 
+  //vector<cudaTextureObject_t> bottom_data_texture;
+
   size_t *workspace_fwd_sizes_;
   size_t *workspace_bwd_filter_sizes_;
   size_t *workspace_bwd_data_sizes_;

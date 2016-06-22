@@ -115,7 +115,7 @@ void CuDNNGaussianConvLayer<Dtype>::Reshape(
 
   const int first_spatial_axis = this->channel_axis_ + 1;
 
-  if (this->bottom_dim_ == bottom[0]->count(this->channel_axis_)  && this->top_dim_ == top[0]->count(this->channel_axis_) &&
+  if (this->bottom_dim_ == bottom[0]->count(this->channel_axis_)  && top[0]->count() > 0 && this->top_dim_ == top[0]->count(this->channel_axis_) &&
 		  this->num_ == bottom[0]->num() &&
 		  this->height_ == bottom[0]->height() &&
 		  this->width_ == bottom[0]->width() ) {
