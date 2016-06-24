@@ -326,8 +326,7 @@ TYPED_TEST(GaussConvolutionLayerTest, TestKernelPrecompute) {
   for (int gmm_sqrt_norm = 0; gmm_sqrt_norm <= 1; gmm_sqrt_norm++) {
 	convolution_param->set_gmm_square_gauss_normalization((bool)gmm_sqrt_norm);
 
-	shared_ptr<GaussianConvLayer<Dtype> > layer(
-	new GaussianConvLayer<Dtype>(layer_param));
+	shared_ptr<GaussianConvLayer<Dtype> > layer(new GaussianConvLayer<Dtype>(layer_param));
 	layer->SetUp(this->blob_bottom_vec_, this->blob_top_vec_);
 
 	// RUN CPU version
@@ -516,8 +515,8 @@ TYPED_TEST(GaussConvolutionLayerTest, TestCuDNNConvolution) {
   for (int gmm_sqrt_norm = 0; gmm_sqrt_norm < 1; gmm_sqrt_norm++) {
 	  convolution_param->set_gmm_square_gauss_normalization((bool)gmm_sqrt_norm);
 
-	shared_ptr<GaussianConvLayer<Dtype> > layer(new CuDNNGaussianConvLayer<Dtype>(layer_param));
-	shared_ptr<GaussianConvLayer<Dtype> > layer_org(new GaussianConvLayer<Dtype>(layer_param));
+	shared_ptr<BaseGaussianConvLayer<Dtype> > layer(new CuDNNGaussianConvLayer<Dtype>(layer_param));
+	shared_ptr<BaseGaussianConvLayer<Dtype> > layer_org(new GaussianConvLayer<Dtype>(layer_param));
 
 	layer->SetUp(blob_bottom_vec_, blob_top_vec_);
 	layer_org->SetUp(blob_bottom_vec_org_, blob_top_vec_org_);
@@ -687,8 +686,8 @@ TYPED_TEST(GaussConvolutionLayerTest, TestCuDNNConvolutionExtensive) {
   for (int gmm_sqrt_norm = 0; gmm_sqrt_norm < 1; gmm_sqrt_norm++) {
 	  convolution_param->set_gmm_square_gauss_normalization((bool)gmm_sqrt_norm);
 
-	shared_ptr<GaussianConvLayer<Dtype> > layer(new CuDNNGaussianConvLayer<Dtype>(layer_param));
-	shared_ptr<GaussianConvLayer<Dtype> > layer_org(new GaussianConvLayer<Dtype>(layer_param));
+	shared_ptr<BaseGaussianConvLayer<Dtype> > layer(new CuDNNGaussianConvLayer<Dtype>(layer_param));
+	shared_ptr<BaseGaussianConvLayer<Dtype> > layer_org(new GaussianConvLayer<Dtype>(layer_param));
 
 	layer->SetUp(blob_bottom_vec_, blob_top_vec_);
 	layer_org->SetUp(blob_bottom_vec_org_, blob_top_vec_org_);

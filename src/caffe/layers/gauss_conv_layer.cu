@@ -131,7 +131,7 @@ __global__ void mirror_kernel(const int S, const int F, const int n, const Dtype
 }
 
 template <typename Dtype>
-void GaussianConvLayer<Dtype>::precompute_guassian_weights_gpu(bool is_backward_pass) {
+void BaseGaussianConvLayer<Dtype>::precompute_guassian_weights_gpu(bool is_backward_pass) {
 
 	clock_t start_t = clock();
 
@@ -386,8 +386,8 @@ void GaussianConvLayer<Dtype>::precompute_guassian_weights_gpu(bool is_backward_
 	}*/
 }
 
-template void GaussianConvLayer<float>::precompute_guassian_weights_gpu(bool is_backward_pass);
-template void GaussianConvLayer<double>::precompute_guassian_weights_gpu(bool is_backward_pass);
+template void BaseGaussianConvLayer<float>::precompute_guassian_weights_gpu(bool is_backward_pass);
+template void BaseGaussianConvLayer<double>::precompute_guassian_weights_gpu(bool is_backward_pass);
 
 }  // namespace caffe
 #endif

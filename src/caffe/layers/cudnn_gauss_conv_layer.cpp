@@ -18,7 +18,9 @@ namespace caffe {
 template <typename Dtype>
 void CuDNNGaussianConvLayer<Dtype>::LayerSetUp(
     const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top) {
-  GaussianConvLayer<Dtype>::LayerSetUp(bottom, top);
+
+  BaseGaussianConvLayer<Dtype>::LayerSetUp(bottom, top);
+
   // Initialize CUDA streams and cuDNN.
   stream_         = new cudaStream_t[this->group_ * CUDNN_STREAMS_PER_GROUP];
   handle_         = new cudnnHandle_t[this->group_ * CUDNN_STREAMS_PER_GROUP];
@@ -106,10 +108,10 @@ void CuDNNGaussianConvLayer<Dtype>::Reshape(
 	  return;
   }
 
-  GaussianConvLayer<Dtype>::Reshape(bottom, top);
+  BaseGaussianConvLayer<Dtype>::Reshape(bottom, top);
 
   CHECK_EQ(2, this->num_spatial_axes_)
-      << "CuDNNConvolution input must have 2 spatial axes "
+      << "CuDNNGaussianConvLayer input must have 2 spatial axes "
       << "(e.g., height and width). "
       << "Use 'engine: CAFFE' for general ND convolution.";
 
@@ -433,7 +435,6 @@ void CuDNNOldGaussianConvLayer<Dtype>::Reshape(
 	  }
   }
   this->tmp_buffer_1_gpu = this->tmp_buffer_1.mutable_gpu_data();
-
 
   this->tmp_blob_.Reshape(1, 1, this->num_, this->conv_out_channels_ * this->num_guass_per_compute);
 
