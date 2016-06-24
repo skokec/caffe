@@ -20,23 +20,7 @@ class GaussianConvLayer : public BaseConvolutionLayer<Dtype> {
   explicit GaussianConvLayer(const LayerParameter& param)
       : BaseConvolutionLayer<Dtype>(param), using_gpu(0), A(0), B(0), C(0), d_A(0), d_B(0), d_C(0) {}
 
-  virtual ~GaussianConvLayer() {
-	  //for (int i = 0; i < this->tmp_buffer_.size(); ++i)
-		//  if (this->tmp_buffer_[i] != NULL)
-			//  delete this->tmp_buffer_[i];
-
-	  if (A != NULL) delete A;
-	  if (B != NULL) delete B;
-	  if (C != NULL) delete C;
-
-#ifndef CPU_ONLY
-	  if (d_A != NULL) cudaFree(d_A);
-	  if (d_B != NULL) cudaFree(d_B);
-	  if (d_C != NULL) cudaFree(d_C);
-
-#endif
-
-  }
+  virtual ~GaussianConvLayer();
 
   virtual inline const char* type() const { return "GaussianConv"; }
   virtual void LayerSetUp(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top);
@@ -171,7 +155,7 @@ template <typename Dtype>
 class CuDNNGaussianConvLayer : public GaussianConvLayer<Dtype> {
  public:
   explicit CuDNNGaussianConvLayer(const LayerParameter& param)
-	  : GaussianConvLayer<Dtype>(param) {}
+	  : GaussianConvLayer<Dtype>(param) , handles_setup_(false) {}
 
   virtual ~CuDNNGaussianConvLayer();
 
@@ -184,19 +168,11 @@ class CuDNNGaussianConvLayer : public GaussianConvLayer<Dtype> {
   virtual void Backward_gpu(const vector<Blob<Dtype>*>& top,
         const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
 
-  void compute_parameter_deriv(const int sample_index,
-						  	   const int group_index,
-							   const int subfeature_index,
-							   const Dtype* bottom_data,
-							   const Dtype* top_diff, const int top_count,
-							   const Blob<Dtype>* deriv_kernel, const Dtype* deriv_kernel_data,
-							   Blob<Dtype>* param_buffer, Dtype* param_buffer_diff,
-							   Dtype* intermediate_buff, Dtype* intermediate_sum_buff, int* intermediate_sum_index, int * top_remapping_index, int stream_offset);
-  
-
   bool handles_setup_;
   cudnnHandle_t* handle_;
   cudaStream_t*  stream_;
+
+  cudaStream_t* paralel_streams; // parallel streams for custom back-propagation kernels
 
   // algos and descriptors for forward convolution
   cudnnConvolutionFwdAlgo_t *fwd_algo_;
@@ -208,16 +184,9 @@ class CuDNNGaussianConvLayer : public GaussianConvLayer<Dtype> {
   int bottom_offset_, top_offset_, bias_offset_;
 
   // algos and descriptors for backward convolution
-  cudnnConvolutionFwdAlgo_t *bwd_filter_algo_;
   cudnnConvolutionBwdDataAlgo_t *bwd_data_algo_;
 
-  vector<cudnnTensorDescriptor_t> backward_bottom_desc_, backward_intermed_desc_;
-  cudnnFilterDescriptor_t      backward_filter_desc_;
-
-  //vector<cudaTextureObject_t> bottom_data_texture;
-
   size_t *workspace_fwd_sizes_;
-  size_t *workspace_bwd_filter_sizes_;
   size_t *workspace_bwd_data_sizes_;
   size_t workspaceSizeInBytes;  // size of underlying storage
   void *workspaceData;  // underlying storage
@@ -225,12 +194,46 @@ class CuDNNGaussianConvLayer : public GaussianConvLayer<Dtype> {
   
   int num_guass_per_compute;
   
-  // buffer for indexes in top when doing backpropagation in compute_parameter_deriv
+};
+
+template <typename Dtype>
+class CuDNNOldGaussianConvLayer : public CuDNNGaussianConvLayer<Dtype> {
+ public:
+  explicit CuDNNOldGaussianConvLayer(const LayerParameter& param)
+	  : CuDNNGaussianConvLayer<Dtype>(param), tmp_buffer_1_gpu(NULL) {}
+
+  virtual ~CuDNNOldGaussianConvLayer();
+
+  virtual inline const char* type() const { return "CuDNNOldGaussianConvLayer"; }
+  virtual void LayerSetUp(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top);
+  virtual void Reshape(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top);
+
+  virtual void Forward_gpu(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top);
+  virtual void Backward_gpu(const vector<Blob<Dtype>*>& top, const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
+
+  void compute_parameter_deriv(const int sample_index,
+						  	   const int group_index,
+							   const int subfeature_index,
+							   const Dtype* bottom_data,
+							   const Dtype* top_diff, const int top_count,
+							   const Blob<Dtype>* deriv_kernel, const Dtype* deriv_kernel_data,
+							   Blob<Dtype>* param_buffer, Dtype* param_buffer_diff,
+							   Dtype* intermediate_buff, Dtype* intermediate_sum_buff, int* intermediate_sum_index, int * top_remapping_index, int stream_offset);
+
+   // algos and descriptors for backward convolution
+   cudnnConvolutionFwdAlgo_t *bwd_filter_algo_;
+
+   vector<cudnnTensorDescriptor_t> backward_bottom_desc_, backward_intermed_desc_;
+   cudnnFilterDescriptor_t      backward_filter_desc_;
+
+   size_t *workspace_bwd_filter_sizes_;
+
+  // buffer for indexes in top when doing back-propagation in compute_parameter_deriv using standard cuBlas function (requires extra memory)
   Blob<int> tmp_buffer_1;
   int* tmp_buffer_1_gpu;
-  
-  cudaStream_t* paralel_streams;
+
 };
+
 #endif
 
 }  // namespace caffe

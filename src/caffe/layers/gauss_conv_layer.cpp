@@ -21,6 +21,24 @@
 
 namespace caffe {
 
+template <typename Dtype>
+GaussianConvLayer<Dtype>::~GaussianConvLayer() {
+	  //for (int i = 0; i < this->tmp_buffer_.size(); ++i)
+		//  if (this->tmp_buffer_[i] != NULL)
+			//  delete this->tmp_buffer_[i];
+
+	  if (A != NULL) delete A;
+	  if (B != NULL) delete B;
+	  if (C != NULL) delete C;
+
+#ifndef CPU_ONLY
+	  if (d_A != NULL) cudaFree(d_A);
+	  if (d_B != NULL) cudaFree(d_B);
+	  if (d_C != NULL) cudaFree(d_C);
+
+#endif
+
+  }
 
 template <typename Dtype>
 void GaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
@@ -321,6 +339,7 @@ void GaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
 template <typename Dtype>
 void GaussianConvLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
 		const vector<Blob<Dtype>*>& top) {
+
 
 	const int first_spatial_axis = this->channel_axis_ + 1;
 	int NUM_GAUSS_PER_AXIS = this->layer_param_.convolution_param().number_gauss();
@@ -934,16 +953,6 @@ void GaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
 	// precompute kernels from gaussian parameters for forward and backward pass
 	//this->precompute_guassian_weights(true);
 
-/*
-	Dtype* kernel_cpu = this->deriv_weight_buffer_.get()->mutable_cpu_data();
-
-	//printf("all kernel cpus:\n");
-	for (unsigned int i = 0; i < this->deriv_weight_buffer_.get()->count(); ++i) {
-	  //printf("%f, ",kernel_cpu[i]);
-	  //if (i % 3 == 2) printf("\n");
-	  kernel_cpu[i] = 1;
-	}
-*/
 
 	Blob<Dtype>& gauss_param_buffer_w = *this->param_buffer_w_;
 	Blob<Dtype>& gauss_param_buffer_mu1 = *this->param_buffer_mu1_;

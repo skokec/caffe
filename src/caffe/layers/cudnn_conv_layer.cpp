@@ -91,6 +91,7 @@ template <typename Dtype>
 void CuDNNConvolutionLayer<Dtype>::Reshape(
     const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top) {
   ConvolutionLayer<Dtype>::Reshape(bottom, top);
+
   CHECK_EQ(2, this->num_spatial_axes_)
       << "CuDNNConvolution input must have 2 spatial axes "
       << "(e.g., height and width). "

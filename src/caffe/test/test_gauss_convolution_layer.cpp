@@ -572,9 +572,9 @@ TYPED_TEST(GaussConvolutionLayerTest, TestCuDNNConvolution) {
 //	layer_org->param_buffer_w_->cpu_data();
 
 	compare_blobs(*layer->param_buffer_w_, *layer_org->param_buffer_w_, true, (Dtype)1e-4);
-//	compare_blobs(*layer->param_buffer_mu1_, *layer_org->param_buffer_mu1_, true, (Dtype)1e-4);
-//	compare_blobs(*layer->param_buffer_mu2_, *layer_org->param_buffer_mu2_, true, (Dtype)1e-4);
-//	compare_blobs(*layer->param_buffer_sigma_, *layer_org->param_buffer_sigma_, true, (Dtype)1e-4);
+	compare_blobs(*layer->param_buffer_mu1_, *layer_org->param_buffer_mu1_, true, (Dtype)1e-4);
+	compare_blobs(*layer->param_buffer_mu2_, *layer_org->param_buffer_mu2_, true, (Dtype)1e-4);
+	compare_blobs(*layer->param_buffer_sigma_, *layer_org->param_buffer_sigma_, true, (Dtype)1e-4);
 
   }
 
@@ -739,9 +739,9 @@ TYPED_TEST(GaussConvolutionLayerTest, TestCuDNNConvolutionExtensive) {
 //	layer_org->param_buffer_w_->cpu_data();
 
 	compare_blobs(*layer->param_buffer_w_, *layer_org->param_buffer_w_, true, (Dtype)1e-4);
-//	compare_blobs(*layer->param_buffer_mu1_, *layer_org->param_buffer_mu1_, true, (Dtype)1e-4);
-//	compare_blobs(*layer->param_buffer_mu2_, *layer_org->param_buffer_mu2_, true, (Dtype)1e-4);
-//	compare_blobs(*layer->param_buffer_sigma_, *layer_org->param_buffer_sigma_, true, (Dtype)1e-4);
+	compare_blobs(*layer->param_buffer_mu1_, *layer_org->param_buffer_mu1_, true, (Dtype)1e-4);
+	compare_blobs(*layer->param_buffer_mu2_, *layer_org->param_buffer_mu2_, true, (Dtype)1e-4);
+	compare_blobs(*layer->param_buffer_sigma_, *layer_org->param_buffer_sigma_, true, (Dtype)1e-4);
 
   }
 
