@@ -728,7 +728,7 @@ void filterActs_YxX_color<float>(const float* images, const float* error, const 
 //#define BLOCK_Y 4
 	dim3 threadsPerBlock(BLOCK_X, BLOCK_Y,1);
 
-	std::cout << "kernel [" << kernel_width << " x " << kernel_height << "], num features " << F << ", num guass " << G << " img ["<< img_width <<" x "<< img_height <<"]" << " error ["<< error_width <<" x "<<  error_height <<"]" <<  std::endl;
+	//std::cout << "kernel [" << kernel_width << " x " << kernel_height << "], num features " << F << ", num guass " << G << " img ["<< img_width <<" x "<< img_height <<"]" << " error ["<< error_width <<" x "<<  error_height <<"]" <<  std::endl;
 
 	DISPATCH_KERNEL(BLOCK_X,BLOCK_Y, threadsPerBlock,0,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride);
 

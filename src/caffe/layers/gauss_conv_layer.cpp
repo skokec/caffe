@@ -997,7 +997,7 @@ void GaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
 		}
 	}
 
-	cudaDeviceSynchronize();
+	//cudaDeviceSynchronize();
 
 	clock_t deriv_conv_time = 0;
 	clock_t im2col_time = 0;
@@ -1099,7 +1099,7 @@ void GaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
 		}
 	}
 	clock_t start_t = clock();
-	cudaDeviceSynchronize();
+	//cudaDeviceSynchronize();
 	//const Dtype* param_w_buffer__ = gauss_param_buffer_w.cpu_data();
 
 	clock_t end_t = clock();
@@ -1256,8 +1256,6 @@ void GaussianConvLayer<Dtype>::compute_parameter_deriv(int num_iter,
 	int batch_mul_size = this->num_output_ * this->height_out_ * this->width_out_;
 	int batch_sum_size = this->height_out_ * this->width_out_;
 	int size_params = this->conv_in_channels_ * this->conv_out_channels_ * NUM_GAUSS;
-
-	tmp_buffer_.cpu_data();
 
 	//Blob<Dtype> top_error_buffer_(top_error_buffer.shape());
 	Blob<Dtype>& top_error_buffer_ = top_error_buffer;

@@ -56,7 +56,7 @@ void CuDNNGaussianConvLayer<Dtype>::Forward_gpu(
     sync_gauss_conv_groups<<<1, 1>>>();
   }
 
-  cudaDeviceSynchronize();
+  //cudaDeviceSynchronize();
   clock_t end_t = clock();
 }
 
@@ -97,8 +97,10 @@ void CuDNNGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top
     param_sigma_diff = this->param_buffer_sigma_->mutable_gpu_diff();
   }
 
-  // TODO: is this NEEDED ?
-  //caffe_gpu_set(this->param_buffer_w_->count(), (Dtype)0, param_w_diff);
+  caffe_gpu_set(this->param_buffer_w_->count(), (Dtype)0, param_w_diff);
+  caffe_gpu_set(this->param_buffer_mu1_->count(), (Dtype)0, param_mu1_diff);
+  caffe_gpu_set(this->param_buffer_mu2_->count(), (Dtype)0, param_mu2_diff);
+  caffe_gpu_set(this->param_buffer_sigma_->count(), (Dtype)0, param_sigma_diff);
 
   Dtype* bias_diff = NULL;
   if (this->bias_term_ && this->param_propagate_down_[1]) {
@@ -186,7 +188,7 @@ void CuDNNGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top
       }
     }
 
-    cudaDeviceSynchronize();
+    //cudaDeviceSynchronize();
     // Synchronize the work across groups, each of which went into its own
     // stream, by launching an empty kernel into the default (null) stream.
     // NOLINT_NEXT_LINE(whitespace/operators)
