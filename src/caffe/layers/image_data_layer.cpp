@@ -40,12 +40,15 @@ void ImageDataLayer<Dtype>::DataLayerSetUp(const vector<Blob<Dtype>*>& bottom,
   string line;
   size_t pos;
   int label;
-  while (std::getline(infile, line)) {
-    pos = line.find_last_of(' ');
-    label = atoi(line.substr(pos + 1).c_str());
-    lines_.push_back(std::make_pair(line.substr(0, pos), label));
+  //while (std::getline(infile, line)) {
+  //  pos = line.find_last_of(' ');
+  //  label = atoi(line.substr(pos + 1).c_str());
+  //  lines_.push_back(std::make_pair(line.substr(0, pos), label));
+  //}
+  string filename;
+  while (infile >> filename >> label) {
+    lines_.push_back(std::make_pair(filename, label));
   }
-
   CHECK(!lines_.empty()) << "File is empty";
 
   if (this->layer_param_.image_data_param().shuffle()) {
