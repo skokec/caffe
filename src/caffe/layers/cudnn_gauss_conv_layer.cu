@@ -42,7 +42,7 @@ void CuDNNGaussianConvLayer<Dtype>::Forward_gpu(
       // Bias.
       if (this->bias_term_) {
         const Dtype* bias_data = this->param_buffer_bias_->gpu_data();
-        CUDNN_CHECK(cudnnAddTensor(handle_[g], CUDNN_ADD_SAME_C,
+        CUDNN_CHECK(cudnnAddTensor(handle_[g],
               cudnn::dataType<Dtype>::one,
               bias_desc_, bias_data + bias_offset_ * g,
               cudnn::dataType<Dtype>::one,
@@ -175,7 +175,7 @@ void CuDNNGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top
 
       // Gradient w.r.t. bottom data.
       if (propagate_down[i]) {
-        CUDNN_CHECK(cudnnConvolutionBackwardData_v3(
+        CUDNN_CHECK(cudnnConvolutionBackwardData(
               handle_[2*this->group_ + g],
               cudnn::dataType<Dtype>::one,
               filter_desc_, weight + this->weight_offset_ * g,

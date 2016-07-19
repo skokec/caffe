@@ -144,7 +144,20 @@ void BaseGaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom
 			  conv_param.pad((num_pad_dims == 1) ? 0 : i);
 		}
 	}
-
+	// Setup dilation dimensions (dilation_).
+	this->dilation_.Reshape(spatial_dim_blob_shape);
+	int* dilation_data = this->dilation_.mutable_cpu_data();
+	const int num_dilation_dims = conv_param.dilation_size();
+	CHECK(num_dilation_dims == 0 || num_dilation_dims == 1 ||
+		num_dilation_dims == this->num_spatial_axes_)
+	  << "dilation must be specified once, or once per spatial dimension "
+	  << "(dilation specified " << num_dilation_dims << " times; "
+	  << this->num_spatial_axes_ << " spatial dims).";
+	const int kDefaultDilation = 1;
+	for (int i = 0; i < this->num_spatial_axes_; ++i) {
+	dilation_data[i] = (num_dilation_dims == 0) ? kDefaultDilation :
+					   conv_param.dilation((num_dilation_dims == 1) ? 0 : i);
+	}
 	//CHECK_EQ(this->stride_h_, 1) << "Only stride of 1 is supported";
 	//CHECK_EQ(this->stride_w_, 1) << "Only stride of 1 is supported";
 
@@ -1065,6 +1078,7 @@ void GaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
 							this->conv_in_height_, this->conv_in_width_,
 							this->kernel_h_, this->kernel_w_,
 							this->pad_h_, this->pad_w_, this->stride_h_, this->stride_w_,
+							1,1,
 							this->col_buffer_.mutable_gpu_data());
 				else
 					im2col_cpu(bottom_data + bottom[i]->offset(n),
@@ -1072,6 +1086,7 @@ void GaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
 							this->conv_in_height_, this->conv_in_width_,
 							this->kernel_h_, this->kernel_w_,
 							this->pad_h_, this->pad_w_, this->stride_h_, this->stride_w_,
+							1,1,
 							this->col_buffer_.mutable_cpu_data());
 				end_t = clock();
 

@@ -5,7 +5,8 @@
 #include <utility>
 #include <vector>
 
-#include "caffe/vision_layers.hpp"
+//#include "caffe/vision_layers.hpp"
+#include "caffe/layers/base_conv_layer.hpp"
 
 namespace caffe {
 
