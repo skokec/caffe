@@ -194,6 +194,7 @@ void CuDNNGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top
     // NOLINT_NEXT_LINE(whitespace/operators)
     sync_gauss_conv_groups<<<1, 1>>>();
     clock_t end_t = clock();
+    //LOG(INFO) << "old-cudnn backward pass in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC);
   }
 }
 
@@ -334,6 +335,7 @@ void CuDNNOldGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& 
     // NOLINT_NEXT_LINE(whitespace/operators)
     sync_gauss_conv_groups<<<1, 1>>>();
     clock_t end_t = clock();
+    LOG(INFO) << "old-cudnn backward pass in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC);
   }
 }
 

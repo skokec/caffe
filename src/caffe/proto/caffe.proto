@@ -533,6 +533,7 @@ message ConvolutionParameter {
   optional float gmm_sigma_lower_bound = 128 [default = 0.1]; // lower bound for sigma
   optional bool gmm_square_gauss_normalization = 129 [default = true]; // normalize using sum of squares 
   optional bool gmm_seperable_forward_pass = 130 [default = false]; // utilize seperable kernels to speed-up forward-pass
+  optional bool gmm_use_old_cudnn = 131 [default = false]; // use old version of cudnn implmentation (uses a lot of memory)
   enum Engine {
     DEFAULT = 0;
     CAFFE = 1;

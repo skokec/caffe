@@ -219,6 +219,7 @@ REGISTER_LAYER_CREATOR(Python, GetPythonLayer);
 template <typename Dtype>
 shared_ptr<Layer<Dtype> > GetGaussianConvLayer(
     const LayerParameter& param) {
+  bool use_old_cudnn = param.convolution_param().gmm_use_old_cudnn();
   ConvolutionParameter_Engine engine = param.convolution_param().engine();
   if (engine == ConvolutionParameter_Engine_DEFAULT) {
     engine = ConvolutionParameter_Engine_CAFFE;
@@ -230,7 +231,10 @@ shared_ptr<Layer<Dtype> > GetGaussianConvLayer(
     return shared_ptr<Layer<Dtype> >(new GaussianConvLayer<Dtype>(param));
 #ifdef USE_CUDNN
   } else if (engine == ConvolutionParameter_Engine_CUDNN) {
-    return shared_ptr<Layer<Dtype> >(new CuDNNGaussianConvLayer<Dtype>(param));
+    if (use_old_cudnn == false)
+      return shared_ptr<Layer<Dtype> >(new CuDNNGaussianConvLayer<Dtype>(param));    
+    else 
+      return shared_ptr<Layer<Dtype> >(new CuDNNOldGaussianConvLayer<Dtype>(param));    
 #endif
   } else {
     LOG(FATAL) << "Layer " << param.name() << " has unknown engine.";

@@ -35,6 +35,7 @@ __global__ void filterActs_YxX_color_kernel(const float* images, const float* er
 
 //#define BATCH_PIXELS_SIZE 8 // good value (<70ms?)
 #define BATCH_PIXELS_SIZE 4
+//#define BATCH_PIXELS_SIZE 1
 
 //#define BATCH_FILTERS_SIZE 4 	// good value (<70ms?)
 //#define BATCH_FILTERS_SIZE 4	// (goes over G)
@@ -114,10 +115,10 @@ __global__ void filterActs_YxX_color_kernel(const float* images, const float* er
 	__shared__ unsigned int image_sh_kernel_offsets[Ky*Kx+2];
 
 
-	int offset_x = BATCH_PIXELS_SIZE * (blockIdx.x * blockDim.x);
-	int offset_y = blockIdx.y * blockDim.y;
-	//int offset_x = BATCH_PIXELS_SIZE * (blockIdx.x * blockDim.x + threadIdx.x);
-	//int offset_y = blockIdx.y * blockDim.y + threadIdx.y;
+	int offset_x = BATCH_PIXELS_SIZE * (blockIdx.x * Bx);
+	int offset_y = blockIdx.y * By;
+	//int offset_x = BATCH_PIXELS_SIZE * (blockIdx.x * Bx + threadIdx.x);
+	//int offset_y = blockIdx.y * By + threadIdx.y;
 
 	// load shared memory
 
@@ -154,7 +155,7 @@ __global__ void filterActs_YxX_color_kernel(const float* images, const float* er
 	// point to specific output and filter
 	float* current_filter = (float*)filters + OFFSET(subfeat_i,gauss_i,feat_i,0, S,G_,F_,Kx*Ky); //( ( (subfeat_i)*G + gauss_i)*F + feat_i)*(Kx*Ky);
 
-	// load kernel but only as much as is needed for first batch - not all threads need to particpate in loading !!!
+	// load kernel
 	if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0) {
 		for (unsigned int j = 0; j < Ky; ++j) {
 			for (unsigned int i = 0; i < Kx; ++i) {
@@ -196,14 +197,14 @@ __global__ void filterActs_YxX_color_kernel(const float* images, const float* er
 		// load image with apron (poor utilization when big kernels)
 
 		int start_j = threadIdx.y - Ky/2;
-		int end_j = blockDim.y + Ky/2;
+		int end_j = By + Ky/2;
 		int start_i = threadIdx.x*BATCH_PIXELS_SIZE - Kx/2;
-		int end_i = blockDim.x*BATCH_PIXELS_SIZE + Kx/2;
+		int end_i = Bx*BATCH_PIXELS_SIZE + Kx/2;
 
 		#pragma unroll
-		for (int j = start_j; j < end_j; j+=blockDim.y) {
+		for (int j = start_j; j < end_j; j+=By) {
 			#pragma unroll
-			for (int i = start_i; i < end_i; i+=blockDim.x*BATCH_PIXELS_SIZE) {
+			for (int i = start_i; i < end_i; i+=Bx*BATCH_PIXELS_SIZE) {
 				// current_image already at position for this block
 				#define IS_VALID_PIXEL(X,Y,MAX_X,MAX_Y) (X >= 0 && X < MAX_X && Y >= 0 && Y < MAX_Y)
 
@@ -211,22 +212,22 @@ __global__ void filterActs_YxX_color_kernel(const float* images, const float* er
 					#pragma unroll
 					for (int k = 0; k < BATCH_PIXELS_SIZE/4; ++k) {
 						float4 tmp;
-						tmp.x = IS_VALID_PIXEL(i + 0 + offset_x, j + offset_y, img_width, img_height) ? current_image[j * img_width + i + k*4 + 0] : 0;
-						tmp.y = IS_VALID_PIXEL(i + 1 + offset_x, j + offset_y, img_width, img_height) ? current_image[j * img_width + i + k*4 + 1] : 0;
-						tmp.z = IS_VALID_PIXEL(i + 2 + offset_x, j + offset_y, img_width, img_height) ? current_image[j * img_width + i + k*4 + 2] : 0;
-						tmp.w = IS_VALID_PIXEL(i + 3 + offset_x, j + offset_y, img_width, img_height) ? current_image[j * img_width + i + k*4 + 3] : 0;
+						tmp.x = IS_VALID_PIXEL(i + 0 + k*4 + offset_x, j + offset_y, img_width, img_height) ? current_image[j * img_width + i + k*4 + 0] : 0;
+						tmp.y = IS_VALID_PIXEL(i + 1 + k*4 + offset_x, j + offset_y, img_width, img_height) ? current_image[j * img_width + i + k*4 + 1] : 0;
+						tmp.z = IS_VALID_PIXEL(i + 2 + k*4 + offset_x, j + offset_y, img_width, img_height) ? current_image[j * img_width + i + k*4 + 2] : 0;
+						tmp.w = IS_VALID_PIXEL(i + 3 + k*4 + offset_x, j + offset_y, img_width, img_height) ? current_image[j * img_width + i + k*4 + 3] : 0;
 						reinterpret_cast<float4*>(image_sh)[(j + Ky/2)*IMAGE_SH_ARRAY_WIDTH + (i + Kx/2 + k)/4] = tmp;
 					}
 				} else if (BATCH_PIXELS_SIZE % 2 == 0) {
-					for (unsigned int k = 0; k < BATCH_PIXELS_SIZE/2; ++k) {
+					for (int k = 0; k < BATCH_PIXELS_SIZE/2; ++k) {
 						float2 tmp;
-						tmp.x = IS_VALID_PIXEL(i + 0 + offset_x, j + offset_y, img_width, img_height) ? current_image[j * img_width + i + k*2 + 0] : 0;
-						tmp.y = IS_VALID_PIXEL(i + 1 + offset_x, j + offset_y, img_width, img_height) ? current_image[j * img_width + i + k*2 + 1] : 0;
+						tmp.x = IS_VALID_PIXEL(i + 0 + k*2 + offset_x, j + offset_y, img_width, img_height) ? current_image[j * img_width + i + k*2 + 0] : 0;
+						tmp.y = IS_VALID_PIXEL(i + 1 + k*2 + offset_x, j + offset_y, img_width, img_height) ? current_image[j * img_width + i + k*2 + 1] : 0;
 						reinterpret_cast<float2*>(image_sh)[(j + Ky/2)*IMAGE_SH_ARRAY_WIDTH + (i + Kx/2 + k)/2] = tmp;
 					}
 				} else {
-					for (unsigned int k = 0; k < BATCH_PIXELS_SIZE; ++k) {
-						image_sh[(j + Ky/2)*IMAGE_SH_ARRAY_WIDTH + (i + Kx/2 + k)] = IS_VALID_PIXEL(i + offset_x, j + offset_y, img_width, img_height) ? current_image[j * img_width + i + k] : 0;
+					for (int k = 0; k < BATCH_PIXELS_SIZE; ++k) {
+						image_sh[(j + Ky/2)*IMAGE_SH_ARRAY_WIDTH + (i + Kx/2 + k)] = IS_VALID_PIXEL(i + k + offset_x, j + offset_y, img_width, img_height) ? current_image[j * img_width + i + k] : 0;
 					}
 				}
 			}
@@ -237,8 +238,8 @@ __global__ void filterActs_YxX_color_kernel(const float* images, const float* er
 
 
 		// thread participates only if its pixels are within valid bounds
-		int pixel_loc_x = BATCH_PIXELS_SIZE * (blockIdx.x * blockDim.x + threadIdx.x);
-		int pixel_loc_y = blockIdx.y * blockDim.y + threadIdx.y;
+		int pixel_loc_x = BATCH_PIXELS_SIZE * (blockIdx.x * Bx + threadIdx.x);
+		int pixel_loc_y = blockIdx.y * By + threadIdx.y;
 
 		if (pixel_loc_x < error_width && pixel_loc_y < error_height) {
 
@@ -514,9 +515,9 @@ __global__ void filterActs_YxX_color_kernel(const float* images, const float* er
 				}
 
 				const int tid = threadIdx.x +
-						  threadIdx.y * blockDim.x +
-						  threadIdx.z * blockDim.x * blockDim.y;// +
-						  //blockIdx.x * blockDim.x * blockDim.y * blockDim.z;
+						  threadIdx.y * Bx +
+						  threadIdx.z * Bx * By;// +
+						  //blockIdx.x * Bx * By * blockDim.z;
 
 				if (tid  % WARP_SIZE == 0) {
 					const int warp_id = tid/ WARP_SIZE;
@@ -686,7 +687,7 @@ dim3 calculateBlocks(dim3 threadsPerBlock, int error_width, int error_height, in
 	}
 
 #define DISPATCH_KERNEL_FILTERS(BLOCK_X,BLOCK_Y, Kx,Ky,threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
-	if (F % 8 == 0) { \
+	if (F % 8 == 0 && BLOCK_Y > 8) { \
 		DISPATCH_KERNEL_GAUSS(BLOCK_X,BLOCK_Y, Kx,Ky,8, threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
 	} else if (F % 4 == 0) { \
 		DISPATCH_KERNEL_GAUSS(BLOCK_X,BLOCK_Y, Kx,Ky,4, threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
@@ -726,11 +727,54 @@ void filterActs_YxX_color<float>(const float* images, const float* error, const 
 #define BLOCK_Y 16
 //#define BLOCK_X 4/BATCH_PIXELS_SIZE
 //#define BLOCK_Y 4
-	dim3 threadsPerBlock(BLOCK_X, BLOCK_Y,1);
+
 
 	//std::cout << "kernel [" << kernel_width << " x " << kernel_height << "], num features " << F << ", num guass " << G << " img ["<< img_width <<" x "<< img_height <<"]" << " error ["<< error_width <<" x "<<  error_height <<"]" <<  std::endl;
+	/*
+	// we want each block to process 512 pixels - split that over rows/columns if there are too many columns then multiple
+	if (error_width >= 4*BATCH_PIXELS_SIZE) {
+		// all ql, one row will have enough data
+		// use BLOCK_X = 8
+		// use BLOXK_Y = 16 // == 512/(8*BATCH_PIXELS_SIZE)
+		dim3 threadsPerBlock(8, 16,1);
+		DISPATCH_KERNEL(8,16, threadsPerBlock,0,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride);
+	} else if (error_width > 2*BATCH_PIXELS_SIZE) {
+		// use BLOCK_X = 4
+		// use BLOXK_Y = 32 // == 512/(4*BATCH_PIXELS_SIZE)
+		dim3 threadsPerBlock(4, 32,1);
+		DISPATCH_KERNEL(4,32, threadsPerBlock,0,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride);
+	} else if (error_width > BATCH_PIXELS_SIZE) {
+		// use BLOCK_X = 2
+		// use BLOXK_Y = 64 // == 512/(2*BATCH_PIXELS_SIZE)
+		dim3 threadsPerBlock(2, 64,1);
+		DISPATCH_KERNEL(2, 64, threadsPerBlock,0,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride);
+	} else {
+		// use BLOCK_X = 1
+		// use BLOXK_Y = 128 // == 512/(1*BATCH_PIXELS_SIZE)
+		dim3 threadsPerBlock(1, 128,1);
+		DISPATCH_KERNEL(1,128, threadsPerBlock,0,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride);
+	}*/
 
-	DISPATCH_KERNEL(BLOCK_X,BLOCK_Y, threadsPerBlock,0,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride);
+
+	if (error_width * error_height / (BLOCK_X * BATCH_PIXELS_SIZE) >= 16) {
+
+		dim3 threadsPerBlock(BLOCK_X, BLOCK_Y,1);
+
+		DISPATCH_KERNEL(BLOCK_X,BLOCK_Y, threadsPerBlock,0,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride);
+
+	} else if (error_width * error_height / (BLOCK_X * BATCH_PIXELS_SIZE) >= 8) {
+
+		dim3 threadsPerBlock(BLOCK_X, 8, 1);
+
+		DISPATCH_KERNEL(BLOCK_X,8, threadsPerBlock,0,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride);
+
+	} else {
+
+		dim3 threadsPerBlock(BLOCK_X, 4, 1);
+
+		DISPATCH_KERNEL(BLOCK_X,4, threadsPerBlock,0,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride);
+
+	}
 
 }
 
