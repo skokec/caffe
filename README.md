@@ -11,9 +11,9 @@ By constraining filter weights in CNN we can force deep networks to learn compos
 
 Please cite the following publication if you find Guassian Convolution Layer usefull:
 
-    @article{Tabernik2016ICPR,
+    @inproceedings{Tabernik2016ICPR,
       Author = {Tabernik, Domen and Kristan, Matej and Wyatt, Jeremy and Leonardis, Ale\v{s}}
-      Journal = {International Conference on Pattern Recognition},
+      booktitle = {International Conference on Pattern Recognition},
       Title = {Towards Deep Compositional Networks},
       Year = {2016}
     }
