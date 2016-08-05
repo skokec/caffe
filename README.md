@@ -9,7 +9,7 @@ By constraining filter weights in CNN we can force deep networks to learn compos
 - Repository includes full Nvidia CUB library through git-submodule so do not forget to call `git submodule update`. 
 - GuassianConv layer supports CPU and GPU, as well as CUDNN engine.
 
-Please cite the following publication if you find Guassian Convolution Layer usefull:
+Please cite the following publication for Guassian Convolution Layer:
 
     @inproceedings{Tabernik2016ICPR,
       Author = {Tabernik, Domen and Kristan, Matej and Wyatt, Jeremy and Leonardis, Ale\v{s}}
@@ -19,6 +19,8 @@ Please cite the following publication if you find Guassian Convolution Layer use
     }
 
 ## Usage 
+
+You can follow the example at ```examples/cifar10/gauss-cnn/cifar10_gauss_train_test.prototxt```.
 
 Enable Guassian Convolution Layer with `type: "GaussianConv"`. You can use following settings in your protobuf definition:
 ```
