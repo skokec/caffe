@@ -316,7 +316,7 @@ void CuDNNOldGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& 
 
       // Gradient w.r.t. bottom data.
       if (propagate_down[i]) {
-        CUDNN_CHECK(cudnnConvolutionBackwardData_v3(
+        CUDNN_CHECK(cudnnConvolutionBackwardData(
         		this->handle_[2*this->group_ + g],
               cudnn::dataType<Dtype>::one,
 			  this->filter_desc_, weight + this->weight_offset_ * g,
