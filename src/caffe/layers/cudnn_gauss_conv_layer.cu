@@ -95,12 +95,13 @@ void CuDNNGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top
     param_mu1_diff = this->param_buffer_mu1_->mutable_gpu_diff();
     param_mu2_diff = this->param_buffer_mu2_->mutable_gpu_diff();
     param_sigma_diff = this->param_buffer_sigma_->mutable_gpu_diff();
+
+    caffe_gpu_set(this->param_buffer_w_->count(), (Dtype)0, param_w_diff);
+    caffe_gpu_set(this->param_buffer_mu1_->count(), (Dtype)0, param_mu1_diff);
+    caffe_gpu_set(this->param_buffer_mu2_->count(), (Dtype)0, param_mu2_diff);
+    caffe_gpu_set(this->param_buffer_sigma_->count(), (Dtype)0, param_sigma_diff);
   }
 
-  caffe_gpu_set(this->param_buffer_w_->count(), (Dtype)0, param_w_diff);
-  caffe_gpu_set(this->param_buffer_mu1_->count(), (Dtype)0, param_mu1_diff);
-  caffe_gpu_set(this->param_buffer_mu2_->count(), (Dtype)0, param_mu2_diff);
-  caffe_gpu_set(this->param_buffer_sigma_->count(), (Dtype)0, param_sigma_diff);
 
   Dtype* bias_diff = NULL;
   if (this->bias_term_ && this->param_propagate_down_[1]) {
