@@ -296,7 +296,12 @@ void P2PSync<Dtype>::on_start() {
 
   // Wait for update from parent
   if (parent_) {
-    P2PSync<Dtype> *parent = queue_.pop();
+    //P2PSync<Dtype> *parent = queue_.pop();
+	P2PSync<Dtype> *parent = NULL;
+	while (parent == NULL )	{
+		parent = queue_.pop("",false);
+		if (this->must_stop()) throw boost::thread_interrupted();
+	}
     CHECK(parent == parent_);
   }
 
@@ -332,7 +337,12 @@ void P2PSync<Dtype>::on_gradients_ready() {
 
   // Sum children gradients as they appear in the queue
   for (int i = 0; i < children_.size(); ++i) {
-    P2PSync<Dtype> *child = queue_.pop();
+    //P2PSync<Dtype> *child = queue_.pop();
+	  P2PSync<Dtype> *child = NULL;
+	while (child == NULL) {
+		child = queue_.pop("",false);
+		if (this->must_stop()) throw boost::thread_interrupted();
+	}
     Dtype* src = child->parent_grads_;
     Dtype* dst = diff_;
 
