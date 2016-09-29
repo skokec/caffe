@@ -66,13 +66,14 @@ class DataReader {
   // A source is uniquely identified by its layer name + path, in case
   // the same database is read from two different locations in the net.
   static inline string source_key(const LayerParameter& param) {
-    return param.name() + ":" + param.data_param().source();
+    return param.name() + ":" + param.data_param().root_uid() +":" + param.data_param().source();
   }
 
   const shared_ptr<QueuePair> queue_pair_;
   shared_ptr<Body> body_;
 
   static map<const string, boost::weak_ptr<DataReader::Body> > bodies_;
+  //map<const string, boost::weak_ptr<DataReader::Body> > bodies_;
 
 DISABLE_COPY_AND_ASSIGN(DataReader);
 };

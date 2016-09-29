@@ -590,7 +590,7 @@ message ConvolutionParameter {
   optional FillerParameter bias_filler = 8; // The filler for the bias
   optional FillerParameter mu_filler = 120; // The filler for the gaussian mean 
   optional FillerParameter sigma_filler = 121; // The filler for the gaussian sigma
-  optional uint32 number_gauss = 122; // The number of gaussian kernels per patch
+  repeated uint32 number_gauss = 122; // The number of gaussian kernels per patch
   optional bool gmm_weight_normalization = 123 [default = true]; // Should weights of GMM be normalized (i.e. should sum to 1)
   optional bool gmm_gauss_normalization = 124 [default = true]; // Should gaussian GMM be normalized or not  (i.e. area under gauss should sum to 1)
   optional uint32 gmm_mean_iteration_step = 125 [default = 1]; // step between optimization of mean in gaussian
@@ -676,6 +676,7 @@ message DataParameter {
   // Prefetch queue (Number of batches to prefetch to host memory, increase if
   // data access bandwidth varies).
   optional uint32 prefetch = 10 [default = 4];
+  optional string root_uid = 99;
 }
 
 message DropoutParameter {
