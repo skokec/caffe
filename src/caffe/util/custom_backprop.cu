@@ -15,7 +15,9 @@ namespace caffe {
 
 // CUSTOM convolution code for gradient computation
 template <int Bx, int By, int Kx, int Ky, int NUM_FILTERS_PER_THREAD, int NUM_GAUSS_PER_THREAD, bool CHECK_PIXEL_BOUNDS>
-__global__ void filterActs_YxX_color_kernel(const float* images, const float* error, const float* filters, float* output,
+__global__ void
+//__launch_bounds__(128)
+filterActs_YxX_color_kernel(const float* images, const float* error, const float* filters, float* output,
                                    const int I, const int S, const int F_, const int G_,
 								   const int subfeat_i_, const int feat_i_, const int gauss_i_,
                                    const int img_width, const int img_height,
@@ -677,36 +679,56 @@ dim3 calculateBlocks(dim3 threadsPerBlock, int error_width, int error_height, in
 		CUDA_POST_KERNEL_CHECK; \
      }
 
-#define DISPATCH_KERNEL_GAUSS(BLOCK_X,BLOCK_Y, Kx,Ky,NUM_FILTERS_PER_THREAD, threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
-	if (G % 4 == 0) { \
-		DISPATCH_KERNEL_BOUND_CHECK(BLOCK_X,BLOCK_Y, Kx,Ky,NUM_FILTERS_PER_THREAD, 4, threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
-	} else if (G % 3 == 0) { \
-		DISPATCH_KERNEL_BOUND_CHECK(BLOCK_X,BLOCK_Y, Kx,Ky,NUM_FILTERS_PER_THREAD, 3, threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
-	} else { \
-		DISPATCH_KERNEL_BOUND_CHECK(BLOCK_X,BLOCK_Y, Kx,Ky,NUM_FILTERS_PER_THREAD, 1, threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
-	}
+//} else if (F % 8 == 0 && BLOCK_Y > 8) { \
 
-#define DISPATCH_KERNEL_FILTERS(BLOCK_X,BLOCK_Y, Kx,Ky,threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
-	if (F % 8 == 0 && BLOCK_Y > 8) { \
-		DISPATCH_KERNEL_GAUSS(BLOCK_X,BLOCK_Y, Kx,Ky,8, threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
+
+#define DISPATCH_KERNEL_FILTERS_LARGE(BLOCK_X,BLOCK_Y, Kx,Ky,NUM_GAUSS_PER_THREAD, threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
+	if (F % 32 == 0 && NUM_GAUSS_PER_THREAD == 1) { \
+		DISPATCH_KERNEL_BOUND_CHECK(BLOCK_X,BLOCK_Y, Kx,Ky,32, NUM_GAUSS_PER_THREAD,threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
+	} else if (F % 16 == 0 && NUM_GAUSS_PER_THREAD == 2) { \
+		DISPATCH_KERNEL_BOUND_CHECK(BLOCK_X,BLOCK_Y, Kx,Ky,16, NUM_GAUSS_PER_THREAD,threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
+	} else if (F % 8 == 0) { \
+		DISPATCH_KERNEL_BOUND_CHECK(BLOCK_X,BLOCK_Y, Kx,Ky,8, NUM_GAUSS_PER_THREAD,threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
 	} else if (F % 4 == 0) { \
-		DISPATCH_KERNEL_GAUSS(BLOCK_X,BLOCK_Y, Kx,Ky,4, threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
+		DISPATCH_KERNEL_BOUND_CHECK(BLOCK_X,BLOCK_Y, Kx,Ky,4, NUM_GAUSS_PER_THREAD,threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
 	} else { \
 		LOG(ERROR) << "unsupported number of features F=" << F << ", supported a multiply of 4 or 8!";\
 		throw std::exception();\
 	}
 
+#define DISPATCH_KERNEL_FILTERS(BLOCK_X,BLOCK_Y, Kx,Ky,NUM_GAUSS_PER_THREAD, threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
+	if (F % 8 == 0) { \
+		DISPATCH_KERNEL_BOUND_CHECK(BLOCK_X,BLOCK_Y, Kx,Ky,8, NUM_GAUSS_PER_THREAD,threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
+	} else if (F % 4 == 0) { \
+		DISPATCH_KERNEL_BOUND_CHECK(BLOCK_X,BLOCK_Y, Kx,Ky,4, NUM_GAUSS_PER_THREAD,threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
+	} else { \
+		LOG(ERROR) << "unsupported number of features F=" << F << ", supported a multiply of 4 or 8!";\
+		throw std::exception();\
+	}
+
+
+#define DISPATCH_KERNEL_GAUSS(BLOCK_X,BLOCK_Y, Kx,Ky, threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
+	if (G % 4 == 0) { \
+		DISPATCH_KERNEL_FILTERS(BLOCK_X,BLOCK_Y, Kx,Ky, 4, threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
+	} else if (G % 3 == 0) { \
+		DISPATCH_KERNEL_FILTERS(BLOCK_X,BLOCK_Y, Kx,Ky, 3, threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
+	} else if (G % 2 == 0) { \
+		DISPATCH_KERNEL_FILTERS_LARGE(BLOCK_X,BLOCK_Y, Kx,Ky, 2, threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
+	} else { \
+		DISPATCH_KERNEL_FILTERS_LARGE(BLOCK_X,BLOCK_Y, Kx,Ky, 1, threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
+	}
+
 #define DISPATCH_KERNEL(BLOCK_X,BLOCK_Y, threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
 	if (kernel_width == 3 && kernel_height == 3) { \
-		DISPATCH_KERNEL_FILTERS(BLOCK_X,BLOCK_Y, 3,3,threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
+		DISPATCH_KERNEL_GAUSS(BLOCK_X,BLOCK_Y, 3,3,threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
 	} else if (kernel_width == 5 && kernel_height == 5) { \
-		DISPATCH_KERNEL_FILTERS(BLOCK_X,BLOCK_Y, 5,5,threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
+		DISPATCH_KERNEL_GAUSS(BLOCK_X,BLOCK_Y, 5,5,threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
 	} else if (kernel_width == 7 && kernel_height == 7) { \
-		DISPATCH_KERNEL_FILTERS(BLOCK_X,BLOCK_Y, 7,7,threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
+		DISPATCH_KERNEL_GAUSS(BLOCK_X,BLOCK_Y, 7,7,threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
 	} else if (kernel_width == 9 && kernel_height == 9) { \
-		DISPATCH_KERNEL_FILTERS(BLOCK_X,BLOCK_Y, 9,9,threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
+		DISPATCH_KERNEL_GAUSS(BLOCK_X,BLOCK_Y, 9,9,threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
 	} else if (kernel_width == 11 && kernel_height == 11) { \
-		DISPATCH_KERNEL_FILTERS(BLOCK_X,BLOCK_Y, 11,11,threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
+		DISPATCH_KERNEL_GAUSS(BLOCK_X,BLOCK_Y, 11,11,threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
 	} else { \
 		LOG(ERROR) << "unsupported kernel size [" << kernel_width << " x " << kernel_height << "], supported only 3x3, 5x5, 7x7, 9x9, 11x11!";\
 		throw std::exception();\
