@@ -263,6 +263,11 @@ P2PSync<Dtype>::~P2PSync() {
     }
   }
 
+  for (int i = 0; i < children_streams_.size(); i++)
+	  cudaStreamDestroy(children_streams_[i]);
+
+  cudaStreamDestroy(parent_stream_);
+
   CUDA_CHECK(cudaSetDevice(initial_device));
 #endif
 }
@@ -270,6 +275,9 @@ P2PSync<Dtype>::~P2PSync() {
 template<typename Dtype>
 void P2PSync<Dtype>::InternalThreadEntry() {
   Caffe::SetDevice(solver_->param().device_id());
+
+  cudaStreamCreate(&parent_stream_);
+
   CHECK(Caffe::root_solver());
   Caffe::set_root_solver(false);
   // See if there is a defined seed and reset random state if so
@@ -319,9 +327,14 @@ void P2PSync<Dtype>::on_start() {
 #endif
 
     CUDA_CHECK(cudaMemcpyAsync(dst, src, size_ * sizeof(Dtype),
-        cudaMemcpyDeviceToDevice, cudaStreamDefault));
+        //cudaMemcpyDeviceToDevice, cudaStreamDefault));
+    		cudaMemcpyDeviceToDevice, children_streams_[i]));
+  }
+  if (children_.size() > 0) {
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamDefault));
-    children_[i]->queue_.push(this);
+    for (int i = children_.size() - 1; i >= 0; i--) {
+      children_[i]->queue_.push(this);
+    }
   }
 #endif
 }
@@ -377,10 +390,13 @@ void P2PSync<Dtype>::on_gradients_ready() {
     CHECK(attributes.device == parent_->solver_->param().device_id());
 #endif
 
+    CUDA_CHECK(cudaStreamSynchronize(cudaStreamDefault));
     CUDA_CHECK(cudaMemcpyAsync(dst, src, size_ * sizeof(Dtype),  //
-        cudaMemcpyDeviceToDevice, cudaStreamDefault));
+//        cudaMemcpyDeviceToDevice, cudaStreamDefault));
+    		cudaMemcpyDeviceToDevice, parent_stream_));
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamDefault));
     parent_->queue_.push(this);
+
   } else {
     // Loss functions divide gradients by the batch size, so to compensate
     // for split batch, the root solver divides by number of solvers.
@@ -421,6 +437,8 @@ void P2PSync<Dtype>::Prepare(const vector<int>& gpus,
           param.set_device_id(pairs[i].device());
           syncs->at(i).reset(new P2PSync<Dtype>(solver_, parent, param));
           parent->children_.push_back((P2PSync<Dtype>*) syncs->at(i).get());
+          parent->children_streams_.push_back(cudaStream_t());
+          cudaStreamCreate(&parent->children_streams_.back());
         }
       }
     }

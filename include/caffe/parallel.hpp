@@ -111,6 +111,8 @@ class P2PSync : public GPUParams<Dtype>, public Solver<Dtype>::Callback,
   Dtype* parent_grads_;
   shared_ptr<Solver<Dtype> > solver_;
 
+  cudaStream_t parent_stream_;
+  vector<cudaStream_t> children_streams_;
   using Params<Dtype>::size_;
   using Params<Dtype>::data_;
   using Params<Dtype>::diff_;
