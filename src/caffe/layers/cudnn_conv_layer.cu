@@ -49,7 +49,7 @@ void CuDNNConvolutionLayer<Dtype>::Forward_gpu(
     sync_conv_groups<<<1, 1>>>();
   }
 
-  cudaDeviceSynchronize();
+  //cudaDeviceSynchronize();
   clock_t end_t = clock();
 //  LOG(INFO) << "size of input " << bottom[0]->count() << " = " << bottom[0]->shape(0) << " x " << bottom[0]->shape(1) << " x " << bottom[0]->shape(2) << " x " << bottom[0]->shape(3);
 //  LOG(INFO) << "size of filters " << this->blobs_[0]->count() << " = " << this->blobs_[0]->shape(0) << " x " << this->blobs_[0]->shape(1) << " x " << this->blobs_[0]->shape(2) << " x " << this->blobs_[0]->shape(3);
@@ -120,7 +120,7 @@ void CuDNNConvolutionLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
       }
     }
 
-    cudaDeviceSynchronize();
+    //cudaDeviceSynchronize();
     // Synchronize the work across groups, each of which went into its own
     // stream, by launching an empty kernel into the default (null) stream.
     // NOLINT_NEXT_LINE(whitespace/operators)
