@@ -679,7 +679,7 @@ dim3 calculateBlocks(dim3 threadsPerBlock, int error_width, int error_height, in
 		CUDA_POST_KERNEL_CHECK; \
      }
 
-//} else if (F % 8 == 0 && BLOCK_Y > 8) { \
+//} else if (F % 8 == 0 && BLOCK_Y > 8) {
 
 
 #define DISPATCH_KERNEL_FILTERS_LARGE(BLOCK_X,BLOCK_Y, Kx,Ky,NUM_GAUSS_PER_THREAD, threadsPerBlock,resMem,streamId, images, error, filters, output, I, S, F, G, subfeat_i, feat_i, gauss_i, img_width, img_height, error_width, error_height, kernel_width, kernel_height, padding, stride) \
