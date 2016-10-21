@@ -103,7 +103,8 @@ void DataReader::Body::InternalThreadEntry() {
 }
 
 void DataReader::Body::read_one(db::Cursor* cursor, QueuePair* qp) {
-  Datum* datum = qp->free_.pop();
+  Datum* datum = qp->free_.pop("",false);
+  if (datum == 0) return;
   // TODO deserialize in-place instead of copy?
   datum->ParseFromString(cursor->value());
   qp->full_.push(datum);

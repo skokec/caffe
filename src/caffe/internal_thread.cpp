@@ -57,6 +57,7 @@ void InternalThread::StopInternalThread() {
   if (is_started()) {
 	  LOG(INFO) << "thread exists and is joinable, stop";
 	  interruption_requested = 1;
+	  thread_->interrupt();
     try {
     	LOG(INFO) << "trying to join thread";
       thread_->join();
