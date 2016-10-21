@@ -248,7 +248,7 @@ TYPED_TEST(GaussConvolutionLayerTest, TestSimpleConvolution) {
   convolution_param->add_stride(1);
   convolution_param->add_pad(3);
 
-  convolution_param->set_number_gauss(2);
+  convolution_param->add_number_gauss(2);
 
   convolution_param->set_num_output(16);
 
@@ -305,7 +305,7 @@ TYPED_TEST(GaussConvolutionLayerTest, TestKernelPrecompute) {
   convolution_param->add_stride(1);
   convolution_param->add_pad(3);
 
-  convolution_param->set_number_gauss(2);
+  convolution_param->add_number_gauss(2);
 
   convolution_param->set_num_output(32);
 
@@ -346,6 +346,8 @@ TYPED_TEST(GaussConvolutionLayerTest, TestKernelPrecompute) {
 
 	// RUN CPU version
 	layer->precompute_guassian_weights_gpu(true);
+	layer->precompute_guassian_weights_gpu(true);
+	layer->precompute_guassian_weights_gpu(true);
 
 	// Check both versions
 	Dtype* data_gpu;
@@ -377,6 +379,103 @@ TYPED_TEST(GaussConvolutionLayerTest, TestKernelPrecompute) {
   }
 }
 
+TYPED_TEST(GaussConvolutionLayerTest, TestCuDNNKernelPrecompute) {
+
+	if (Caffe::mode() == Caffe::CPU)
+		return;
+  typedef typename TypeParam::Dtype Dtype;
+  this->blob_bottom_vec_.push_back(this->blob_bottom_2_);
+  this->blob_top_vec_.push_back(this->blob_top_2_);
+
+  LayerParameter layer_param;
+  ConvolutionParameter* convolution_param =
+	  layer_param.mutable_convolution_param();
+
+  convolution_param->add_kernel_size(7);
+  convolution_param->add_stride(1);
+  convolution_param->add_pad(3);
+
+  convolution_param->add_number_gauss(2);
+
+  convolution_param->set_num_output(32);
+
+  convolution_param->mutable_weight_filler()->set_type("gaussian");
+  convolution_param->mutable_weight_filler()->set_std(0.01);
+
+  convolution_param->mutable_bias_filler()->set_type("constant");
+  convolution_param->mutable_bias_filler()->set_value(0.1);
+
+  convolution_param->mutable_sigma_filler()->set_type("constant");
+  convolution_param->mutable_sigma_filler()->set_value(0.8);
+
+  convolution_param->set_gmm_component_border_bound(1.5);
+  convolution_param->set_gmm_sigma_lower_bound(0.5);
+
+  convolution_param->set_gmm_weight_normalization(false);
+  convolution_param->set_gmm_gauss_normalization(true);
+  for (int gmm_sqrt_norm = 0; gmm_sqrt_norm <= 1; gmm_sqrt_norm++)
+  {
+	convolution_param->set_gmm_square_gauss_normalization((bool)gmm_sqrt_norm);
+
+	shared_ptr<CuDNNGaussianConvLayer<Dtype> > layer(new CuDNNGaussianConvLayer<Dtype>(layer_param));
+	layer->SetUp(this->blob_bottom_vec_, this->blob_top_vec_);
+
+	// RUN default GPU version
+	layer->precompute_guassian_weights_gpu(true); // run CPU first since it will force buffers to cpu and would cause errors if gpu would be allocated first
+
+	// store output
+	Blob<Dtype> weight_cpu, deriv_error_cpu, deriv_weight_cpu, deriv_mu1_cpu, deriv_mu2_cpu, deriv_sigma_cpu;
+
+	weight_cpu.CopyFrom(*layer->weight_buffer_, false, true);
+	deriv_error_cpu.CopyFrom(*layer->deriv_error_buffer_, false, true);
+	deriv_weight_cpu.CopyFrom(*layer->deriv_weight_buffer_, false, true);
+	deriv_mu1_cpu.CopyFrom(*layer->deriv_mu1_buffer_, false, true);
+	deriv_mu2_cpu.CopyFrom(*layer->deriv_mu2_buffer_, false, true);
+	deriv_sigma_cpu.CopyFrom(*layer->deriv_sigma_buffer_, false, true);
+
+	// RUN optimized GPU version
+
+	layer->get_weight_filters();
+	layer->get_weight_derivative_filters(layer->kernel_buf.deriv_weight);
+	layer->get_mu1_derivative_filters(layer->kernel_buf.deriv_mu1, layer->kernel_buf.deriv_weight);
+	layer->get_mu2_derivative_filters(layer->kernel_buf.deriv_mu2, layer->kernel_buf.deriv_weight);
+	layer->get_sigma_derivative_filters(layer->kernel_buf.deriv_sigma, layer->kernel_buf.deriv_weight);
+
+
+	// Check both versions
+	Dtype* data_gpu;
+	Dtype* data_cpu;
+
+
+	data_cpu = weight_cpu.mutable_cpu_data();
+	data_gpu = layer->kernel_buf.weights->mutable_cpu_data();
+	for (int i = 0; i < deriv_error_cpu.count(); ++i) { EXPECT_NEAR(data_gpu[i], data_cpu[i], 1e-4); }
+
+	data_cpu = deriv_weight_cpu.mutable_cpu_data();
+	data_gpu = layer->kernel_buf.deriv_weight->mutable_cpu_data();
+	for (int i = 0; i < deriv_weight_cpu.count(); ++i) { EXPECT_NEAR(data_gpu[i], data_cpu[i], 1e-4); }
+
+	data_cpu = deriv_mu1_cpu.mutable_cpu_data();
+	data_gpu = layer->kernel_buf.deriv_mu1->mutable_cpu_data();
+	for (int i = 0; i < deriv_mu1_cpu.count(); ++i) { EXPECT_NEAR(data_gpu[i], data_cpu[i], 1e-4); }
+
+	data_cpu = deriv_mu2_cpu.mutable_cpu_data();
+	data_gpu = layer->kernel_buf.deriv_mu2->mutable_cpu_data();
+	for (int i = 0; i < deriv_mu2_cpu.count(); ++i) { EXPECT_NEAR(data_gpu[i], data_cpu[i], 1e-4); }
+
+	data_cpu = deriv_sigma_cpu.mutable_cpu_data();
+	data_gpu = layer->kernel_buf.deriv_sigma->mutable_cpu_data();
+	for (int i = 0; i < deriv_sigma_cpu.count(); ++i) { EXPECT_NEAR(data_gpu[i], data_cpu[i], 1e-4); }
+
+	/*
+	data_cpu = deriv_error_cpu.mutable_cpu_data();
+	data_gpu = layer->deriv_error_buffer_->mutable_cpu_data();
+	for (int i = 0; i < deriv_error_cpu.count(); ++i) { EXPECT_NEAR(data_gpu[i], data_cpu[i], 1e-4); }
+	*/
+
+  }
+}
+
 TYPED_TEST(GaussConvolutionLayerTest, TestSeperableConvolution) {
 
  if (Caffe::mode() == Caffe::GPU)
@@ -396,7 +495,7 @@ TYPED_TEST(GaussConvolutionLayerTest, TestSeperableConvolution) {
   convolution_param->add_stride(1);
   convolution_param->add_pad(3);
 
-  convolution_param->set_number_gauss(2);
+  convolution_param->add_number_gauss(2);
 
   convolution_param->set_num_output(16);
 
@@ -493,7 +592,7 @@ TYPED_TEST(GaussConvolutionLayerTest, TestCuDNNConvolution) {
   convolution_param->add_stride(1);
   convolution_param->add_pad(1);
 
-  convolution_param->set_number_gauss(2);
+  convolution_param->add_number_gauss(2);
 
   convolution_param->set_num_output(8);
 
@@ -664,7 +763,7 @@ TYPED_TEST(GaussConvolutionLayerTest, TestCuDNNConvolutionExtensive) {
   convolution_param->add_stride(1);
   convolution_param->add_pad(1);
 
-  convolution_param->set_number_gauss(num_gauss);
+  convolution_param->add_number_gauss(num_gauss);
 
   convolution_param->set_num_output(num_feat);
 
@@ -752,6 +851,125 @@ TYPED_TEST(GaussConvolutionLayerTest, TestCuDNNConvolutionExtensive) {
 
   } } } } } }
 
+}
+
+TYPED_TEST(GaussConvolutionLayerTest, TestCuDNNComponentsMerging) {
+
+	if (Caffe::mode() == Caffe::CPU)
+		return;
+  typedef typename TypeParam::Dtype Dtype;
+  this->blob_bottom_vec_.push_back(this->blob_bottom_2_);
+  this->blob_top_vec_.push_back(this->blob_top_2_);
+
+  const int S = this->blob_bottom_2_->channels();
+  const int F = 4;
+  const int G = 2;
+
+  LayerParameter layer_param;
+  ConvolutionParameter* convolution_param =
+	  layer_param.mutable_convolution_param();
+
+  convolution_param->add_kernel_size(7);
+  convolution_param->add_stride(1);
+  convolution_param->add_pad(3);
+
+  convolution_param->add_number_gauss(G);
+  convolution_param->add_number_gauss(1);
+
+  convolution_param->set_num_output(F);
+
+  convolution_param->mutable_weight_filler()->set_type("gaussian");
+  convolution_param->mutable_weight_filler()->set_std(0.01);
+
+  convolution_param->mutable_bias_filler()->set_type("constant");
+  convolution_param->mutable_bias_filler()->set_value(0.1);
+
+  convolution_param->mutable_sigma_filler()->set_type("constant");
+  convolution_param->mutable_sigma_filler()->set_value(0.8);
+
+  convolution_param->set_gmm_component_border_bound(1.5);
+  convolution_param->set_gmm_sigma_lower_bound(0.5);
+
+  convolution_param->set_gmm_weight_normalization(false);
+  convolution_param->set_gmm_gauss_normalization(true);
+
+  convolution_param->set_gmm_square_gauss_normalization(true);
+
+  convolution_param->set_gmm_merge_threshold(0.25);
+  {
+
+
+
+	shared_ptr<CuDNNGaussianConvLayer<Dtype> > layer(new CuDNNGaussianConvLayer<Dtype>(layer_param));
+	layer->SetUp(this->blob_bottom_vec_, this->blob_top_vec_);
+
+
+	Blob<Dtype> w_blob_org, mu1_blob_org, mu2_blob_org, sigma_blob_org;
+
+	// initialize with predefined values
+	Dtype w_fixed[24] = {0.0572,-0.0474,0.0674,0.0398,0.0621,-0.0372,0.0649,0.0456,0.0251,0.0471,0.0526,-0.0762,0.0349,0.0180,0.0879,-0.0651,0.0336,-0.0493,0.0268,-0.0543,0.0195,-0.0593,0.0258,-0.0788};
+	Dtype mu1_fixed[24] = {2.9007,2.6520,2.8522,2.4873,3.3834,3.2959,3.5147,3.4099,2.5391,2.9612,2.4954,2.2543,3.4901,3.9438,3.5789,3.5099,2.3823,2.0228,2.3286,2.2390,3.7147,3.6248,3.7756,3.8493};
+	Dtype mu2_fixed[24] = {3.3636,3.4184,3.3023,2.2308,3.3255,3.3340,3.2989,2.1993,3.1086,3.1973,2.9114,2.9175,3.2106,3.0928,2.7739,3.0882,3.2877,3.0428,3.2214,2.8396,3.1918,3.0179,3.3646,2.5582};
+	Dtype sigma_fixed[24] = {0.6166,0.6610,0.5975,0.7559,0.6365,0.7319,0.6297,0.7358,0.6671,0.5842,0.7480,0.7521,0.6317,0.7678,0.6967,0.7771,0.7639,0.8072,0.6916,0.7846,0.8464,0.8034,0.7022,0.7525};
+
+	Dtype* w_set = layer->param_buffer_w_->mutable_cpu_data();
+	Dtype* mu1_set = layer->param_buffer_mu1_->mutable_cpu_data();
+	Dtype* mu2_set = layer->param_buffer_mu2_->mutable_cpu_data();
+	Dtype* sigma_set = layer->param_buffer_sigma_->mutable_cpu_data();
+
+	memcpy(w_set, w_fixed, sizeof(Dtype) * 24);
+	memcpy(mu1_set, mu1_fixed, sizeof(Dtype) * 24);
+	memcpy(mu2_set, mu2_fixed, sizeof(Dtype) * 24);
+	memcpy(sigma_set, sigma_fixed, sizeof(Dtype) * 24);
+
+	w_blob_org.CopyFrom(*layer->param_buffer_w_, false, true);
+	mu1_blob_org.CopyFrom(*layer->param_buffer_mu1_, false, true);
+	mu2_blob_org.CopyFrom(*layer->param_buffer_mu2_, false, true);
+	sigma_blob_org.CopyFrom(*layer->param_buffer_sigma_, false, true);
+
+	Blob<Dtype> scores_blob(3,S,G,F);
+
+	// run components merging
+	layer->merge_components(&scores_blob);
+
+	const Dtype* scores = scores_blob.cpu_data();
+	const Dtype* score_dist = scores_blob.cpu_data() + scores_blob.offset(0);
+	const Dtype* score_hell = scores_blob.cpu_data() + scores_blob.offset(1);
+	const Dtype* score_KL = scores_blob.cpu_data() + scores_blob.offset(2);
+
+
+	Dtype gt[24*3] = {0.234451, 0.421731, 0.438918, 0.852183, 0.234451, 0.421731, 0.438918, 0.852183, 0.914805, 0.976423, 1.192879, 1.605670, 0.914805, 0.976423, 1.192879, 1.605670, 1.784487, 2.567024, 2.114315, 2.672252, 1.784487, 2.567024, 2.114315, 2.672252, 0.072152, 0.105056, 0.136109, 0.174391, 0.072152, 0.105056, 0.136109, 0.174391, 0.237913, 0.244742, 0.249239, 0.290713, 0.237913, 0.244742, 0.249239, 0.290713, 0.292355, 0.390305, 0.419695, 0.432039, 0.292355, 0.390305, 0.419695, 0.432039, 0.290339, 0.403353, 0.556120, 0.787755, 0.290339, 0.403353, 0.556120, 0.787755, 1.149327, 0.890907, 1.234077, 1.330498, 1.149327, 0.890907, 1.234077, 1.330498, 1.255300, 1.988571, 2.144196, 2.361373, 1.255300, 1.988571, 2.144196, 2.361373 };
+
+	for (int i = 0; i < scores_blob.count(); ++i)
+		EXPECT_NEAR(scores[i], gt[i], 1e-2);
+/*
+	const Dtype* w = layer->param_buffer_w_->cpu_data();
+	const Dtype* mu1 = layer->param_buffer_mu1_->cpu_data();
+	const Dtype* mu2 = layer->param_buffer_mu2_->cpu_data();
+	const Dtype* sigma = layer->param_buffer_sigma_->cpu_data();
+
+	const Dtype* w_org = w_blob_org.cpu_data();
+	const Dtype* mu1_org = mu1_blob_org.cpu_data();
+	const Dtype* mu2_org = mu2_blob_org.cpu_data();
+	const Dtype* sigma_org = sigma_blob_org.cpu_data();
+
+	printf("Weights (org vs fixed -- dist, hellinger, KL-dist): \n");
+	for (int i = 0; i < w_blob_org.count(); ++i)
+		printf("%f, %f -- %f, %f, %f\n",w_org[i],w[i], score_dist[i],score_hell[i],score_KL[i]);
+
+	printf("Mean 1 (org vs fixed ): \n");
+	for (int i = 0; i < w_blob_org.count(); ++i)
+		printf("%f, %f\n",mu1_org[i],mu1[i] );
+
+	printf("Mean 2 (org vs fixed ): \n");
+	for (int i = 0; i < w_blob_org.count(); ++i)
+		printf("%f, %f\n",mu2_org[i],mu2[i] );
+
+	printf("Sigma (org vs fixed ): \n");
+	for (int i = 0; i < w_blob_org.count(); ++i)
+		printf("%f, %f\n",sigma_org[i],sigma[i] );
+*/
+  }
 }
 
 /*

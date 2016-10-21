@@ -55,6 +55,8 @@ class BaseGaussianConvLayer : public BaseConvolutionLayer<Dtype> {
 
     int gmm_mean_iteration_step;
 	int gmm_sigma_iteration_step;
+	int gmm_merge_iteration_step;
+	float gmm_merge_threshold;
 
 	int NUM_GAUSS;
 
@@ -102,10 +104,14 @@ class BaseGaussianConvLayer : public BaseConvolutionLayer<Dtype> {
 	shared_ptr<Blob<Dtype> > weight_vert_buffer_; // vertical weights
 	shared_ptr<Blob<Dtype> > weight_horiz_buffer_; // Horizontal weights
 
+	shared_ptr<Blob<Dtype> > random_mu1_buffer_;
+	shared_ptr<Blob<Dtype> > random_mu2_buffer_;
+
 	bool using_gpu;
 
     int current_iteration_index;
 
+    int num_extra_blobs;
 };
 
 template <typename Dtype>
@@ -176,7 +182,7 @@ template <typename Dtype>
 class CuDNNGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
  public:
   explicit CuDNNGaussianConvLayer(const LayerParameter& param)
-	  : BaseGaussianConvLayer<Dtype>(param) , handles_setup_(false) {}
+	  : BaseGaussianConvLayer<Dtype>(param), handles_setup_(false), dirty_gauss_dist_buffer(true), dirty_norm_buffer(true), dirty_norm_with_w_buffer(true), dirty_weight_buffer(true), dirty_weight_deriv_buffer(true), dirty_mu1_deriv_buffer(true), dirty_mu2_deriv_buffer(true), dirty_sigma_deriv_buffer(true) {}
 
   virtual ~CuDNNGaussianConvLayer();
 
@@ -188,6 +194,32 @@ class CuDNNGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
         const vector<Blob<Dtype>*>& top);
   virtual void Backward_gpu(const vector<Blob<Dtype>*>& top,
         const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
+
+  shared_ptr<Blob<Dtype> > get_gauss_distribution_buffer(cudaStream_t streamId = 0);
+  shared_ptr<Blob<Dtype> > get_gauss_normalization_with_weight_buffer(cudaStream_t streamId = 0);
+  shared_ptr<Blob<Dtype> > get_gauss_normalization_buffer(cudaStream_t streamId = 0);
+
+  shared_ptr<Blob<Dtype> > get_weight_filters(cudaStream_t streamId = 0);
+  shared_ptr<Blob<Dtype> > get_weight_derivative_filters(shared_ptr<Blob<Dtype> > output_buffer, cudaStream_t streamId = 0);
+  shared_ptr<Blob<Dtype> > get_mu1_derivative_filters(shared_ptr<Blob<Dtype> > output_buffer, shared_ptr<Blob<Dtype> > deriv_weight_buffer, cudaStream_t streamId = 0);
+  shared_ptr<Blob<Dtype> > get_mu2_derivative_filters(shared_ptr<Blob<Dtype> > output_buffer, shared_ptr<Blob<Dtype> > deriv_weight_buffer, cudaStream_t streamId = 0);
+  shared_ptr<Blob<Dtype> > get_sigma_derivative_filters(shared_ptr<Blob<Dtype> > output_buffer, shared_ptr<Blob<Dtype> > deriv_weight_buffer, cudaStream_t streamId = 0);
+
+  void merge_components(Blob<Dtype>* scores = NULL);
+
+  void fill_random_mean(Blob<Dtype>* random_mu1, Blob<Dtype>* random_mu2);
+
+  void set_buffers_dirty() {
+	  dirty_gauss_dist_buffer = true;
+	  dirty_norm_buffer = true;
+	  dirty_norm_with_w_buffer = true;
+
+	  dirty_weight_buffer = true;
+	  dirty_weight_deriv_buffer = true;
+	  dirty_mu1_deriv_buffer = true;
+	  dirty_mu2_deriv_buffer = true;
+	  dirty_sigma_deriv_buffer = true;
+  }
 
   bool handles_setup_;
   cudnnHandle_t* handle_;
@@ -212,9 +244,56 @@ class CuDNNGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
   size_t workspaceSizeInBytes;  // size of underlying storage
   void *workspaceData;  // underlying storage
   void **workspace;  // aliases into workspaceData
-  
+
   int num_guass_per_compute;
-  
+
+  /// pre-compute variables
+
+  bool dirty_gauss_dist_buffer;
+  bool dirty_norm_buffer;
+  bool dirty_norm_with_w_buffer;
+
+  bool dirty_weight_buffer;
+  bool dirty_weight_deriv_buffer;
+  bool dirty_mu1_deriv_buffer;
+  bool dirty_mu2_deriv_buffer;
+  bool dirty_sigma_deriv_buffer;
+
+  // weight kernels computed from Guassian component parameters
+  //shared_ptr<Blob<Dtype> > weight_buffer_;
+  // two deriv buffers of size [S * G * F * K_h * K_w]
+  struct {
+	  shared_ptr<Blob<Dtype> > weights; // used for weight kernel (as well as, deriv of mu1, deriv of mu2 and deriv of sigma kernels when in release mode)
+	  shared_ptr<Blob<Dtype> > deriv_weight; // used for deriv of weights
+	  shared_ptr<Blob<Dtype> > deriv_mu1; // used for deriv of mu1
+	  shared_ptr<Blob<Dtype> > deriv_mu2; // used for deriv of mu2
+	  shared_ptr<Blob<Dtype> > deriv_sigma; // used for deriv of sigma
+
+  } kernel_buf;
+
+  // intermediate buffers when computing derivative kernels in precompute_guassian_weights_gpu
+  struct {
+	  shared_ptr<Blob<Dtype> > distribution;	// [S * G * F * K_h * K_w]
+
+	  // buffers for pre-computed sigma^2, sigma^3 and 1/2*sigma^2 (they have small memory requirements - size [S x F x G])
+	  shared_ptr<Blob<Dtype> > sigma_square_inv;
+	  shared_ptr<Blob<Dtype> > sigma_cube_inv;
+	  shared_ptr<Blob<Dtype> > sigma_square_inv_half;
+
+	  // normalization buffers are small - only [S x F x G] in size
+	  shared_ptr<Blob<Dtype> > norm;
+	  shared_ptr<Blob<Dtype> > norm_with_w;
+
+	  // temporary sum buffers (they may not be needed but are only of [S x F x G] size - should be realy small)
+	  shared_ptr<Blob<Dtype> > deriv_mu1_sums;
+	  shared_ptr<Blob<Dtype> > deriv_mu2_sums;
+	  shared_ptr<Blob<Dtype> > deriv_sigma_sums;
+
+	  // buffers for holding random variables during mering of components - these buffers MUST be part of this->blobs_ so that they are sync among multiple-gpus
+	  shared_ptr<Blob<Dtype> > random_mu1;
+	  shared_ptr<Blob<Dtype> > random_mu2;
+  } tmp_buf;
+
 };
 
 template <typename Dtype>

@@ -22,8 +22,11 @@ void BaseGaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom
 		const vector<Blob<Dtype>*>& top) {
 
 	//openblas_set_num_threads(1);
-	int NUM_GAUSS_PER_AXIS = this->layer_param_.convolution_param().number_gauss();
-	NUM_GAUSS =  NUM_GAUSS_PER_AXIS * NUM_GAUSS_PER_AXIS;
+	CHECK_GT(this->layer_param_.convolution_param().number_gauss_size(),0) << "Missing at least one number_gauss parameter.";
+
+	int NUM_GAUSS_PER_AXIS_X = this->layer_param_.convolution_param().number_gauss(0);
+	int NUM_GAUSS_PER_AXIS_Y = this->layer_param_.convolution_param().number_gauss_size() > 1? this->layer_param_.convolution_param().number_gauss(1) : NUM_GAUSS_PER_AXIS_X;
+	NUM_GAUSS =  NUM_GAUSS_PER_AXIS_X * NUM_GAUSS_PER_AXIS_Y;
 
 	// TODO: with new changes in master kernel_size, pad and stripe are repeated fields
 	//       and this code needs to be changes to use that
@@ -192,12 +195,17 @@ void BaseGaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom
 	if (this->blobs_.size() > 0) {
 		LOG(INFO) << "Skipping parameter initialization";
 	} else {
+
+		this->num_extra_blobs = 8;
+
+		// to support loading older snapshots we need to ignore last two blobs which hold random means for components merging
+		if (this->layer_param_.convolution_param().gmm_legacy_merge_blobs())
+			this->num_extra_blobs -= 2;
+
 		if (this->bias_term_) {
-			this->blobs_.resize(1 + NUM_GAUSS_COMPONENT_PARAM + NUM_GAUSS_PARAM + 6 );
-			//this->blobs_.resize(1 + NUM_GAUSS_COMPONENT_PARAM + NUM_GAUSS_PARAM);
+			this->blobs_.resize(1 + NUM_GAUSS_COMPONENT_PARAM + NUM_GAUSS_PARAM + this->num_extra_blobs );
 		} else {
-			this->blobs_.resize(NUM_GAUSS_COMPONENT_PARAM +  NUM_GAUSS_PARAM + 6 );
-			//this->blobs_.resize(NUM_GAUSS_COMPONENT_PARAM +  NUM_GAUSS_PARAM);
+			this->blobs_.resize(NUM_GAUSS_COMPONENT_PARAM +  NUM_GAUSS_PARAM + this->num_extra_blobs );
 		}
 		// Initialize and fill the weights:
 		// output channels x input channels per-group x kernel height x kernel width
@@ -240,18 +248,18 @@ void BaseGaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom
 		Dtype* mu2_buf = tmp_mu2.mutable_cpu_data();
 
 		//int num_gauss_per_axis = NUM_GAUSS /2;
-		Dtype* offset_x = new Dtype[NUM_GAUSS_PER_AXIS];
-		Dtype* offset_y = new Dtype[NUM_GAUSS_PER_AXIS];
+		Dtype* offset_x = new Dtype[NUM_GAUSS_PER_AXIS_X];
+		Dtype* offset_y = new Dtype[NUM_GAUSS_PER_AXIS_Y];
 
 		// use gmm_component_border_bound as start and stop position of where components are allowed to be within the kernel
 		Dtype gmm_kernel_h_ = (Dtype)this->kernel_h_ - 2*this->gmm_component_border_bound;
 		Dtype gmm_kernel_w_ = (Dtype)this->kernel_w_ - 2*this->gmm_component_border_bound;
 
-		for (int i = 0; i < NUM_GAUSS_PER_AXIS; i++) {
-			//offset_x[i] = (i+1)*this->kernel_w_ /(NUM_GAUSS_PER_AXIS+1);
-			//offset_y[i] = (i+1)*this->kernel_h_ /(NUM_GAUSS_PER_AXIS+1);
-			offset_x[i] = this->gmm_component_border_bound + (i)*gmm_kernel_w_ /(Dtype)(NUM_GAUSS_PER_AXIS) + (- 0.5+(gmm_kernel_w_)/(Dtype)(2*NUM_GAUSS_PER_AXIS));
-			offset_y[i] = this->gmm_component_border_bound + (i)*gmm_kernel_h_ /(Dtype)(NUM_GAUSS_PER_AXIS) + (- 0.5+(gmm_kernel_h_)/(Dtype)(2*NUM_GAUSS_PER_AXIS));
+		for (int i = 0; i < NUM_GAUSS_PER_AXIS_X; i++) {
+			offset_x[i] = this->gmm_component_border_bound + (i)*gmm_kernel_w_ /(Dtype)(NUM_GAUSS_PER_AXIS_X) + (- 0.5+(gmm_kernel_w_)/(Dtype)(2*NUM_GAUSS_PER_AXIS_X));
+		}
+		for (int i = 0; i < NUM_GAUSS_PER_AXIS_Y; i++) {
+			offset_y[i] = this->gmm_component_border_bound + (i)*gmm_kernel_h_ /(Dtype)(NUM_GAUSS_PER_AXIS_Y) + (- 0.5+(gmm_kernel_h_)/(Dtype)(2*NUM_GAUSS_PER_AXIS_Y));
 		}
 
 		// add offset to mean so that (0,0) is at center
@@ -269,11 +277,12 @@ void BaseGaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom
 				for (int i3 = 0; i3 < inner_size; ++i3) {
 					const int gauss_idx = i2;
 					const int offset_idx = (i1 * middle_size + i2 )* inner_size + i3;
-					mu1_buf[offset_idx] = offset_x[gauss_idx / NUM_GAUSS_PER_AXIS] - kernel_center_w;
-					mu2_buf[offset_idx] = offset_y[gauss_idx %  NUM_GAUSS_PER_AXIS] - kernel_center_h;
+					mu1_buf[offset_idx] = offset_x[gauss_idx / NUM_GAUSS_PER_AXIS_Y] - kernel_center_w;
+					mu2_buf[offset_idx] = offset_y[gauss_idx %  NUM_GAUSS_PER_AXIS_Y] - kernel_center_h;
 				}
 			}
 		}
+
 		delete [] offset_x;
 		delete [] offset_y;
 
@@ -301,6 +310,9 @@ void BaseGaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom
 		this->deriv_mu1_buffer_.reset(new Blob<Dtype>());
 		this->deriv_mu2_buffer_.reset(new Blob<Dtype>());
 
+		this->random_mu1_buffer_.reset(new Blob<Dtype>());
+		this->random_mu2_buffer_.reset(new Blob<Dtype>());
+
 		this->blobs_[precomputed_blobs_offset + 0] = this->weight_buffer_;
 		this->blobs_[precomputed_blobs_offset + 1] = this->deriv_error_buffer_;
 		this->blobs_[precomputed_blobs_offset + 2] = this->deriv_weight_buffer_;
@@ -308,6 +320,21 @@ void BaseGaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom
 		this->blobs_[precomputed_blobs_offset + 4] = this->deriv_mu1_buffer_;
 		this->blobs_[precomputed_blobs_offset + 5] = this->deriv_mu2_buffer_;
 
+		if (this->layer_param_.convolution_param().gmm_legacy_merge_blobs() == false) {
+			this->blobs_[precomputed_blobs_offset + 6] = this->random_mu1_buffer_;
+			this->blobs_[precomputed_blobs_offset + 7] = this->random_mu2_buffer_;
+			// NOTE: adding/removing blobs here also needs to be taken care of in CuDNNGaussianConvLayer
+
+			// NOTICE: make sure lr_param for random mean buffers are set to 1 so that they are synced between multiple GPUs
+			if (this->layer_param().param_size() > precomputed_blobs_offset + 6){
+				CHECK_EQ(1, this->layer_param().param(precomputed_blobs_offset + 6).lr_mult()) << "lr_param for random mean buffer (index " << precomputed_blobs_offset + 6 << ") must be set to 1";
+				CHECK_EQ(0, this->layer_param().param(precomputed_blobs_offset + 6).decay_mult())  << "decay_mult for random mean buffer (index " << precomputed_blobs_offset + 6 << ") must be set to 0";
+			}
+			if (this->layer_param().param_size() > precomputed_blobs_offset + 7){
+				CHECK_EQ(1, this->layer_param().param(precomputed_blobs_offset + 7).lr_mult())  << "lr_param for random mean buffer (index " << precomputed_blobs_offset + 7 << ") must be set to 1";
+				CHECK_EQ(0, this->layer_param().param(precomputed_blobs_offset + 7).decay_mult())  << "decay_mult for random mean buffer (index " << precomputed_blobs_offset + 7 << ") must be set to 0";
+			}
+		}
 	}
 	// Propagate gradients to the parameters (as directed by backward pass).
 	this->param_propagate_down_.resize(this->blobs_.size(), true);
@@ -321,9 +348,23 @@ void BaseGaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom
 	this->gmm_mean_iteration_step = this->layer_param_.convolution_param().gmm_mean_iteration_step();
 	this->gmm_sigma_iteration_step = this->layer_param_.convolution_param().gmm_sigma_iteration_step();
 
+	// make sure component merging is done only at training step
+	if (this->phase_ == TRAIN)
+		this->gmm_merge_iteration_step = this->layer_param_.convolution_param().gmm_merge_iteration_step();
+	else
+		this->gmm_merge_iteration_step = 0;
+
+	this->gmm_merge_threshold = this->layer_param_.convolution_param().gmm_merge_threshold();
+
 	this->use_gmm_seperable_kernels = this->layer_param_.convolution_param().gmm_seperable_forward_pass();
 
+
 	this->current_iteration_index = 0;
+
+	// setup default bottom/top dimensions to zero
+	this->bottom_dim_ = 0;
+	this->top_dim_ = 0;
+	this->num_ = 0;
 }
 
 template <typename Dtype>
@@ -332,8 +373,8 @@ void BaseGaussianConvLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
 
 
 	const int first_spatial_axis = this->channel_axis_ + 1;
-	int NUM_GAUSS_PER_AXIS = this->layer_param_.convolution_param().number_gauss();
-	int NUM_GAUSS =  NUM_GAUSS_PER_AXIS * NUM_GAUSS_PER_AXIS;
+	//int NUM_GAUSS_PER_AXIS = this->layer_param_.convolution_param().number_gauss();
+	//int NUM_GAUSS =  NUM_GAUSS_PER_AXIS * NUM_GAUSS_PER_AXIS;
 
 	CHECK_EQ(4, bottom[0]->num_axes()) << "Input must have 4 axes, "
 			<< "corresponding to (num, channels, height, width)";
@@ -389,6 +430,9 @@ void BaseGaussianConvLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
 			conv_input_shape_data[i] = bottom[0]->shape(this->channel_axis_ + i);
 		}
 	}
+
+	this->random_mu1_buffer_->ReshapeLike(*this->param_buffer_w_);
+	this->random_mu2_buffer_->ReshapeLike(*this->param_buffer_w_);
 
 	this->weight_buffer_->Reshape(this->conv_out_channels_, this->conv_in_channels_, this->kernel_h_, this->kernel_w_);
 
@@ -1225,8 +1269,8 @@ void GaussianConvLayer<Dtype>::compute_parameter_deriv(int num_iter,
 
 //	clock_t start_t = clock();
 
-	int NUM_GAUSS_PER_AXIS = this->layer_param_.convolution_param().number_gauss();
-	int NUM_GAUSS =  NUM_GAUSS_PER_AXIS * NUM_GAUSS_PER_AXIS;
+	//int NUM_GAUSS_PER_AXIS = this->layer_param_.convolution_param().number_gauss();
+	//int NUM_GAUSS =  NUM_GAUSS_PER_AXIS * NUM_GAUSS_PER_AXIS;
 
 	const Dtype* col_buff = this->using_gpu ? col_activations_buffer.gpu_data() : col_activations_buffer.cpu_data();
 	const Dtype* deriv_kernels = this->using_gpu ? deriv_kernels_buffer.gpu_data() : deriv_kernels_buffer.cpu_data();// around 0.05 s for copying to GPU per layer for 16-feature, 16-subfeture of size 5x5 kernels
@@ -1259,7 +1303,7 @@ void GaussianConvLayer<Dtype>::compute_parameter_deriv(int num_iter,
 	}
 
 	caffe_cpu_gpu_gemm_batched(CblasNoTrans, CblasNoTrans,
-					this->conv_out_channels_ * NUM_GAUSS,
+					this->conv_out_channels_ * this->NUM_GAUSS,
 					this->conv_out_spatial_dim_,
 					this->kernel_h_ * this->kernel_w_,
 					(Dtype)1., (const Dtype**)d_A, (const Dtype**)d_B,
@@ -1270,7 +1314,7 @@ void GaussianConvLayer<Dtype>::compute_parameter_deriv(int num_iter,
 	int tmp_buffer_count = tmp_buffer_.count();
 	int batch_mul_size = this->num_output_ * this->height_out_ * this->width_out_;
 	int batch_sum_size = this->height_out_ * this->width_out_;
-	int size_params = this->conv_in_channels_ * this->conv_out_channels_ * NUM_GAUSS;
+	int size_params = this->conv_in_channels_ * this->conv_out_channels_ * this->NUM_GAUSS;
 
 	//Blob<Dtype> top_error_buffer_(top_error_buffer.shape());
 	Blob<Dtype>& top_error_buffer_ = top_error_buffer;
@@ -1300,7 +1344,7 @@ void GaussianConvLayer<Dtype>::compute_parameter_deriv(int num_iter,
 	caffe_gpu_memcpy(param_output_buffer.count()*sizeof(Dtype),param_output, tmp_blob_.mutable_gpu_diff());
 //	caffe_gpu_set(param_output_buffer.count(), (Dtype)0, tmp_blob_.mutable_gpu_diff());
 
-	for (int g = 0; g < NUM_GAUSS; ++g) {
+	for (int g = 0; g < this->NUM_GAUSS; ++g) {
 		for (int s = 0; s < this->conv_in_channels_; ++s) {
 
 			//const Dtype* tmp_buff = this->using_gpu ? tmp_buffer_[s]->gpu_data() : tmp_buffer_[s]->cpu_data();
@@ -1367,7 +1411,7 @@ void GaussianConvLayer<Dtype>::compute_parameter_deriv(int num_iter,
 
 	if (dump_data) {
 
-		cv::Mat param_output_mat(1,this->conv_out_channels_ * this->conv_in_channels_ * NUM_GAUSS, CV_32FC1, (void*)(tmp_blob_.mutable_cpu_diff() + param_output_buffer.offset(param_output_offset)));
+		cv::Mat param_output_mat(1,this->conv_out_channels_ * this->conv_in_channels_ * this->NUM_GAUSS, CV_32FC1, (void*)(tmp_blob_.mutable_cpu_diff() + param_output_buffer.offset(param_output_offset)));
 
 		std::ofstream param_output_file("/home/domen/Downloads/1/param_output_mat_correct.m");
 		param_output_file << "param_output_mat_correct_ = " << param_output_mat << ";";
@@ -1460,13 +1504,13 @@ void GaussianConvLayer<Dtype>::compute_parameter_deriv(int num_iter,
 	// then we use segmented reduce-sum from NVIDIA cub library to sum each row in [S * G * F] x [H*W] thus producing [S x G x F] output
 	start_t = clock();
 
-//	caffe_cpu_sum(tmp_buffer_count, cpu_tmp_buffer_.mutable_cpu_data(), tmp_blob_.mutable_cpu_diff() + param_output_buffer.offset(param_output_offset), batch_sum_size);
+//	caffe_cpu_sum(tmp_buffer_count, cpu_tmp_buffer_.mutable_cpu_data(), tmp_blob_.mutable_cpu_diff() + param_output_buffer.offset(param_output_offset), batch_sum_size); // NOTE: this might require with_add=true, but not sure
 #endif
-	caffe_gpu_sum(tmp_buffer_count, tmp_buff_all, param_output, size_params, this->tmp_index_gpu, 0);
-	//caffe_gpu_sum(tmp_buffer_count, tmp_buff_all, param_output, batch_sum_size);
+	caffe_gpu_sum(tmp_buffer_count, tmp_buff_all, param_output, size_params, this->tmp_index_gpu, true, 0);
+	//caffe_gpu_sum(tmp_buffer_count, tmp_buff_all, param_output, batch_sum_size); // NOTE: this might require with_add=true, but not sure
 #ifdef CHECK_GPU_SUM_MUL
-	//caffe_gpu_sum(tmp_buffer_.count(), tmp_buff_all, tmp_blob_ptr, this->conv_out_channels_ * this->conv_in_channels_ * NUM_GAUSS);
-	//caffe_gpu_add(this->conv_out_channels_ * this->conv_in_channels_ * NUM_GAUSS, tmp_blob_ptr, param_output + param_output_buffer.offset(param_output_offset), param_output + param_output_buffer.offset(param_output_offset));
+	//caffe_gpu_sum(tmp_buffer_.count(), tmp_buff_all, tmp_blob_ptr, this->conv_out_channels_ * this->conv_in_channels_ * this->NUM_GAUSS) // NOTE: this might require with_add=true, but not sure;
+	//caffe_gpu_add(this->conv_out_channels_ * this->conv_in_channels_ * this->NUM_GAUSS, tmp_blob_ptr, param_output + param_output_buffer.offset(param_output_offset), param_output + param_output_buffer.offset(param_output_offset));
 
 	end_t = clock();
 	LOG(INFO) << "caffe_gpu_sum done in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC);
@@ -1502,7 +1546,7 @@ void GaussianConvLayer<Dtype>::compute_parameter_deriv(int num_iter,
 
 	//LOG(INFO) << "done caffe_gpu_sum";
 	if (dump_data) {
-		cv::Mat param_output_mat(1,this->conv_out_channels_ * this->conv_in_channels_ * NUM_GAUSS, CV_32FC1, (void*)(param_output_buffer.cpu_diff() + param_output_buffer.offset(param_output_offset)));
+		cv::Mat param_output_mat(1,this->conv_out_channels_ * this->conv_in_channels_ * this->NUM_GAUSS, CV_32FC1, (void*)(param_output_buffer.cpu_diff() + param_output_buffer.offset(param_output_offset)));
 
 		std::ofstream param_output_file("/home/domen/Downloads/1/param_output_mat.m");
 		param_output_file << "param_output_mat_ = " << param_output_mat << ";";
@@ -1711,7 +1755,7 @@ void GaussianConvLayer<Dtype>::forward_cpu_gpu_seperable(const Dtype* input, con
 		clock_t zero_first = clock() - start_t;
 #endif
 		//this->tmp_buffer_sepe_1_.Reshape(1, this->conv_in_channels_, this->height_ + 2 * this->pad_h_, this->width_ + 2 * this->pad_w_);
-		//this->tmp_buffer_sepe_2_.Reshape(this->conv_in_channels_, this->conv_out_channels_ * NUM_GAUSS, this->height_ + 2 * this->pad_h_, this->width_ + 2 * this->pad_w_);
+		//this->tmp_buffer_sepe_2_.Reshape(this->conv_in_channels_, this->conv_out_channels_ * this->NUM_GAUSS, this->height_ + 2 * this->pad_h_, this->width_ + 2 * this->pad_w_);
 
 		//col_buff = this->tmp_buffer_sepe_1_.mutable_cpu_data();
 		//second_col_buff = this->tmp_buffer_sepe_2_.mutable_cpu_data();
@@ -1771,8 +1815,8 @@ void GaussianConvLayer<Dtype>::forward_cpu_gpu_seperable(const Dtype* input, con
 		LOG(INFO) << "conv1d_second done in " << (((float)(conv1d_second))/CLOCKS_PER_SEC);
 		LOG(INFO) << "remove_padding done in " << (((float)(remove_padding))/CLOCKS_PER_SEC);
 #endif
-		//this->tmp_buffer_sepe_1_.Reshape(this->conv_in_channels_, NUM_GAUSS* this->conv_out_channels_, this->height_ + 2* this->pad_h_, this->width_ + 2* this->pad_w_);
-		//this->tmp_buffer_sepe_2_.Reshape(this->conv_in_channels_, NUM_GAUSS* this->conv_out_channels_, this->height_ + 2* this->pad_h_, this->width_ + 2* this->pad_w_);
+		//this->tmp_buffer_sepe_1_.Reshape(this->conv_in_channels_, this->NUM_GAUSS* this->conv_out_channels_, this->height_ + 2* this->pad_h_, this->width_ + 2* this->pad_w_);
+		//this->tmp_buffer_sepe_2_.Reshape(this->conv_in_channels_, this->NUM_GAUSS* this->conv_out_channels_, this->height_ + 2* this->pad_h_, this->width_ + 2* this->pad_w_);
 
 	}
 }

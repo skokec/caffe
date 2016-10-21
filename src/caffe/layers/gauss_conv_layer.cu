@@ -65,6 +65,7 @@ __global__ void conv_gauss_distributions_kernel(const int N, const int k_w, int 
 		guass_deriv_mu1[ptr_offset] = (dist_x * sigma_square_inv) * gauss_value;
 		guass_deriv_mu2[ptr_offset] = (dist_y * sigma_square_inv) * gauss_value;
 		guass_deriv_sigma[ptr_offset] = (dist * sigma_cube_inv) * gauss_value;
+
 	}
 }
 
@@ -211,12 +212,14 @@ void BaseGaussianConvLayer<Dtype>::precompute_guassian_weights_gpu(bool is_backw
 
 	conv_gauss_distributions_kernel<Dtype><<<numBlocks,threadsPerBlock>>>(S*G*F, K_w, K_h, gauss_params_w, gauss_params_mu1, gauss_params_mu2, gauss_params_sigma_square_inv, gauss_params_sigma_cube_inv, gauss_params_sigma_square_inv_half, gauss_dist, deriv_mu1, deriv_mu2, deriv_sigma);
 
-	/*{
+	/*
+	{
 		const Dtype* gauss_dist = this->guass_dist_buffer_.cpu_data();
 		const Dtype* deriv_mu1 = this->deriv_mu1_buffer_->cpu_data();
 		const Dtype* deriv_mu2 = this->deriv_mu2_buffer_->cpu_data();
 		const Dtype* deriv_sigma = this->deriv_sigma_buffer_->cpu_data();
 	}*/
+
 
 	// 2. for each filter (G, dG/dx, dG/dy, dG/dsigma) calculate sums (use different sums if using normalization by square sum)
 	Dtype* guass_norm = this->guass_norm_buffer_.mutable_gpu_data();
@@ -225,7 +228,13 @@ void BaseGaussianConvLayer<Dtype>::precompute_guassian_weights_gpu(bool is_backw
 	Dtype* deriv_sigma_sums = this->deriv_sigma_sums_buffer_.mutable_gpu_data();
 
 	// TODO: all three sums can be done in parallel, do we need seperate streams to make this run in parallel ?
-	if (this->use_gmm_square_gauss_normalization) {
+	if (this->use_gmm_gauss_normalization == false) {
+		// if there is no normalization then there should be no derivative of normalization
+		caffe_gpu_set((S*F*G), (Dtype)0, deriv_mu1_sums);
+		caffe_gpu_set((S*F*G), (Dtype)0, deriv_mu2_sums);
+		caffe_gpu_set((S*F*G), (Dtype)0, deriv_sigma_sums);
+
+	} else if (this->use_gmm_square_gauss_normalization) {
 		// when using square gauss normalization derivatives dG/dx, dG/dy, dG/dsigma need to be multiplied by un-weighted, un-normalized gaussian dstirubution i.e. gauss_dist
 		Dtype* deriv_mu1_times_gauss_dist = this->deriv_mu1_times_gauss_dist_buffer_.mutable_gpu_data();
 		Dtype* deriv_mu2_times_gauss_dist = this->deriv_mu2_times_gauss_dist_buffer_.mutable_gpu_data();

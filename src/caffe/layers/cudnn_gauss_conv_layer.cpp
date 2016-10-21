@@ -10,6 +10,8 @@ namespace caffe {
 // Set to three for the benefit of the backward pass, which
 // can use separate streams for calculating the gradient w.r.t.
 // bias, filter weights, and bottom data for each group independently
+#define GAUSS_CUDNN_STREAMS_PER_GROUP 2
+// for legacy !!
 #define CUDNN_STREAMS_PER_GROUP 3
 
 /**
@@ -21,9 +23,12 @@ void CuDNNGaussianConvLayer<Dtype>::LayerSetUp(
 
   BaseGaussianConvLayer<Dtype>::LayerSetUp(bottom, top);
 
+  CHECK_EQ(1, this->group_)
+        << "CuDNNGaussianConvLayer does not support group parameter at the moment";
+
   // Initialize CUDA streams and cuDNN.
-  stream_         = new cudaStream_t[this->group_ * CUDNN_STREAMS_PER_GROUP];
-  handle_         = new cudnnHandle_t[this->group_ * CUDNN_STREAMS_PER_GROUP];
+  stream_         = new cudaStream_t[this->group_ * GAUSS_CUDNN_STREAMS_PER_GROUP];
+  handle_         = new cudnnHandle_t[this->group_ * GAUSS_CUDNN_STREAMS_PER_GROUP];
 
   // Initialize algorithm arrays
   fwd_algo_       = new cudnnConvolutionFwdAlgo_t[bottom.size()];
@@ -36,7 +41,7 @@ void CuDNNGaussianConvLayer<Dtype>::LayerSetUp(
   // workspace data
   workspaceSizeInBytes = 0;
   workspaceData = NULL;
-  workspace = new void*[this->group_ * CUDNN_STREAMS_PER_GROUP];
+  workspace = new void*[this->group_ * GAUSS_CUDNN_STREAMS_PER_GROUP];
 
   for (size_t i = 0; i < bottom.size(); ++i) {
     // initialize all to default algorithms
@@ -47,7 +52,7 @@ void CuDNNGaussianConvLayer<Dtype>::LayerSetUp(
     workspace_bwd_data_sizes_[i] = 0;
   }
 
-  for (int g = 0; g < this->group_ * CUDNN_STREAMS_PER_GROUP; g++) {
+  for (int g = 0; g < this->group_ * GAUSS_CUDNN_STREAMS_PER_GROUP; g++) {
     CUDA_CHECK(cudaStreamCreate(&stream_[g]));
     CUDNN_CHECK(cudnnCreate(&handle_[g]));
     CUDNN_CHECK(cudnnSetStream(handle_[g], stream_[g]));
@@ -91,8 +96,8 @@ void CuDNNGaussianConvLayer<Dtype>::LayerSetUp(
 
   handles_setup_ = true;
 
-  paralel_streams = new cudaStream_t[this->NUM_GAUSS*4];
-  for (int g = 0; g < this->NUM_GAUSS*4; ++g) {
+  paralel_streams = new cudaStream_t[4];
+  for (int g = 0; g < 4; ++g) {
 	  cudaStreamCreate(&paralel_streams[g]);
   }
 }
@@ -109,6 +114,83 @@ void CuDNNGaussianConvLayer<Dtype>::Reshape(
   }
 
   BaseGaussianConvLayer<Dtype>::Reshape(bottom, top);
+
+  // we should remove all buffers from BaseGaussianConvLayer and replace them with our own buffers
+  // however Blob has lazy allocation so no memory will be allocated if it is not used (also important not to remove them since they can be used in unit tests)
+  /*
+  {
+	this->param_buffer_sigma_square_inv_.reset();
+	this->param_buffer_sigma_cube_inv_.reset();
+	this->param_buffer_sigma_square_inv_half_.reset();
+	this->weight_buffer_.reset();
+	this->deriv_error_buffer_.reset();
+	this->deriv_weight_buffer_.reset();
+	this->deriv_sigma_buffer_.reset();
+	this->deriv_mu1_buffer_.reset();
+	this->deriv_mu2_buffer_.reset();
+	this->is_weight_enabled_buffer_.reset();
+	this->tmp_deriv_weight_buffer_.reset();
+	this->guass_dist_buffer_.reset();
+	this->gauss_dist_square_buffer_.reset();
+	this->deriv_mu1_times_gauss_dist_buffer_.reset();
+	this->deriv_mu2_times_gauss_dist_buffer_.reset();
+	this->deriv_sigma_times_gauss_dist_buffer_.reset();
+
+	this->guass_norm_buffer_.reset();
+	this->deriv_mu1_sums_buffer_.reset();
+	this->deriv_mu2_sums_buffer_.reset();
+	this->deriv_sigma_sums_buffer_.reset();
+	this->weight_vert_buffer_.reset();
+	this->weight_horiz_buffer_.reset();
+  }
+  */
+  // [S * G * F * K_h * K_w]
+  kernel_buf.weights.reset(new Blob<Dtype>(this->weight_buffer_->shape()));
+  kernel_buf.deriv_weight.reset(new Blob<Dtype>(this->deriv_weight_buffer_->shape()));
+  kernel_buf.deriv_mu1.reset(new Blob<Dtype>(this->deriv_mu1_buffer_->shape()));
+  kernel_buf.deriv_mu2.reset(new Blob<Dtype>(this->deriv_mu2_buffer_->shape()));
+  kernel_buf.deriv_sigma.reset(new Blob<Dtype>(this->deriv_sigma_buffer_->shape()));
+
+  tmp_buf.random_mu1.reset(new Blob<Dtype>(this->param_buffer_w_->shape()));
+  tmp_buf.random_mu2.reset(new Blob<Dtype>(this->param_buffer_w_->shape()));
+
+  // prepare random values for next merging iteration;
+  // buffers need to be synced between multiple GPUs and are therefore flaged as learnable parameters to induce copying from root GPU to child GPUs
+  fill_random_mean(this->tmp_buf.random_mu1.get(), this->tmp_buf.random_mu2.get());
+
+#ifndef NDEBUG
+  // connect weight buffers to blobs when in debug mode so that they can be inspected by matlab
+  int extra_blobs_offset = this->blobs_.size() - this->num_extra_blobs;
+
+  this->blobs_[extra_blobs_offset + 0] = kernel_buf.weights;
+  //this->blobs_[extra_blobs_offset + 1] = kernel_buf.deriv_error;
+  this->blobs_[extra_blobs_offset + 2] = kernel_buf.deriv_weight;
+  this->blobs_[extra_blobs_offset + 3] = kernel_buf.deriv_mu1;
+  this->blobs_[extra_blobs_offset + 4] = kernel_buf.deriv_mu2;
+  this->blobs_[extra_blobs_offset + 5] = kernel_buf.deriv_sigma;
+
+  if (this->layer_param_.convolution_param().gmm_legacy_merge_blobs() == false) {
+	  this->blobs_[extra_blobs_offset + 6] = tmp_buf.random_mu1;
+  	  this->blobs_[extra_blobs_offset + 7] = tmp_buf.random_mu2;
+  }
+#else
+  kernel_buf.weights->ReshapeLike(*kernel_buf.deriv_weight);
+#endif
+
+  tmp_buf.distribution.reset(new Blob<Dtype>(kernel_buf.deriv_weight->shape()));
+
+  // [S * G * F]
+  tmp_buf.sigma_square_inv.reset(new Blob<Dtype>(this->param_buffer_w_->shape()));
+  tmp_buf.sigma_cube_inv.reset(new Blob<Dtype>(this->param_buffer_w_->shape()));
+  tmp_buf.sigma_square_inv_half.reset(new Blob<Dtype>(this->param_buffer_w_->shape()));
+
+  tmp_buf.norm.reset(new Blob<Dtype>(this->param_buffer_w_->shape()));
+  tmp_buf.norm_with_w.reset(new Blob<Dtype>(this->param_buffer_w_->shape()));
+
+  tmp_buf.deriv_mu1_sums.reset(new Blob<Dtype>(this->param_buffer_w_->shape()));
+  tmp_buf.deriv_mu2_sums.reset(new Blob<Dtype>(this->param_buffer_w_->shape()));
+  tmp_buf.deriv_sigma_sums.reset(new Blob<Dtype>(this->param_buffer_w_->shape()));
+
 
   CHECK_EQ(2, this->num_spatial_axes_)
       << "CuDNNGaussianConvLayer input must have 2 spatial axes "
@@ -194,11 +276,11 @@ void CuDNNGaussianConvLayer<Dtype>::Reshape(
 
   // ensure all groups have enough workspace
   size_t total_max_workspace = max_workspace *
-								 (this->group_ * CUDNN_STREAMS_PER_GROUP);
+								 (this->group_ * GAUSS_CUDNN_STREAMS_PER_GROUP);
 
   // this is the total amount of storage needed over all groups + streams
   if (total_max_workspace > workspaceSizeInBytes) {
-    DLOG(INFO) << "Reallocating workspace storage: " << total_max_workspace;
+    LOG(INFO) << "Reallocating workspace storage: " << total_max_workspace;
     workspaceSizeInBytes = total_max_workspace;
 
     // free the existing workspace and allocate a new (larger) one
@@ -215,7 +297,7 @@ void CuDNNGaussianConvLayer<Dtype>::Reshape(
       }
 
       // NULL out all workspace pointers
-      for (int g = 0; g < (this->group_ * CUDNN_STREAMS_PER_GROUP); g++) {
+      for (int g = 0; g < (this->group_ * GAUSS_CUDNN_STREAMS_PER_GROUP); g++) {
         workspace[g] = NULL;
       }
       // NULL out underlying data
@@ -224,7 +306,7 @@ void CuDNNGaussianConvLayer<Dtype>::Reshape(
     }
 
     // if we succeed in the allocation, set pointer aliases for workspaces
-    for (int g = 0; g < (this->group_ * CUDNN_STREAMS_PER_GROUP); g++) {
+    for (int g = 0; g < (this->group_ * GAUSS_CUDNN_STREAMS_PER_GROUP); g++) {
       workspace[g] = reinterpret_cast<char *>(workspaceData) + g*max_workspace;
     }
   }
@@ -251,12 +333,12 @@ CuDNNGaussianConvLayer<Dtype>::~CuDNNGaussianConvLayer() {
   }
   cudnnDestroyFilterDescriptor(filter_desc_);
 
-  for (int g = 0; g < this->group_ * CUDNN_STREAMS_PER_GROUP; g++) {
+  for (int g = 0; g < this->group_ * GAUSS_CUDNN_STREAMS_PER_GROUP; g++) {
     cudaStreamDestroy(stream_[g]);
     cudnnDestroy(handle_[g]);
   }
 
-  for (int g = 0; g < this->NUM_GAUSS*4; ++g) {
+  for (int g = 0; g < 4; ++g) {
 	  cudaStreamDestroy(paralel_streams[g]);
   }
 
@@ -385,7 +467,7 @@ void CuDNNOldGaussianConvLayer<Dtype>::Reshape(
 
   // this is the total amount of storage needed over all groups + streams
   if (total_max_workspace > this->workspaceSizeInBytes) {
-    DLOG(INFO) << "Reallocating workspace storage: " << total_max_workspace;
+    LOG(INFO) << "Reallocating workspace storage: " << total_max_workspace;
     this->workspaceSizeInBytes = total_max_workspace;
 
     // free the existing workspace and allocate a new (larger) one

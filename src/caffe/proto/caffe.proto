@@ -600,6 +600,10 @@ message ConvolutionParameter {
   optional bool gmm_square_gauss_normalization = 129 [default = true]; // normalize using sum of squares 
   optional bool gmm_seperable_forward_pass = 130 [default = false]; // utilize seperable kernels to speed-up forward-pass
   optional bool gmm_use_old_cudnn = 131 [default = false]; // use old version of cudnn implmentation (uses a lot of memory)
+  optional uint32 gmm_merge_iteration_step = 132 [default = 0]; // step between merging of gaussian components
+  optional float gmm_merge_threshold = 133 [default = 0]; // threshold for mering components
+  optional bool gmm_legacy_merge_blobs = 134 [default = false]; // ignore blobs for random means during component merging - to allow loading older snapshots
+  
   enum Engine {
     DEFAULT = 0;
     CAFFE = 1;
