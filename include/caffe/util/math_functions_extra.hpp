@@ -31,6 +31,8 @@ void caffe_cpu_mul_batch(const int N, const Dtype* a, const Dtype* b, Dtype* y, 
 
 #ifndef CPU_ONLY  // GPU
 
+void caffe_gpu_memcpy_async(const size_t N, const void* X, void* Y, cudaStream_t streamId = 0);
+
 template <typename Dtype>
 void caffe_gpu_gemm_batched(const CBLAS_TRANSPOSE TransA,
     const CBLAS_TRANSPOSE TransB, const int M, const int N, const int K,
@@ -38,34 +40,49 @@ void caffe_gpu_gemm_batched(const CBLAS_TRANSPOSE TransA,
     Dtype** C, int batch_size);
 
 template <typename Dtype>
-void caffe_gpu_mul_batched(const int N, const Dtype* a, const Dtype* b, Dtype* y, const int M = 0);
+void caffe_gpu_set_async(const int N, const Dtype alpha, Dtype *X, cudaStream_t streamId = 0);
 
 template <typename Dtype>
-void caffe_gpu_mul_split(const int N, const Dtype* a, const Dtype* b, Dtype* y, const int M, const int K, const int L);
+void caffe_gpu_mul_batched(const int N, const Dtype* a, const Dtype* b, Dtype* y, const int M = 0, cudaStream_t streamId = 0);
 
 template <typename Dtype>
-void caffe_gpu_sum(const int N, const Dtype* x, Dtype* y, const int M = 0);
+void caffe_gpu_mul_split(const int N, const Dtype* a, const Dtype* b, Dtype* y, const int M, const int K, const int L, cudaStream_t streamId = 0);
 
 template <typename Dtype>
-void caffe_gpu_sum(const int N, const Dtype* x, Dtype* y, const int num_segments, int* offsets_gpu, cudaStream_t streamId = NULL);
+void caffe_gpu_sum(const int N, const Dtype* x, Dtype* y, const int M = 0, cudaStream_t streamId = 0);
 
 template <typename Dtype>
-void caffe_gpu_dot_batched(const int n, const Dtype* a, const Dtype* b, Dtype* y, const int num_segments, int* offsets_gpu, cudaStream_t streamId = 0);
+void caffe_gpu_sum(const int N, const Dtype* x, Dtype* y, const int num_segments, int* offsets_gpu, bool with_add = false, cudaStream_t streamId = NULL);
 
 template <typename Dtype>
-void caffe_gpu_dot_batched_mapped(const int n, const Dtype* a, const int* mapping, const Dtype* b, Dtype* y, const int num_segments, int* offsets_gpu, cudaStream_t streamId = 0);
+void caffe_gpu_dot_batched(const int n, const Dtype* a, const Dtype* b, Dtype* y, const int num_segments, int* offsets_gpu, bool with_add = false, cudaStream_t streamId = 0);
 
 template <typename Dtype>
-void caffe_gpu_sum_elementwise(const int N, const Dtype* x, Dtype* y, const int M);
+void caffe_gpu_dot_batched_mapped(const int n, const Dtype* a, const int* mapping, const Dtype* b, Dtype* y, const int num_segments, int* offsets_gpu, bool with_add = false, cudaStream_t streamId = 0);
 
 template <typename Dtype>
-void caffe_gpu_clip_lower(const int N, const Dtype lower_bound, const Dtype* x, Dtype* y);
+void caffe_gpu_sum_elementwise(const int N, const Dtype* x, Dtype* y, const int M, cudaStream_t streamId = 0);
 
 template <typename Dtype>
-void caffe_gpu_clip_upper(const int N, const Dtype upper_bound, const Dtype* x, Dtype* y);
+void caffe_gpu_clip_lower(const int N, const Dtype lower_bound, const Dtype* x, Dtype* y, cudaStream_t streamId = 0);
 
 template <typename Dtype>
-void caffe_gpu_clip_eps(const int N, const Dtype eps_bound, const Dtype* x, Dtype* y);
+void caffe_gpu_clip_upper(const int N, const Dtype upper_bound, const Dtype* x, Dtype* y, cudaStream_t streamId = 0);
+
+template <typename Dtype>
+void caffe_gpu_clip_eps(const int N, const Dtype eps_bound, const Dtype* x, Dtype* y, cudaStream_t streamId = 0);
+
+#define CUDNN_CALL_WITH_STREAM(streamId, CALL) \
+{ \
+  cudaStream_t current_stream; \
+  if (streamId >= 0) { \
+	  CUBLAS_CHECK(cublasGetStream(Caffe::cublas_handle(), &current_stream)); \
+	  CUBLAS_CHECK(cublasSetStream(Caffe::cublas_handle(), streamId)); \
+  }\
+  CALL;\
+  if (streamId >= 0) { CUBLAS_CHECK(cublasSetStream(Caffe::cublas_handle(), current_stream)); } \
+}
+
 
 #endif  // !CPU_ONLY
 
