@@ -46,12 +46,12 @@ GLOG_logtostderr=1 $TOOLS/convert_imageset \
 
 echo "Creating val lmdb..."
 
-GLOG_logtostderr=1 $TOOLS/convert_imageset \
-    --resize_height=$RESIZE_HEIGHT \
-    --resize_width=$RESIZE_WIDTH \
-    --shuffle \
-    $VAL_DATA_ROOT \
-    $DATA/val.txt \
-    $EXAMPLE/ilsvrc12_val_lmdb
+#GLOG_logtostderr=1 $TOOLS/convert_imageset \
+#    --resize_height=$RESIZE_HEIGHT \
+#    --resize_width=$RESIZE_WIDTH \
+#    --shuffle \
+#    $VAL_DATA_ROOT \
+#    $DATA/val.txt \
+#    $EXAMPLE/ilsvrc12_val_lmdb
 
 echo "Done."

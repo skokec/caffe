@@ -236,6 +236,7 @@ message SolverParameter {
     RMSPROP = 3;
     ADADELTA = 4;
     ADAM = 5;
+    CustomSGD = 6;
   }
   // DEPRECATED: use type instead of solver_type
   optional SolverType solver_type = 30 [default = SGD];
@@ -301,6 +302,9 @@ message ParamSpec {
 
   // The multiplier on the global weight decay for this parameter.
   optional float decay_mult = 4 [default = 1.0];
+  
+  // Target for weght decay - if want to force decaying to specific target value
+  optional float decay_target = 101 [default = 0.0];
 }
 
 // NOTE
@@ -603,7 +607,7 @@ message ConvolutionParameter {
   optional uint32 gmm_merge_iteration_step = 132 [default = 0]; // step between merging of gaussian components
   optional float gmm_merge_threshold = 133 [default = 0]; // threshold for mering components
   optional bool gmm_legacy_merge_blobs = 134 [default = false]; // ignore blobs for random means during component merging - to allow loading older snapshots
-  
+  optional bool gmm_discretize_mean = 135 [default = false]; // force discretization of means to closest integer value
   enum Engine {
     DEFAULT = 0;
     CAFFE = 1;

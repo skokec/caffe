@@ -58,6 +58,8 @@ class BaseGaussianConvLayer : public BaseConvolutionLayer<Dtype> {
 	int gmm_merge_iteration_step;
 	float gmm_merge_threshold;
 
+	bool gmm_discretize_mean;
+
 	int NUM_GAUSS;
 
 	// parameters to learn
@@ -66,6 +68,10 @@ class BaseGaussianConvLayer : public BaseConvolutionLayer<Dtype> {
 	shared_ptr<Blob<Dtype> > param_buffer_mu2_;
 	shared_ptr<Blob<Dtype> > param_buffer_sigma_;
 	shared_ptr<Blob<Dtype> > param_buffer_bias_;
+
+	// temporary buffers for discretized mean parameters
+	shared_ptr<Blob<Dtype> > param_buffer_mu1_discr_;
+	shared_ptr<Blob<Dtype> > param_buffer_mu2_discr_;
 
 	// temporary buffers for pre-computed sigma^2, sigma^3 and 1/2*sigma^2
 	Blob<Dtype> param_buffer_sigma_square_inv_;
@@ -176,6 +182,31 @@ class GaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
   void caffe_cpu_gpu_gemm_batched(const CBLAS_TRANSPOSE TransA, const CBLAS_TRANSPOSE TransB, const int M, const int N, const int K, const Dtype alpha, const Dtype** A, const Dtype** B, const Dtype beta, Dtype** C, int batch_count);
 
 };
+
+template <typename Dtype>
+class FastAproxGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
+ public:
+
+  explicit FastAproxGaussianConvLayer(const LayerParameter& param)
+      : BaseGaussianConvLayer<Dtype>(param){}
+
+  virtual ~FastAproxGaussianConvLayer();
+
+  virtual inline const char* type() const { return "FastAproxGaussianConvLayer"; }
+  virtual void LayerSetUp(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top);
+  virtual void Reshape(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top);
+
+ //protected:
+  virtual void Forward_cpu(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top);
+  virtual void Forward_gpu(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top);
+  virtual void Backward_cpu(const vector<Blob<Dtype>*>& top, const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
+  virtual void Backward_gpu(const vector<Blob<Dtype>*>& top,const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
+
+  void test_kernel_cpu(const float* filtered_images, const int* filter_offsets_x, const int* filter_offsets_y, const float* filter_offsets_float_x, const float* filter_offsets_float_y, const float* filter_weights, float* output, const int I, const int S, const int F, const int G, const int img_width, const int img_height, const int kernel_width, const int kernel_height);
+  void test_kernel_gpu(const float* filtered_images, const int* filter_offsets_x, const int* filter_offsets_y, const float* filter_offsets_float_x, const float* filter_offsets_float_y, const float* filter_weights, float* output, const int I, const int S, const int F, const int G, const int img_width, const int img_height, const int kernel_width, const int kernel_height);
+
+};
+
 
 #ifdef USE_CUDNN
 template <typename Dtype>

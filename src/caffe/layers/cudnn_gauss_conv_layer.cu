@@ -9,6 +9,11 @@
 
 namespace caffe {
 
+template <typename Dtype>
+void FastAproxGaussianConvLayer<Dtype>::Forward_gpu(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top) {
+	caffe::fast_gauss_forward<float>(NULL, NULL, NULL, NULL, NULL, NULL, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+}
+
 __global__ void sync_gauss_conv_groups() { }
 
 template <typename Dtype>
@@ -351,7 +356,7 @@ __global__ void scal_kernel_batched(const int n, const Dtype* a, const Dtype* x,
 }
 
 template <typename Dtype>
-__global__ void conv_gauss_distributions_kernel(const int N, const int k_w, int k_h,
+__global__ void conv_gauss_distributions_kernel(const int N, const int k_w, const int k_h, const bool gmm_discretize_mean,
 												const Dtype* W, const Dtype* MU1, const Dtype* MU2, const Dtype* SIGMA_2_INV_HALF,
 												Dtype* guass_dist) {
 
@@ -364,8 +369,8 @@ __global__ void conv_gauss_distributions_kernel(const int N, const int k_w, int 
 
 		// read w, mu1, mu2, sigma and other data needed to compute gaussian Distributions
 		//const Dtype w = W[n];
-		const Dtype mu1 = MU1[n];
-		const Dtype mu2 = MU2[n];
+		const Dtype mu1 = gmm_discretize_mean ? round(MU1[n]) : MU1[n];
+		const Dtype mu2 = gmm_discretize_mean ? round(MU2[n]) : MU2[n];
 		const Dtype sigma_square_inv_half = SIGMA_2_INV_HALF[n];
 
 		const int ptr_offset =  n * filter_size + y * k_w + x;
@@ -437,7 +442,7 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_gauss_distribution_b
 		// calulate distribution and its normalization values
 		dim3 threadsPerBlock(K_w, K_h, CAFFE_CUDA_NUM_THREADS/(K_w * K_h));
 		dim3 numBlocks(1, 1, (S*G*F + threadsPerBlock.z - 1) / threadsPerBlock.z);
-		conv_gauss_distributions_kernel<Dtype><<<numBlocks,threadsPerBlock, 0, streamId>>>(S*G*F, K_w, K_h, gauss_params_w, gauss_params_mu1, gauss_params_mu2, gauss_params_sigma_square_inv_half, gauss_dist);
+		conv_gauss_distributions_kernel<Dtype><<<numBlocks,threadsPerBlock, 0, streamId>>>(S*G*F, K_w, K_h, this->gmm_discretize_mean, gauss_params_w, gauss_params_mu1, gauss_params_mu2, gauss_params_sigma_square_inv_half, gauss_dist);
 
 	}
 
@@ -634,7 +639,7 @@ __global__ void axpby_kernel_batched(const int n, const Dtype a_factor, const Dt
 }
 
 template <typename Dtype>
-__global__ void conv_gauss_mu1_deriv_kernel(const int N, const int k_w, int k_h,
+__global__ void conv_gauss_mu1_deriv_kernel(const int N, const int k_w, const int k_h, const bool gmm_discretize_mean,
 												const Dtype* MU1, const Dtype* SIGMA_2_INV, const Dtype* guass_dist,
 												Dtype* guass_deriv_mu1) {
 
@@ -649,7 +654,7 @@ __global__ void conv_gauss_mu1_deriv_kernel(const int N, const int k_w, int k_h,
 		const int ptr_offset =  n * filter_size + y * k_w + x;
 
 		// read w, mu1, mu2, sigma and other data needed to compute gaussian Distributions
-		const Dtype mu1 = MU1[n];
+		const Dtype mu1 = gmm_discretize_mean ? round(MU1[n]) : MU1[n];
 		const Dtype sigma_square_inv = SIGMA_2_INV[n];
 
 		const Dtype gauss_value = guass_dist[ptr_offset];
@@ -705,7 +710,7 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_mu1_derivative_filte
 		dim3 numBlocks = dim3(1, 1, (S*F*G + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
 		// computer derivative kernel
-		conv_gauss_mu1_deriv_kernel<Dtype><<<numBlocks,threadsPerBlock,0, streamId>>>(S*G*F, K_w, K_h, gauss_params_mu1, gauss_params_sigma_square_inv, gauss_dist, deriv_mu1);
+		conv_gauss_mu1_deriv_kernel<Dtype><<<numBlocks,threadsPerBlock,0, streamId>>>(S*G*F, K_w, K_h, this->gmm_discretize_mean, gauss_params_mu1, gauss_params_sigma_square_inv, gauss_dist, deriv_mu1);
 
 		// compute sum of derivative with
 		if (this->use_gmm_gauss_normalization == false) {
@@ -745,7 +750,7 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_mu1_derivative_filte
 
 
 template <typename Dtype>
-__global__ void conv_gauss_mu2_deriv_kernel(const int N, const int k_w, int k_h,
+__global__ void conv_gauss_mu2_deriv_kernel(const int N, const int k_w, const int k_h, const bool gmm_discretize_mean,
 												const Dtype* MU2, const Dtype* SIGMA_2_INV, const Dtype* guass_dist,
 												Dtype* guass_deriv_mu2) {
 
@@ -760,7 +765,7 @@ __global__ void conv_gauss_mu2_deriv_kernel(const int N, const int k_w, int k_h,
 		const int ptr_offset =  n * filter_size + y * k_w + x;
 
 		// read w, mu1, mu2, sigma and other data needed to compute gaussian Distributions
-		const Dtype mu2 = MU2[n];
+		const Dtype mu2 = gmm_discretize_mean ? round(MU2[n]) : MU2[n];
 		const Dtype sigma_square_inv = SIGMA_2_INV[n];
 
 		const Dtype gauss_value = guass_dist[ptr_offset];
@@ -811,7 +816,7 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_mu2_derivative_filte
 		dim3 threadsPerBlock = dim3(K_w, K_h, CAFFE_CUDA_NUM_THREADS/(K_w * K_h));
 		dim3 numBlocks = dim3(1, 1, (S*F*G + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
-		conv_gauss_mu2_deriv_kernel<Dtype><<<numBlocks,threadsPerBlock,0,streamId>>>(S*G*F, K_w, K_h, gauss_params_mu2, gauss_params_sigma_square_inv, gauss_dist, deriv_mu2);
+		conv_gauss_mu2_deriv_kernel<Dtype><<<numBlocks,threadsPerBlock,0,streamId>>>(S*G*F, K_w, K_h, this->gmm_discretize_mean, gauss_params_mu2, gauss_params_sigma_square_inv, gauss_dist, deriv_mu2);
 
 		// compute sum of derivative with
 		if (this->use_gmm_gauss_normalization == false) {
@@ -852,7 +857,7 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_mu2_derivative_filte
 
 
 template <typename Dtype>
-__global__ void conv_gauss_sigma_deriv_kernel(const int N, const int k_w, int k_h,
+__global__ void conv_gauss_sigma_deriv_kernel(const int N, const int k_w, const int k_h, const bool gmm_discretize_mean,
 												const Dtype* MU1, const Dtype* MU2, const Dtype* SIGMA_3_INV, const Dtype* guass_dist,
 												Dtype* guass_deriv_sigma) {
 	const int filter_size = k_w * k_h;
@@ -866,8 +871,8 @@ __global__ void conv_gauss_sigma_deriv_kernel(const int N, const int k_w, int k_
 		const int ptr_offset =  n * filter_size + y * k_w + x;
 
 		// read w, mu1, mu2, sigma and other data needed to compute gaussian Distributions
-		const Dtype mu1 = MU1[n];
-		const Dtype mu2 = MU2[n];
+		const Dtype mu1 = gmm_discretize_mean ? round(MU1[n]) : MU1[n];
+		const Dtype mu2 = gmm_discretize_mean ? round(MU2[n]) : MU2[n];
 		const Dtype sigma_cube_inv = SIGMA_3_INV[n];
 
 		const Dtype gauss_value = guass_dist[ptr_offset];
@@ -924,7 +929,7 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_sigma_derivative_fil
 		dim3 threadsPerBlock = dim3(K_w, K_h, CAFFE_CUDA_NUM_THREADS/(K_w * K_h));
 		dim3 numBlocks = dim3(1, 1, (S*F*G + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
-		conv_gauss_sigma_deriv_kernel<Dtype><<<numBlocks,threadsPerBlock,0,streamId>>>(S*G*F, K_w, K_h, gauss_params_mu1, gauss_params_mu2, gauss_params_sigma_cube_inv, gauss_dist, deriv_sigma);
+		conv_gauss_sigma_deriv_kernel<Dtype><<<numBlocks,threadsPerBlock,0,streamId>>>(S*G*F, K_w, K_h, this->gmm_discretize_mean, gauss_params_mu1, gauss_params_mu2, gauss_params_sigma_cube_inv, gauss_dist, deriv_sigma);
 
 		// compute sum of derivative with
 		if (this->use_gmm_gauss_normalization == false) {
@@ -1003,8 +1008,8 @@ __global__ void merge_components_kernel(int S, int F, Dtype* params_w, Dtype* pa
 					Dtype w_g2[NUM_F_PER_THREAD],mu1_g2[NUM_F_PER_THREAD],mu2_g2[NUM_F_PER_THREAD],sigma_g2[NUM_F_PER_THREAD];
 
 					LOAD_VECTOR(w_g2, params_w, index_g2, NUM_F_PER_THREAD);
-					LOAD_VECTOR(mu1_g2, params_mu1, index_g2, NUM_F_PER_THREAD);
-					LOAD_VECTOR(mu2_g2, params_mu2, index_g2, NUM_F_PER_THREAD);
+					LOAD_VECTOR(mu1_g2, params_mu1, index_g2, NUM_F_PER_THREAD); // DO NOT descritezie when computing merging
+					LOAD_VECTOR(mu2_g2, params_mu2, index_g2, NUM_F_PER_THREAD); // DO NOT descritezie when computing merging
 					LOAD_VECTOR(sigma_g2, params_sigma, index_g2, NUM_F_PER_THREAD);
 
 					// also load directions for new values - load them even if not needed since it would take the same time

@@ -10,10 +10,10 @@ layer {
   }
   transform_param {
     mirror: true
-    mean_file: "examples/cifar10/mean.binaryproto"
+    mean_file: "/home/domen/caffe/caffe-gauss/examples/cifar10/mean.binaryproto"
   }
   data_param {
-    source: "examples/cifar10/cifar10_train_lmdb"
+    source: "/home/domen/caffe/caffe-gauss/examples/cifar10/cifar10_train_lmdb"
     batch_size: 100
     backend: LMDB
   }
@@ -28,46 +28,24 @@ layer {
     phase: TEST
   }
   transform_param {
-    mean_file: "examples/cifar10/mean.binaryproto"
+    mean_file: "/home/domen/caffe/caffe-gauss/examples/cifar10/mean.binaryproto"
   }
   data_param {
-    source: "examples/cifar10/cifar10_test_lmdb"
-    batch_size: 100
+    source: "/home/domen/caffe/caffe-gauss/examples/cifar10/cifar10_test_lmdb"
+    batch_size: 20
     backend: LMDB
   }
   
 }
 
-
-layer {
-  name: "batch_norm0"
-  type: "BatchNorm"
-  bottom: "data"
-  top: "batch_norm0"
-  param {
-    lr_mult:0
-  }
-  param {
-    lr_mult:0
-  }
-  param {
-    lr_mult:0
-  }
-  batch_norm_param {    
-    #use_global_stats: false
-    #moving_average_fraction: 0.999
-    #eps: 1e-5
-  }
-}
-
 layer {
   name: "conv1"
   type: "GaussianConv"  
-  bottom: "batch_norm0"
+  bottom: "data"
   top: "conv1"
   param {
     lr_mult: 1
-    decay_mult: 0
+    decay_mult: 1
   }
   param {
     lr_mult: 50
@@ -88,7 +66,7 @@ layer {
   }
   # bias
   param {
-    lr_mult: 1
+    lr_mult: 0
   }
   # set zero learning rate for blobs that are for debuging only
   param { lr_mult: 0 }
@@ -105,7 +83,7 @@ layer {
     pad: 3
     kernel_size: 7
     stride: 1
-    
+        
     gmm_weight_normalization: false
     gmm_gauss_normalization: true
     gmm_mean_iteration_step: 1
@@ -115,22 +93,12 @@ layer {
     
     weight_filler {
       type: "gaussian"
-      #std: 0.144 # sqrt(1/(num-gauss*num-subfeatures)) for 2x2
-      #std: 0.0001 # icpr16
       std: 0.01
       mean: 0
-      #type: "constant"
-      #value: 1
-    }
-    mu_filler {
-      type: "uniform"
-      min: 2
-      max: 8
     }
     sigma_filler {
       type: "constant"
       value: 0.8     
-      #value: 1.8
     }
     bias_filler {
       type: "constant"
@@ -139,53 +107,43 @@ layer {
 }
 
 layer {
-  name: "relu1"
-  type: "ReLU"
-  #type: "Sigmoid"
-  bottom: "conv1"
-  top: "relu1"
-}
-#layer {
-#  name: "pool1"
-#  type: "Pooling"
-#  bottom: "relu1"
-#  top: "pool1"
-#  pooling_param {
-#    pool: MAX
-#    kernel_size: 3
-#    stride: 2
-#  }
-#}
-
-layer {
   name: "batch_norm1"
   type: "BatchNorm"
-  bottom: "relu1"
+  bottom: "conv1"
   top: "batch_norm1"
-  param {
-    lr_mult:0
-  }
-  param {
-    lr_mult:0
-  }
-  param {
-    lr_mult:0
-  }
+  param { lr_mult:0 }
+  param { lr_mult:0 }
+  param { lr_mult:0 }
   batch_norm_param {    
     #use_global_stats: false
-    #moving_average_fraction: 0.999
-    #eps: 1e-5
+    moving_average_fraction: 0
   }
 }
 
+layer {
+  bottom: "batch_norm1"
+  top: "scale1"
+  name: "scale1"
+  type: "Scale"
+  scale_param {
+    bias_term: true
+  }
+}
+
+layer {
+  name: "relu1"
+  type: "ReLU"
+  bottom: "scale1"
+  top: "relu1"
+}
 layer {
   name: "conv2"
   type: "GaussianConv"
-  bottom: "batch_norm1"
+  bottom: "relu1"
   top: "conv2"
   param {
     lr_mult: 1
-    decay_mult: 0
+    decay_mult: 1
   }
   param {
     lr_mult: 500
@@ -207,7 +165,7 @@ layer {
   }
   # bias
   param {
-    lr_mult: 1
+    lr_mult: 0
     #decay_mult: 1
   }
   # set zero learning rate for blobs that are for debuging only
@@ -220,6 +178,7 @@ layer {
   
   convolution_param {
     engine: CUDNN
+    number_gauss: 1
     number_gauss: 2
     num_output: 96
     pad: 4
@@ -235,22 +194,12 @@ layer {
     
     weight_filler {
       type: "gaussian"
-      #std: 0.058 # sqrt(1/(num-gauss*num-subfeatures)) for 2x2
       std: 0.01
       mean: 0
-      #type: "constant"
-      #value: 1
-    }
-    mu_filler {
-      type: "uniform"
-      min: 2
-      max: 8
     }
     sigma_filler {
       type: "constant"
-      #value: 0.1
       value: 0.8
-      #value: 1.8
     }
     bias_filler {
       type: "constant"
@@ -258,10 +207,35 @@ layer {
   }
 }
 
+
+layer {
+  name: "batch_norm2"
+  type: "BatchNorm"
+  bottom: "conv2"
+  top: "batch_norm2"
+  param { lr_mult:0 }
+  param { lr_mult:0 }
+  param { lr_mult:0 }
+  batch_norm_param {    
+    #use_global_stats: false
+    moving_average_fraction: 0
+  }
+}
+
+layer {
+  bottom: "batch_norm2"
+  top: "scale2"
+  name: "scale2"
+  type: "Scale"
+  scale_param {
+    bias_term: true
+  }
+}
+
 layer {
   name: "relu2"
   type: "ReLU"
-  bottom: "conv2"
+  bottom: "scale2"
   top: "relu2"
 }
 layer {
@@ -276,38 +250,14 @@ layer {
   }
 }
 
-
-layer {
-  name: "batch_norm2"
-  type: "BatchNorm"
-  bottom: "pool2"
-  top: "batch_norm2"
-  param {
-    lr_mult:0
-  }
-  param {
-    lr_mult:0
-  }
-  param {
-    lr_mult:0
-  }
-  batch_norm_param {    
-    #use_global_stats: false
-    #moving_average_fraction: 0.999
-    #eps: 1e-5
-  }
-}
-
-
-
 layer {
   name: "conv3"
   type: "GaussianConv"
-  bottom: "batch_norm2"
+  bottom: "pool2"
   top: "conv3"
   param {
     lr_mult: 1
-    decay_mult: 0
+    decay_mult: 1
   }
   param {
     lr_mult: 500
@@ -329,7 +279,7 @@ layer {
   }
   # bias
   param {
-    lr_mult: 1
+    lr_mult: 0
     #decay_mult: 1
   }
   # set zero learning rate for blobs that are for debuging only
@@ -342,6 +292,7 @@ layer {
   
   convolution_param {
     engine: CUDNN
+    number_gauss: 1
     number_gauss: 2
     num_output: 192
     pad: 4
@@ -357,79 +308,61 @@ layer {
     
     weight_filler {
       type: "gaussian"
-      #std: 0.058 # sqrt(1/(num-gauss*num-subfeatures)) for 2x2
       std: 0.01
       mean: 0
-      #type: "constant"
-      #value: 1
-    }
-    mu_filler {
-      type: "uniform"
-      min: 2
-      max: 8
     }
     sigma_filler {
       type: "constant"
-      #value: 0.1
       value: 0.8
-      #value: 1.8
     }
     bias_filler {
       type: "constant"
     }
+  }
+}
+
+layer {
+  name: "batch_norm3"
+  type: "BatchNorm"
+  bottom: "conv3"
+  top: "batch_norm3"
+  param { lr_mult:0 }
+  param { lr_mult:0 }
+  param { lr_mult:0 }
+  batch_norm_param {    
+    #use_global_stats: false
+    moving_average_fraction: 0
+  }
+}
+
+layer {
+  bottom: "batch_norm3"
+  top: "scale3"
+  name: "scale3"
+  type: "Scale"
+  scale_param {
+    bias_term: true
   }
 }
 
 layer {
   name: "relu3"
   type: "ReLU"
-  bottom: "conv3"
+  bottom: "scale3"
   top: "relu3"
 }
-#layer {
-#  name: "pool3"
-#  type: "Pooling"
-#  bottom: "relu3"
-#  top: "pool3"
-#  pooling_param {
-#    pool: AVE
-#    kernel_size: 3
-#    stride: 2
-#  }
-#}
 
-
-layer {
-  name: "batch_norm3"
-  type: "BatchNorm"
-  bottom: "relu3"
-  top: "batch_norm3"
-  param {
-    lr_mult:0
-  }
-  param {
-    lr_mult:0
-  }
-  param {
-    lr_mult:0
-  }
-  batch_norm_param {    
-    #use_global_stats: false
-    #moving_average_fraction: 0.999
-    #eps: 1e-5
-  }
-}
 
 
 
 layer {
   name: "conv4"
   type: "GaussianConv"
-  bottom: "batch_norm3"
+  bottom: "relu3"
   top: "conv4"
   param {
     lr_mult: 1
-    decay_mult: 0
+    decay_mult: 1
   }
   param {
     lr_mult: 500
@@ -451,7 +384,7 @@ layer {
   }
   # bias
   param {
-    lr_mult: 1
+    lr_mult: 0
     #decay_mult: 1
   }
   # set zero learning rate for blobs that are for debuging only
@@ -464,6 +397,7 @@ layer {
   
   convolution_param {
     engine: CUDNN
+    number_gauss: 1
     number_gauss: 2
     num_output: 192
     pad: 4
@@ -479,22 +413,12 @@ layer {
     
     weight_filler {
       type: "gaussian"
-      #std: 0.058 # sqrt(1/(num-gauss*num-subfeatures)) for 2x2
       std: 0.01
       mean: 0
-      #type: "constant"
-      #value: 1
-    }
-    mu_filler {
-      type: "uniform"
-      min: 2
-      max: 8
     }
     sigma_filler {
       type: "constant"
-      #value: 0.1
       value: 0.8
-      #value: 1.8
     }
     bias_filler {
       type: "constant"
@@ -502,10 +426,35 @@ layer {
   }
 }
 
+
+layer {
+  name: "batch_norm4"
+  type: "BatchNorm"
+  bottom: "conv4"
+  top: "batch_norm4"
+  param { lr_mult:0 }
+  param { lr_mult:0 }
+  param { lr_mult:0 }
+  batch_norm_param {    
+    #use_global_stats: false
+    moving_average_fraction: 0
+  }
+}
+
+layer {
+  bottom: "batch_norm4"
+  top: "scale4"
+  name: "scale4"
+  type: "Scale"
+  scale_param {
+    bias_term: true
+  }
+}
+
 layer {
   name: "relu4"
   type: "ReLU"
-  bottom: "conv4"
+  bottom: "scale4"
   top: "relu4"
 }
 layer {
@@ -521,34 +470,13 @@ layer {
 }
 
 layer {
-  name: "batch_norm4"
-  type: "BatchNorm"
-  bottom: "pool4"
-  top: "batch_norm4"
-  param {
-    lr_mult:0
-  }
-  param {
-    lr_mult:0
-  }
-  param {
-    lr_mult:0
-  }
-  batch_norm_param {    
-    #use_global_stats: false
-    #moving_average_fraction: 0.999
-    #eps: 1e-5
-  }
-}
-
-layer {
   name: "conv5"
   type: "GaussianConv"
-  bottom: "batch_norm4"
+  bottom: "pool4"
   top: "conv5"
   param {
     lr_mult: 1
-    decay_mult: 0
+    decay_mult: 1
   }
   param {
     lr_mult: 500
@@ -570,7 +498,7 @@ layer {
   }
   # bias
   param {
-    lr_mult: 1
+    lr_mult: 0
     #decay_mult: 1
   }
   # set zero learning rate for blobs that are for debuging only
@@ -583,6 +511,7 @@ layer {
   
   convolution_param {
     engine: CUDNN
+    number_gauss: 1
     number_gauss: 2
     num_output: 128 #192
     pad: 4
@@ -598,67 +527,60 @@ layer {
     
     weight_filler {
       type: "gaussian"
-      #std: 0.058 # sqrt(1/(num-gauss*num-subfeatures)) for 2x2
       std: 0.01
       mean: 0
-      #type: "constant"
-      #value: 1
-    }
-    mu_filler {
-      type: "uniform"
-      min: 2
-      max: 8
     }
     sigma_filler {
       type: "constant"
-      #value: 0.1
       value: 0.8
-      #value: 1.8
     }
     bias_filler {
       type: "constant"
     }
+  }
+}
+
+
+layer {
+  name: "batch_norm5"
+  type: "BatchNorm"
+  bottom: "conv5"
+  top: "batch_norm5"
+  param { lr_mult:0 }
+  param { lr_mult:0 }
+  param { lr_mult:0 }
+  batch_norm_param {    
+    #use_global_stats: false
+    moving_average_fraction: 0
+  }
+}
+
+layer {
+  bottom: "batch_norm5"
+  top: "scale5"
+  name: "scale5"
+  type: "Scale"
+  scale_param {
+    bias_term: true
   }
 }
 
 layer {
   name: "relu5"
   type: "ReLU"
-  bottom: "conv5"
+  bottom: "scale5"
   top: "relu5"
 }
 
 
-
-layer {
-  name: "batch_norm5"
-  type: "BatchNorm"
-  bottom: "relu5"
-  top: "batch_norm5"
-  param {
-    lr_mult:0
-  }
-  param {
-    lr_mult:0
-  }
-  param {
-    lr_mult:0
-  }
-  batch_norm_param {    
-    #use_global_stats: false
-    #moving_average_fraction: 0.999
-    #eps: 1e-5
-  }
-}
-
 layer {
   name: "conv6"
   type: "GaussianConv"
-  bottom: "batch_norm5"
+  bottom: "relu5"
   top: "conv6"
   param {
     lr_mult: 1
-    decay_mult: 0
+    decay_mult: 1
   }
   param {
     lr_mult: 500
@@ -680,7 +602,7 @@ layer {
   }
   # bias
   param {
-    lr_mult: 1
+    lr_mult: 0
     #decay_mult: 1
   }
   # set zero learning rate for blobs that are for debuging only
@@ -693,6 +615,7 @@ layer {
   
   convolution_param {
     engine: CUDNN
+    number_gauss: 1
     number_gauss: 2
     num_output: 128 #192
     pad: 4
@@ -708,26 +631,41 @@ layer {
     
     weight_filler {
       type: "gaussian"
-      #std: 0.058 # sqrt(1/(num-gauss*num-subfeatures)) for 2x2
       std: 0.01
       mean: 0
-      #type: "constant"
-      #value: 1
-    }
-    mu_filler {
-      type: "uniform"
-      min: 2
-      max: 8
     }
     sigma_filler {
       type: "constant"
-      #value: 0.1
       value: 0.8
-      #value: 1.8
     }
     bias_filler {
       type: "constant"
     }
+  }
+}
+
+
+layer {
+  name: "batch_norm6"
+  type: "BatchNorm"
+  bottom: "conv6"
+  top: "batch_norm6"
+  param { lr_mult:0 }
+  param { lr_mult:0 }
+  param { lr_mult:0 }
+  batch_norm_param {    
+    #use_global_stats: false
+    moving_average_fraction: 0
+  }
+}
+
+layer {
+  bottom: "batch_norm6"
+  top: "scale6"
+  name: "scale6"
+  type: "Scale"
+  scale_param {
+    bias_term: true
   }
 }
 
@@ -735,34 +673,14 @@ layer {
 layer {
   name: "relu6"
   type: "ReLU"
-  bottom: "conv6"
+  bottom: "scale6"
   top: "relu6"
 }
 
 layer {
-  name: "batch_norm6"
-  type: "BatchNorm"
-  bottom: "relu6"
-  top: "batch_norm6"
-  param {
-    lr_mult:0
-  }
-  param {
-    lr_mult:0
-  }
-  param {
-    lr_mult:0
-  }
-  batch_norm_param {    
-    #use_global_stats: false
-    #moving_average_fraction: 0.999
-    #eps: 1e-5
-  }
-}
-layer {
   name: "conv7"
   type: "Convolution"
-  bottom: "batch_norm6"
+  bottom: "relu6"
   top: "conv7"
   param {
     lr_mult: 1
@@ -785,10 +703,36 @@ layer {
     }
   }
 }
+
+
+layer {
+  name: "batch_norm7"
+  type: "BatchNorm"
+  bottom: "conv7"
+  top: "batch_norm7"
+  param { lr_mult:0 }
+  param { lr_mult:0 }
+  param { lr_mult:0 }
+  batch_norm_param {    
+    #use_global_stats: false
+    moving_average_fraction: 0
+  }
+}
+
+layer {
+  bottom: "batch_norm7"
+  top: "scale7"
+  name: "scale7"
+  type: "Scale"
+  scale_param {
+    bias_term: true
+  }
+}
+
 layer {
   name: "relu7"
   type: "ReLU"
-  bottom: "conv7"
+  bottom: "scale7"
   top: "relu7"
 }
 

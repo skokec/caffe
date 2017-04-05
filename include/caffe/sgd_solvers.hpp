@@ -42,6 +42,8 @@ class SGDSolver : public Solver<Dtype> {
   //   of gradients/updates and is not needed in snapshots
   vector<shared_ptr<Blob<Dtype> > > history_, update_, temp_;
 
+  virtual void RegularizeToZero(int param_id);
+
   DISABLE_COPY_AND_ASSIGN(SGDSolver);
 };
 
@@ -141,6 +143,26 @@ class AdamSolver : public SGDSolver<Dtype> {
   virtual void ComputeUpdateValue(int param_id, Dtype rate);
 
   DISABLE_COPY_AND_ASSIGN(AdamSolver);
+};
+
+/**
+ * @brief Optimizes the parameters of a Net using
+ *        stochastic gradient descent (SGD) with momentum.
+ *        - custom version as placeholder for modification for SGDSolver
+ */
+template <typename Dtype>
+class CustomSGDSolver : public SGDSolver<Dtype> {
+ public:
+  explicit CustomSGDSolver(const SolverParameter& param)
+      : SGDSolver<Dtype>(param) { }
+  explicit CustomSGDSolver(const string& param_file)
+      : SGDSolver<Dtype>(param_file) { }
+  virtual inline const char* type() const { return "CustomSGD"; }
+
+ protected:
+  virtual void Regularize(int param_id);
+
+  DISABLE_COPY_AND_ASSIGN(CustomSGDSolver);
 };
 
 }  // namespace caffe

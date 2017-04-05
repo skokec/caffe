@@ -3,6 +3,7 @@
 #include <caffe/common.hpp>
 #include <caffe/filler.hpp>
 #include <caffe/layers/gauss_conv_layer.hpp>
+#include <caffe/layers/cudnn_conv_layer.hpp>
 #include <caffe/proto/caffe.pb.h>
 #include <caffe/test/test_caffe_main.hpp>
 #include <glog/logging.h>
@@ -972,346 +973,147 @@ TYPED_TEST(GaussConvolutionLayerTest, TestCuDNNComponentsMerging) {
   }
 }
 
+TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussConvolution) {
+
+ typedef typename TypeParam::Dtype Dtype;
+
+ if (sizeof(Dtype) > 4)
+	 return;
+
+ const int N = 128;
+ const int F = 128;
+ const int S = 128;
+ const int G = 2;
+ const int W = 64;
+ const int H = 64;
+
+ // debug print version
 /*
-TYPED_TEST(GaussConvolutionLayerTest, Test0DConvolution) {
-  typedef typename TypeParam::Dtype Dtype;
-  LayerParameter layer_param;
-  ConvolutionParameter* convolution_param =
-      layer_param.mutable_convolution_param();
-  const int kNumOutput = 3;
-  convolution_param->set_num_output(kNumOutput);
-  convolution_param->set_axis(3);
-  convolution_param->mutable_weight_filler()->set_type("gaussian");
-  convolution_param->mutable_bias_filler()->set_type("gaussian");
-  shared_ptr<Layer<Dtype> > layer(
-      new ConvolutionLayer<Dtype>(layer_param));
-  vector<int> top_shape = this->blob_bottom_->shape();
-  top_shape[3] = kNumOutput;
-  layer->SetUp(this->blob_bottom_vec_, this->blob_top_vec_);
-  EXPECT_EQ(top_shape, this->blob_top_->shape());
-  layer->Forward(this->blob_bottom_vec_, this->blob_top_vec_);
-  // Check against reference convolution.
-  vector<int> weight_offset(2);
-  const Blob<Dtype>* weight = layer->blobs()[0].get();
-  const Blob<Dtype>* bias = layer->blobs()[1].get();
-  const int num = this->blob_top_->count(3);
-  const int dim = this->blob_top_->shape(3);
-  const int bottom_dim = this->blob_bottom_->shape(3);
-  for (int n = 0; n < num; ++n) {
-    for (int d = 0; d < dim; ++d) {
-      weight_offset[0] = d;
-      Dtype value = bias->cpu_data()[d];
-      for (int bottom_d = 0; bottom_d < bottom_dim; ++bottom_d) {
-        weight_offset[1] = bottom_d;
-        value += weight->data_at(weight_offset) *
-                 this->blob_bottom_->cpu_data()[n * bottom_dim + bottom_d];
-      }
-      EXPECT_NEAR(value, this->blob_top_->cpu_data()[n * dim + d], 1e-4);
-    }
-  }
+ const int N = 1;
+ const int F = 32;
+ const int S = 32;
+ const int G = 1;
+ const int W = 32;
+ const int H = 16;
+ */
+ Blob<float> blob_input(N,S,H,W);
+ Blob<int> blob_offsets_x(1, S, G, F);
+ Blob<int> blob_offsets_y(1, S, G, F);
+ Blob<float> blob_offsets_float_x(1, S, G, F);
+ Blob<float> blob_offsets_float_y(1, S, G, F);
+ Blob<float> blob_weights(1, S, G, F);
+ Blob<float> blob_output(N,F,H,W);
+
+ FillerParameter const_one_filler_param;
+ const_one_filler_param.set_value(1);
+ ConstantFiller<float> const_one_filer(const_one_filler_param);
+
+ FillerParameter const_zero_filler_param;
+ const_zero_filler_param.set_value(0);
+ ConstantFiller<int> const_zero_filer(const_zero_filler_param);
+ ConstantFiller<float> const_zero_float_filer(const_zero_filler_param);
+
+ FillerParameter rand_filler_param;
+ rand_filler_param.set_value(0.1);
+ GaussianFiller<float> input_filler(rand_filler_param);
+
+ //input_filler.Fill(&blob_input);
+ //input_filler.Fill(&blob_weights);
+
+ const_one_filer.Fill(&blob_input);
+ const_one_filer.Fill(&blob_weights);
+
+
+ FillerParameter offset_filler_param;
+ offset_filler_param.set_max(2);
+ offset_filler_param.set_min(0);
+ UniformFiller<float> offset_filler(offset_filler_param);
+
+ //offset_filler.Fill(&blob_offsets);
+ const_zero_filer.Fill(&blob_offsets_x);
+ const_zero_filer.Fill(&blob_offsets_y);
+
+ const_zero_float_filer.Fill(&blob_offsets_float_x);
+ const_zero_float_filer.Fill(&blob_offsets_float_y);
+
+ const_zero_float_filer.Fill(&blob_output);
+
+ const float* filtered_images = Caffe::mode() == Caffe::CPU ? blob_input.cpu_data() : blob_input.gpu_data();
+ const int* filter_offsets_x = Caffe::mode() == Caffe::CPU ? blob_offsets_x.cpu_data() : blob_offsets_x.gpu_data();
+ const int* filter_offsets_y = Caffe::mode() == Caffe::CPU ? blob_offsets_y.cpu_data() : blob_offsets_y.gpu_data();
+ const float* filter_offsets_float_x = Caffe::mode() == Caffe::CPU ? blob_offsets_float_x.cpu_data() : blob_offsets_float_x.gpu_data();
+ const float* filter_offsets_float_y = Caffe::mode() == Caffe::CPU ? blob_offsets_float_y.cpu_data() : blob_offsets_float_y.gpu_data();
+ const float* filter_weights = Caffe::mode() == Caffe::CPU ? blob_weights.cpu_data() : blob_weights.gpu_data();
+ float* output = Caffe::mode() == Caffe::CPU ? blob_output.mutable_cpu_data() : blob_output.mutable_gpu_data();
+
+
+ LayerParameter layer_param;
+ FastAproxGaussianConvLayer<float> layer(layer_param);
+
+ LayerParameter cudnn_layer_param;
+
+ ConvolutionParameter* convolution_param =
+		 cudnn_layer_param.mutable_convolution_param();
+
+ convolution_param->add_kernel_size(13);
+ convolution_param->add_stride(1);
+ convolution_param->add_pad(6);
+
+ convolution_param->set_num_output(F);
+
+ convolution_param->mutable_weight_filler()->set_type("gaussian");
+ convolution_param->mutable_weight_filler()->set_std(0.01);
+
+ std::cout << "input size:" << std::endl;
+ std::cout << "blob_input: " << blob_input.count()  << std::endl;
+ std::cout << "blob_offsets_x: " << blob_offsets_x.count()  << std::endl;
+ std::cout << "blob_offsets_y: " << blob_offsets_y.count()  << std::endl;
+ std::cout << "blob_weights: " << blob_weights.count()  << std::endl;
+ std::cout << "blob_output: " << blob_output.count() << std::endl << std::endl;
+
+ shared_ptr<CuDNNConvolutionLayer<float> > cudnn_layer(new CuDNNConvolutionLayer<float>(cudnn_layer_param));
+
+ std::vector<Blob<float>* > blob_bottom_vec;
+ std::vector<Blob<float>* > blob_top_vec;
+
+ blob_bottom_vec.push_back(&blob_input);
+ blob_top_vec.push_back(&blob_output);
+
+ cudnn_layer->SetUp(blob_bottom_vec, blob_top_vec);
+
+ clock_t start_t = clock();
+ cudnn_layer->Forward(blob_bottom_vec, blob_top_vec);
+ cudaDeviceSynchronize();
+
+ clock_t end_t = clock();
+ std::cout << "CuDNNConvolutionLayer forward pass in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl << std::endl;
+
+ for (int ii = 0; ii < 1; ++ii) {
+
+	 if (Caffe::mode() == Caffe::CPU)
+		 layer.test_kernel_cpu(filtered_images, filter_offsets_x, filter_offsets_y, filter_offsets_float_x, filter_offsets_float_y, filter_weights, output, N, S, F, G, W, H, 5, 5);
+	 else
+		 layer.test_kernel_gpu(filtered_images, filter_offsets_x, filter_offsets_y, filter_offsets_float_x, filter_offsets_float_y, filter_weights, output, N, S, F, G, W, H, 5, 5);
+
+	 float* output_c = blob_output.mutable_cpu_data();
+
+	 // verify data - since we use 1 for input and wights and 0 for offsets we should get S as output value for all
+
+	 int found_invalid = 0;
+
+	 for (int jj = 0; jj < blob_output.count(); ++jj) {
+		 if (output_c[jj] != S * G) {
+			 if (found_invalid < 10)
+				 printf("found invalid output (%f) at loc (%d) - should be %d\n", output_c[jj], jj, S *G);
+			 found_invalid++;
+		 }
+	 }
+
+	 if (found_invalid > 0)
+		 printf("found num of invalid output vals: %d/%d\n",found_invalid, blob_output.count());
+ }
 }
 
-TYPED_TEST(GaussConvolutionLayerTest, TestSimple3DConvolution) {
-  typedef typename TypeParam::Dtype Dtype;
-  this->blob_bottom_vec_.push_back(this->blob_bottom_2_);
-  this->blob_top_vec_.push_back(this->blob_top_2_);
-  vector<int> bottom_shape(5);
-  bottom_shape[0] = this->blob_bottom_vec_[0]->shape(0);
-  bottom_shape[1] = this->blob_bottom_vec_[0]->shape(1);
-  bottom_shape[2] = 5;
-  bottom_shape[3] = this->blob_bottom_vec_[0]->shape(2);
-  bottom_shape[4] = this->blob_bottom_vec_[0]->shape(3);
-  FillerParameter filler_param;
-  GaussianFiller<Dtype> filler(filler_param);
-  for (int i = 0; i < this->blob_bottom_vec_.size(); ++i) {
-    this->blob_bottom_vec_[i]->Reshape(bottom_shape);
-    filler.Fill(this->blob_bottom_vec_[i]);
-  }
-  LayerParameter layer_param;
-  ConvolutionParameter* convolution_param =
-      layer_param.mutable_convolution_param();
-  convolution_param->add_kernel_size(3);
-  convolution_param->add_stride(2);
-  convolution_param->set_num_output(4);
-  convolution_param->mutable_weight_filler()->set_type("gaussian");
-  convolution_param->mutable_bias_filler()->set_type("gaussian");
-  shared_ptr<Layer<Dtype> > layer(
-      new ConvolutionLayer<Dtype>(layer_param));
-  layer->SetUp(this->blob_bottom_vec_, this->blob_top_vec_);
-  layer->Forward(this->blob_bottom_vec_, this->blob_top_vec_);
-  // Check against reference convolution.
-  const Dtype* top_data;
-  const Dtype* ref_top_data;
-  caffe_conv(this->blob_bottom_, convolution_param, layer->blobs(),
-      this->MakeReferenceTop(this->blob_top_));
-  top_data = this->blob_top_->cpu_data();
-  ref_top_data = this->ref_blob_top_->cpu_data();
-  for (int i = 0; i < this->blob_top_->count(); ++i) {
-    EXPECT_NEAR(top_data[i], ref_top_data[i], 1e-4);
-  }
-  caffe_conv(this->blob_bottom_2_, convolution_param, layer->blobs(),
-      this->MakeReferenceTop(this->blob_top_2_));
-  top_data = this->blob_top_2_->cpu_data();
-  ref_top_data = this->ref_blob_top_->cpu_data();
-  for (int i = 0; i < this->blob_top_->count(); ++i) {
-    EXPECT_NEAR(top_data[i], ref_top_data[i], 1e-4);
-  }
-}
-
-TYPED_TEST(GaussConvolutionLayerTest, Test1x1Convolution) {
-  typedef typename TypeParam::Dtype Dtype;
-  LayerParameter layer_param;
-  ConvolutionParameter* convolution_param =
-      layer_param.mutable_convolution_param();
-  convolution_param->add_kernel_size(1);
-  convolution_param->add_stride(1);
-  convolution_param->set_num_output(4);
-  convolution_param->mutable_weight_filler()->set_type("gaussian");
-  convolution_param->mutable_bias_filler()->set_type("constant");
-  convolution_param->mutable_bias_filler()->set_value(0.1);
-  shared_ptr<Layer<Dtype> > layer(
-      new ConvolutionLayer<Dtype>(layer_param));
-  layer->SetUp(this->blob_bottom_vec_, this->blob_top_vec_);
-  layer->Forward(this->blob_bottom_vec_, this->blob_top_vec_);
-  // Check against reference convolution.
-  const Dtype* top_data;
-  const Dtype* ref_top_data;
-  caffe_conv(this->blob_bottom_, convolution_param, layer->blobs(),
-      this->MakeReferenceTop(this->blob_top_));
-  top_data = this->blob_top_->cpu_data();
-  ref_top_data = this->ref_blob_top_->cpu_data();
-  for (int i = 0; i < this->blob_top_->count(); ++i) {
-    EXPECT_NEAR(top_data[i], ref_top_data[i], 1e-4);
-  }
-}
-
-TYPED_TEST(GaussConvolutionLayerTest, TestSimpleConvolutionGroup) {
-  typedef typename TypeParam::Dtype Dtype;
-  LayerParameter layer_param;
-  ConvolutionParameter* convolution_param =
-      layer_param.mutable_convolution_param();
-  convolution_param->add_kernel_size(3);
-  convolution_param->add_stride(2);
-  convolution_param->set_num_output(3);
-  convolution_param->set_group(3);
-  convolution_param->mutable_weight_filler()->set_type("gaussian");
-  convolution_param->mutable_bias_filler()->set_type("constant");
-  convolution_param->mutable_bias_filler()->set_value(0.1);
-  shared_ptr<Layer<Dtype> > layer(
-      new ConvolutionLayer<Dtype>(layer_param));
-  layer->SetUp(this->blob_bottom_vec_, this->blob_top_vec_);
-  layer->Forward(this->blob_bottom_vec_, this->blob_top_vec_);
-  // Check against reference convolution.
-  const Dtype* top_data;
-  const Dtype* ref_top_data;
-  caffe_conv(this->blob_bottom_, convolution_param, layer->blobs(),
-      this->MakeReferenceTop(this->blob_top_));
-  top_data = this->blob_top_->cpu_data();
-  ref_top_data = this->ref_blob_top_->cpu_data();
-  for (int i = 0; i < this->blob_top_->count(); ++i) {
-    EXPECT_NEAR(top_data[i], ref_top_data[i], 1e-4);
-  }
-}
-
-TYPED_TEST(GaussConvolutionLayerTest, TestNDAgainst2D) {
-  typedef typename TypeParam::Dtype Dtype;
-  const int kernel_h = 11;
-  const int kernel_w = 13;
-  vector<int> bottom_shape(4);
-  bottom_shape[0] = 15;
-  bottom_shape[1] = 18;
-  bottom_shape[2] = kernel_h * 2;
-  bottom_shape[3] = kernel_w * 2;
-  FillerParameter filler_param;
-  GaussianFiller<Dtype> filler(filler_param);
-  for (int i = 0; i < this->blob_bottom_vec_.size(); ++i) {
-    this->blob_bottom_vec_[i]->Reshape(bottom_shape);
-    filler.Fill(this->blob_bottom_vec_[i]);
-  }
-  LayerParameter layer_param;
-  ConvolutionParameter* convolution_param =
-      layer_param.mutable_convolution_param();
-  convolution_param->set_num_output(12);
-  convolution_param->set_bias_term(false);
-  convolution_param->set_group(6);
-  convolution_param->set_kernel_h(kernel_h);
-  convolution_param->set_kernel_w(kernel_w);
-  convolution_param->mutable_weight_filler()->set_type("gaussian");
-  Blob<Dtype> weights;
-  Blob<Dtype> top_diff;
-  // Shape and fill weights and top_diff.
-  bool copy_diff;
-  bool reshape;
-  {
-    ConvolutionLayer<Dtype> layer(layer_param);
-    layer.SetUp(this->blob_bottom_vec_, this->blob_top_vec_);
-    top_diff.ReshapeLike(*this->blob_top_);
-    filler.Fill(&top_diff);
-    ASSERT_EQ(1, layer.blobs().size());
-    copy_diff = false; reshape = true;
-    weights.CopyFrom(*layer.blobs()[0], copy_diff, reshape);
-  }
-  vector<bool> propagate_down(1, true);
-  Blob<Dtype> result_2d;
-  Blob<Dtype> backward_result_2d;
-  Blob<Dtype> backward_weight_result_2d;
-  // Test with 2D im2col
-  {
-    caffe_set(this->blob_top_->count(), Dtype(0),
-              this->blob_top_->mutable_cpu_data());
-    caffe_set(this->blob_bottom_->count(), Dtype(0),
-              this->blob_bottom_->mutable_cpu_diff());
-    caffe_set(weights.count(), Dtype(0), weights.mutable_cpu_diff());
-    // Do SetUp and Forward; save Forward result in result_2d.
-    convolution_param->set_force_nd_im2col(false);
-    ConvolutionLayer<Dtype> layer_2d(layer_param);
-    layer_2d.SetUp(this->blob_bottom_vec_, this->blob_top_vec_);
-    ASSERT_EQ(1, layer_2d.blobs().size());
-    copy_diff = false; reshape = false;
-    layer_2d.blobs()[0]->CopyFrom(weights, copy_diff, reshape);
-    layer_2d.Forward(this->blob_bottom_vec_, this->blob_top_vec_);
-    copy_diff = false; reshape = true;
-    result_2d.CopyFrom(*this->blob_top_, copy_diff, reshape);
-    // Copy pre-generated top diff into actual top diff;
-    // do Backward and save result in backward_result_2d.
-    ASSERT_EQ(this->blob_top_->shape(), top_diff.shape());
-    caffe_copy(top_diff.count(), top_diff.cpu_data(),
-               this->blob_top_->mutable_cpu_diff());
-    layer_2d.Backward(this->blob_top_vec_, propagate_down,
-                      this->blob_bottom_vec_);
-    copy_diff = true; reshape = true;
-    backward_result_2d.CopyFrom(*this->blob_bottom_, copy_diff, reshape);
-    backward_weight_result_2d.CopyFrom(weights, copy_diff, reshape);
-  }
-  Blob<Dtype> result_nd;
-  Blob<Dtype> backward_result_nd;
-  Blob<Dtype> backward_weight_result_nd;
-  // Test with ND im2col
-  {
-    caffe_set(this->blob_top_->count(), Dtype(0),
-              this->blob_top_->mutable_cpu_data());
-    caffe_set(this->blob_bottom_->count(), Dtype(0),
-              this->blob_bottom_->mutable_cpu_diff());
-    caffe_set(weights.count(), Dtype(0), weights.mutable_cpu_diff());
-    // Do SetUp and Forward; save Forward result in result_nd.
-    convolution_param->set_force_nd_im2col(true);
-    ConvolutionLayer<Dtype> layer_nd(layer_param);
-    layer_nd.SetUp(this->blob_bottom_vec_, this->blob_top_vec_);
-    ASSERT_EQ(1, layer_nd.blobs().size());
-    copy_diff = false; reshape = false;
-    layer_nd.blobs()[0]->CopyFrom(weights, copy_diff, reshape);
-    layer_nd.Forward(this->blob_bottom_vec_, this->blob_top_vec_);
-    copy_diff = false; reshape = true;
-    result_nd.CopyFrom(*this->blob_top_, copy_diff, reshape);
-    // Copy pre-generated top diff into actual top diff;
-    // do Backward and save result in backward_result_nd.
-    ASSERT_EQ(this->blob_top_->shape(), top_diff.shape());
-    caffe_copy(top_diff.count(), top_diff.cpu_data(),
-               this->blob_top_->mutable_cpu_diff());
-    layer_nd.Backward(this->blob_top_vec_, propagate_down,
-                      this->blob_bottom_vec_);
-    copy_diff = true; reshape = true;
-    backward_result_nd.CopyFrom(*this->blob_bottom_, copy_diff, reshape);
-    backward_weight_result_nd.CopyFrom(weights, copy_diff, reshape);
-  }
-  ASSERT_EQ(result_nd.count(), result_2d.count());
-  for (int i = 0; i < result_2d.count(); ++i)  {
-    EXPECT_EQ(result_2d.cpu_data()[i], result_nd.cpu_data()[i]);
-  }
-  ASSERT_EQ(backward_result_nd.count(), backward_result_2d.count());
-  for (int i = 0; i < backward_result_2d.count(); ++i) {
-    EXPECT_EQ(backward_result_2d.cpu_diff()[i],
-              backward_result_nd.cpu_diff()[i]);
-  }
-  ASSERT_EQ(backward_weight_result_nd.count(),
-            backward_weight_result_2d.count());
-  for (int i = 0; i < backward_weight_result_2d.count(); ++i) {
-    EXPECT_EQ(backward_weight_result_2d.cpu_diff()[i],
-              backward_weight_result_nd.cpu_diff()[i]);
-  }
-}
-
-TYPED_TEST(GaussConvolutionLayerTest, TestGradient) {
-  typedef typename TypeParam::Dtype Dtype;
-  LayerParameter layer_param;
-  ConvolutionParameter* convolution_param =
-      layer_param.mutable_convolution_param();
-  this->blob_bottom_vec_.push_back(this->blob_bottom_2_);
-  this->blob_top_vec_.push_back(this->blob_top_2_);
-  convolution_param->add_kernel_size(3);
-  convolution_param->add_stride(2);
-  convolution_param->set_num_output(2);
-  convolution_param->mutable_weight_filler()->set_type("gaussian");
-  convolution_param->mutable_bias_filler()->set_type("gaussian");
-  ConvolutionLayer<Dtype> layer(layer_param);
-  GradientChecker<Dtype> checker(1e-2, 1e-3);
-  checker.CheckGradientExhaustive(&layer, this->blob_bottom_vec_,
-      this->blob_top_vec_);
-}
-
-TYPED_TEST(GaussConvolutionLayerTest, TestGradient3D) {
-  typedef typename TypeParam::Dtype Dtype;
-  LayerParameter layer_param;
-  ConvolutionParameter* convolution_param =
-      layer_param.mutable_convolution_param();
-  vector<int> bottom_shape(5);
-  bottom_shape[0] = this->blob_bottom_vec_[0]->shape(0);
-  bottom_shape[1] = this->blob_bottom_vec_[0]->shape(1);
-  bottom_shape[2] = 5;
-  bottom_shape[3] = this->blob_bottom_vec_[0]->shape(2);
-  bottom_shape[4] = this->blob_bottom_vec_[0]->shape(3);
-  FillerParameter filler_param;
-  GaussianFiller<Dtype> filler(filler_param);
-  for (int i = 0; i < this->blob_bottom_vec_.size(); ++i) {
-    this->blob_bottom_vec_[i]->Reshape(bottom_shape);
-    filler.Fill(this->blob_bottom_vec_[i]);
-  }
-  convolution_param->add_kernel_size(3);
-  convolution_param->add_stride(2);
-  convolution_param->set_num_output(2);
-  convolution_param->mutable_weight_filler()->set_type("gaussian");
-  convolution_param->mutable_bias_filler()->set_type("gaussian");
-  ConvolutionLayer<Dtype> layer(layer_param);
-  GradientChecker<Dtype> checker(1e-2, 1e-3);
-  checker.CheckGradientExhaustive(&layer, this->blob_bottom_vec_,
-      this->blob_top_vec_);
-}
-
-TYPED_TEST(GaussConvolutionLayerTest, Test1x1Gradient) {
-  typedef typename TypeParam::Dtype Dtype;
-  LayerParameter layer_param;
-  ConvolutionParameter* convolution_param =
-      layer_param.mutable_convolution_param();
-  this->blob_bottom_vec_.push_back(this->blob_bottom_2_);
-  this->blob_top_vec_.push_back(this->blob_top_2_);
-  convolution_param->add_kernel_size(1);
-  convolution_param->add_stride(1);
-  convolution_param->set_num_output(2);
-  convolution_param->mutable_weight_filler()->set_type("gaussian");
-  convolution_param->mutable_bias_filler()->set_type("gaussian");
-  ConvolutionLayer<Dtype> layer(layer_param);
-  GradientChecker<Dtype> checker(1e-2, 1e-3);
-  checker.CheckGradientExhaustive(&layer, this->blob_bottom_vec_,
-      this->blob_top_vec_);
-}
-
-TYPED_TEST(GaussConvolutionLayerTest, TestGradientGroup) {
-  typedef typename TypeParam::Dtype Dtype;
-  LayerParameter layer_param;
-  ConvolutionParameter* convolution_param =
-      layer_param.mutable_convolution_param();
-  convolution_param->add_kernel_size(3);
-  convolution_param->add_stride(2);
-  convolution_param->set_num_output(3);
-  convolution_param->set_group(3);
-  convolution_param->mutable_weight_filler()->set_type("gaussian");
-  convolution_param->mutable_bias_filler()->set_type("gaussian");
-  ConvolutionLayer<Dtype> layer(layer_param);
-  GradientChecker<Dtype> checker(1e-2, 1e-3);
-  checker.CheckGradientExhaustive(&layer, this->blob_bottom_vec_,
-      this->blob_top_vec_);
-}
-*/
 #ifdef USE_CUDNN
 
 #endif

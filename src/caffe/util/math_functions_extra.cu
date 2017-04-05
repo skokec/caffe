@@ -223,6 +223,29 @@ void caffe_gpu_clip_eps<double>(const int N, const double eps_bound, const doubl
 }
 
 
+
+__global__ void round_kernel_float(const int n, const float* x, float* y) {
+  CUDA_KERNEL_LOOP(index, n) {
+    y[index] = llroundf(x[index]);
+  }
+}
+
+__global__ void round_kernel_double(const int n, const double* x, double* y) {
+  CUDA_KERNEL_LOOP(index, n) {
+    y[index] = llround(x[index]);
+  }
+}
+
+
+template <>
+void caffe_gpu_round<float>(const int N, const float* x, float* y, cudaStream_t streamId) {
+	round_kernel_float<<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS, 0, streamId>>>(N, x, y);
+}
+template <>
+void caffe_gpu_round<double>(const int N,const double* x, double* y, cudaStream_t streamId) {
+	round_kernel_double<<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS, 0, streamId>>>(N, x, y);
+}
+
 template <typename Dtype>
 void caffe_gpu_sum(const int n, const Dtype* x, Dtype* y, const int m, cudaStream_t streamId) {
 	CHECK_EQ(n % m, 0);

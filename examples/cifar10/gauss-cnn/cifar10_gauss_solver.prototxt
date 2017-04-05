@@ -1,54 +1,43 @@
-# reduce learning rate after 120 epochs (60000 iters) by factor 0f 10
-# then another factor of 10 after 10 more epochs (5000 iters)
 
 # The train/test net protocol buffer definition
-net: "examples/cifar10/guass-cnn/cifar10_gauss_train_test.prototxt"
+net: "/home/domen/caffe/caffe-gauss/examples/cifar10/gauss-cnn/cifar10_gauss_train_test.prototxt"
 # test_iter specifies how many forward passes the test should carry out.
 # In the case of CIFAR10, we have test batch size 100 and 100 test iterations,
 # covering the full 10,000 testing images.
-test_iter: 100
+#test_iter: 100
+test_iter: 500
 # Carry out testing every 1000 training iterations.
-test_interval: 1000
+test_interval: 500
 # The base learning rate, momentum and the weight decay of the network.
-base_lr: 0.01
-#base_lr: 0.001 # icpr16
-#base_lr: 0.0256
+base_lr: 0.1
 momentum: 0.9
 delta: 0.1
-#weight_decay: 20 # useful for SGD with no gmm normalization
-#weight_decay: 5 # useful for SGD with SGD
-#weight_decay: 0.5 # useful for SGD with ADADELTA
-#weight_decay: 0
 weight_decay: 0.004
-# The learning rate policy
-#lr_policy: "fixed"
 
 
 lr_policy: "multistep"
-#stepvalue: 25000
+# for 100 batch-size x 1 GPU
+#stepvalue: 40000
+#stepvalue: 80000
+#stepvalue: 125000
+#stepvalue: 150000
+# for 4 GPU
+stepvalue: 5000
+stepvalue: 10000
+stepvalue: 15000
+stepvalue: 20000
+stepvalue: 30000
 stepvalue: 40000
-stepvalue: 80000
-stepvalue: 125000
-stepvalue: 150000
 gamma: 0.1
-#lr_policy: "step"
-#stepsize: 40000
-#gamma: 0.5
 
 # Display every 200 iterations
-display: 100
-# The maximum number of iterations
-#max_iter: 100000
-#max_iter: 1500
+display: 10
 max_iter: 175000
 # snapshot intermediate results
-snapshot: 10000
-snapshot_prefix: "examples/cifar10/tmp/guass-cnn/cifar10_gauss"
+snapshot: 1000
+snapshot_prefix: "/home/domen/caffe/caffe-gauss/examples/cifar10/gauss-cnn/cifar10_gauss"
 # solver mode: CPU or GPU
 solver_mode: GPU
 #solver_mode: CPU
 
 debug_info: false
-#random_seed: 123456789
-#solver_type: NESTEROV
-#solver_type: ADADELTA

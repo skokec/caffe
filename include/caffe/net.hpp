@@ -184,8 +184,15 @@ class Net {
   inline const vector<float>& params_weight_decay() const {
     return params_weight_decay_;
   }
+  /// @brief returns the learnable parameter decay multipliers
+  inline const vector<float>& params_weight_decay_target() const {
+    return params_weight_decay_target_;
+  }
   inline const vector<bool>& has_params_decay() const {
     return has_params_decay_;
+  }
+  inline const vector<bool>& has_params_decay_target() const {
+    return has_params_decay_target_;
   }
   const map<string, int>& param_names_index() const {
     return param_names_index_;
@@ -301,6 +308,9 @@ class Net {
   /// the weight decay multipliers for learnable_params_
   vector<float> params_weight_decay_;
   vector<bool> has_params_decay_;
+  /// target for weight decay for learnable_params_
+  vector<float> params_weight_decay_target_;
+  vector<bool> has_params_decay_target_;
   /// The bytes of memory used by this net
   size_t memory_used_;
   /// Whether to compute and display debug info for the net.

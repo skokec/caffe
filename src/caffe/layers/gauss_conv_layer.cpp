@@ -199,9 +199,12 @@ void BaseGaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom
 		this->num_extra_blobs = 8;
 
 		// to support loading older snapshots we need to ignore last two blobs which hold random means for components merging
-		if (this->layer_param_.convolution_param().gmm_legacy_merge_blobs())
+		if (this->layer_param_.convolution_param().gmm_legacy_merge_blobs()) {
+			LOG(INFO) << "Using legacy loading support that does not have merge blobs";
 			this->num_extra_blobs -= 2;
-
+		} else {
+			LOG(INFO) << "Legacy loading support for merge blobs disabled";
+		}
 		if (this->bias_term_) {
 			this->blobs_.resize(1 + NUM_GAUSS_COMPONENT_PARAM + NUM_GAUSS_PARAM + this->num_extra_blobs );
 		} else {
@@ -297,6 +300,10 @@ void BaseGaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom
 			bias_filler->Fill(this->param_buffer_bias_.get());
 		}
 
+
+		this->param_buffer_mu1_discr_.reset(new Blob<Dtype>());
+		this->param_buffer_mu2_discr_.reset(new Blob<Dtype>());
+
 		int precomputed_blobs_offset = NUM_GAUSS_COMPONENT_PARAM + NUM_GAUSS_PARAM;
 		if (this->bias_term_)
 			precomputed_blobs_offset++;
@@ -329,10 +336,14 @@ void BaseGaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom
 			if (this->layer_param().param_size() > precomputed_blobs_offset + 6){
 				CHECK_EQ(1, this->layer_param().param(precomputed_blobs_offset + 6).lr_mult()) << "lr_param for random mean buffer (index " << precomputed_blobs_offset + 6 << ") must be set to 1";
 				CHECK_EQ(0, this->layer_param().param(precomputed_blobs_offset + 6).decay_mult())  << "decay_mult for random mean buffer (index " << precomputed_blobs_offset + 6 << ") must be set to 0";
+
+				// by default decay_mult is set to 1, however multiply all random values will be canceled out because component merging re-scale values to desired size
 			}
 			if (this->layer_param().param_size() > precomputed_blobs_offset + 7){
 				CHECK_EQ(1, this->layer_param().param(precomputed_blobs_offset + 7).lr_mult())  << "lr_param for random mean buffer (index " << precomputed_blobs_offset + 7 << ") must be set to 1";
 				CHECK_EQ(0, this->layer_param().param(precomputed_blobs_offset + 7).decay_mult())  << "decay_mult for random mean buffer (index " << precomputed_blobs_offset + 7 << ") must be set to 0";
+
+				// by default decay_mult is set to 1, however multiply all random values will be canceled out because component merging re-scale values to desired size
 			}
 		}
 	}
@@ -357,6 +368,8 @@ void BaseGaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom
 	this->gmm_merge_threshold = this->layer_param_.convolution_param().gmm_merge_threshold();
 
 	this->use_gmm_seperable_kernels = this->layer_param_.convolution_param().gmm_seperable_forward_pass();
+
+	this->gmm_discretize_mean = this->layer_param_.convolution_param().gmm_discretize_mean();
 
 
 	this->current_iteration_index = 0;
@@ -430,6 +443,10 @@ void BaseGaussianConvLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
 			conv_input_shape_data[i] = bottom[0]->shape(this->channel_axis_ + i);
 		}
 	}
+
+	this->param_buffer_mu1_discr_->ReshapeLike(*this->param_buffer_mu1_);
+	this->param_buffer_mu2_discr_->ReshapeLike(*this->param_buffer_mu2_);
+
 
 	this->random_mu1_buffer_->ReshapeLike(*this->param_buffer_w_);
 	this->random_mu2_buffer_->ReshapeLike(*this->param_buffer_w_);
@@ -718,19 +735,29 @@ void BaseGaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_
 				Dtype w = 	gauss_params_w[gauss_param_buffer_w.offset(0,j,k,i)];
 				//Dtype& mu1 = 	gauss_params_mu1[gauss_param_buffer_mu1.offset(0,j,k,i)] + kernel_center_w;
 				//Dtype& mu2 = 	gauss_params_mu2[gauss_param_buffer_mu2.offset(0,j,k,i)] + kernel_center_h;
-				Dtype& mu1 = 	gauss_params_mu1[gauss_param_buffer_mu1.offset(0,j,k,i)];
-				Dtype& mu2 = 	gauss_params_mu2[gauss_param_buffer_mu2.offset(0,j,k,i)];
+				Dtype& mu1_org = 	gauss_params_mu1[gauss_param_buffer_mu1.offset(0,j,k,i)];
+				Dtype& mu2_org = 	gauss_params_mu2[gauss_param_buffer_mu2.offset(0,j,k,i)];
 				Dtype& sigma = 	gauss_params_sigma[gauss_param_buffer_sigma.offset(0,j,k,i)];
 
 				// do not allow sigma bellow 0.1 threshold !!
 				sigma = std::max(this->gmm_sigma_lower_bound,sigma);
 
 				// do not allow mean outside of kernel bounds reduced by gmm_component_border_bound
-				mu1 = std::max((Dtype)this->gmm_component_border_bound,mu1);
-				mu2 = std::max((Dtype)this->gmm_component_border_bound,mu2);
+				mu1_org = std::max((Dtype)this->gmm_component_border_bound,mu1_org);
+				mu2_org = std::max((Dtype)this->gmm_component_border_bound,mu2_org);
 
-				mu1 = std::min(this->kernel_w_-1 - (Dtype)this->gmm_component_border_bound,mu1);
-				mu2 = std::min(this->kernel_h_-1 - (Dtype)this->gmm_component_border_bound,mu2);
+				mu1_org = std::min(this->kernel_w_-1 - (Dtype)this->gmm_component_border_bound,mu1_org);
+				mu2_org = std::min(this->kernel_h_-1 - (Dtype)this->gmm_component_border_bound,mu2_org);
+
+				Dtype mu1 = mu1_org;
+				Dtype mu2 = mu2_org;
+
+				// discretize mean
+				if (this->gmm_discretize_mean) {
+					// round means to integer values, however this should not be saved back to blob
+					mu1 = round(mu1);
+					mu2 = round(mu2);
+				}
 
 				// no need to compute kernel from this gaussian component if its weight is zero
 				int is_valid_kernel = std::abs<Dtype>(w) > 0 ? 1 : 0;

@@ -143,19 +143,19 @@ void BaseGaussianConvLayer<Dtype>::precompute_guassian_weights_gpu(bool is_backw
 //	Dtype* weight_horiz = this->weight_horiz_buffer_->mutable_gpu_data();
 
 	// pre-compute weights from guassian params
-	Blob<Dtype>& gauss_param_buffer_w = *this->param_buffer_w_;
-	Blob<Dtype>& gauss_param_buffer_mu1 = *this->param_buffer_mu1_;
-	Blob<Dtype>& gauss_param_buffer_mu2 = *this->param_buffer_mu2_;
-	Blob<Dtype>& gauss_param_buffer_sigma = *this->param_buffer_sigma_;
+	shared_ptr<Blob<Dtype> > gauss_param_buffer_w = this->param_buffer_w_;
+	shared_ptr<Blob<Dtype> > gauss_param_buffer_mu1 = this->param_buffer_mu1_;
+	shared_ptr<Blob<Dtype> > gauss_param_buffer_mu2 = this->param_buffer_mu2_;
+	shared_ptr<Blob<Dtype> > gauss_param_buffer_sigma = this->param_buffer_sigma_;
 
 	Blob<Dtype>& gauss_param_buffer_sigma_square_inv = param_buffer_sigma_square_inv_;
 	Blob<Dtype>& gauss_param_buffer_sigma_cube_inv = param_buffer_sigma_cube_inv_;
 	Blob<Dtype>& gauss_param_buffer_sigma_square_inv_half = param_buffer_sigma_square_inv_half_;
 
-	const Dtype* gauss_params_w = gauss_param_buffer_w.gpu_data();
-	Dtype* gauss_params_mu1 = gauss_param_buffer_mu1.mutable_gpu_data();
-	Dtype* gauss_params_mu2 = gauss_param_buffer_mu2.mutable_gpu_data();
-	Dtype* gauss_params_sigma = gauss_param_buffer_sigma.mutable_gpu_data();
+	const Dtype* gauss_params_w = gauss_param_buffer_w->gpu_data();
+	Dtype* gauss_params_mu1 = gauss_param_buffer_mu1->mutable_gpu_data();
+	Dtype* gauss_params_mu2 = gauss_param_buffer_mu2->mutable_gpu_data();
+	Dtype* gauss_params_sigma = gauss_param_buffer_sigma->mutable_gpu_data();
 
 	Dtype* gauss_params_sigma_square_inv = gauss_param_buffer_sigma_square_inv.mutable_gpu_data();
 	Dtype* gauss_params_sigma_cube_inv = gauss_param_buffer_sigma_cube_inv.mutable_gpu_data();
@@ -173,22 +173,41 @@ void BaseGaussianConvLayer<Dtype>::precompute_guassian_weights_gpu(bool is_backw
 	}
 
 	// clip sigma, mu1 and mu2 to within bounds
-	caffe_gpu_clip_lower(gauss_param_buffer_sigma.count(), this->gmm_sigma_lower_bound, gauss_params_sigma, gauss_params_sigma);
+	caffe_gpu_clip_lower(gauss_param_buffer_sigma->count(), this->gmm_sigma_lower_bound, gauss_params_sigma, gauss_params_sigma);
 
-	caffe_gpu_clip_lower(gauss_param_buffer_mu1.count(), (Dtype)this->gmm_component_border_bound, gauss_params_mu1, gauss_params_mu1);
-	caffe_gpu_clip_lower(gauss_param_buffer_mu2.count(), (Dtype)this->gmm_component_border_bound, gauss_params_mu2, gauss_params_mu2);
+	caffe_gpu_clip_lower(gauss_param_buffer_mu1->count(), (Dtype)this->gmm_component_border_bound, gauss_params_mu1, gauss_params_mu1);
+	caffe_gpu_clip_lower(gauss_param_buffer_mu2->count(), (Dtype)this->gmm_component_border_bound, gauss_params_mu2, gauss_params_mu2);
 
-	caffe_gpu_clip_upper(gauss_param_buffer_mu1.count(), this->kernel_w_-1 - (Dtype)this->gmm_component_border_bound, gauss_params_mu1, gauss_params_mu1);
-	caffe_gpu_clip_upper(gauss_param_buffer_mu2.count(), this->kernel_h_-1 - (Dtype)this->gmm_component_border_bound, gauss_params_mu2, gauss_params_mu2);
+	caffe_gpu_clip_upper(gauss_param_buffer_mu1->count(), this->kernel_w_-1 - (Dtype)this->gmm_component_border_bound, gauss_params_mu1, gauss_params_mu1);
+	caffe_gpu_clip_upper(gauss_param_buffer_mu2->count(), this->kernel_h_-1 - (Dtype)this->gmm_component_border_bound, gauss_params_mu2, gauss_params_mu2);
+
+	// discretize mean
+	if (this->gmm_discretize_mean) {
+		// copy params to seperate buffer since we use discretized means only to compute kernels, but need to accumulate real gradient values in actual buffer
+		caffe_gpu_memcpy(gauss_param_buffer_mu1->count() * sizeof(Dtype), gauss_params_mu1, this->param_buffer_mu1_discr_->mutable_gpu_data());
+		caffe_gpu_memcpy(gauss_param_buffer_mu2->count() * sizeof(Dtype), gauss_params_mu2, this->param_buffer_mu2_discr_->mutable_gpu_data());
+
+		// switch to discretized buffer
+		gauss_param_buffer_mu1 = this->param_buffer_mu1_discr_;
+		gauss_param_buffer_mu2 = this->param_buffer_mu2_discr_;
+
+		gauss_params_mu1 = gauss_param_buffer_mu1->mutable_gpu_data();
+		gauss_params_mu2 = gauss_param_buffer_mu2->mutable_gpu_data();
+
+		// do discretization
+		caffe_gpu_round(gauss_param_buffer_mu1->count(), gauss_params_mu1, gauss_params_mu1);
+		caffe_gpu_round(gauss_param_buffer_mu2->count(), gauss_params_mu2, gauss_params_mu2);
+	}
+
 
 	// 0. precompute  sigma^2, sigma^3 and (sigma^2)/2
 	conv_gauss_precompute_sigma_kernel<Dtype><<<CAFFE_GET_BLOCKS(S*G*F), CAFFE_CUDA_NUM_THREADS>>>(S*G*F, gauss_params_sigma, gauss_params_sigma_square_inv, gauss_params_sigma_cube_inv, gauss_params_sigma_square_inv_half, this->gmm_sigma_lower_bound);
 
 	/*{
-		const Dtype* gauss_params_w = gauss_param_buffer_w.cpu_data();
-		const Dtype* gauss_params_mu1 = gauss_param_buffer_mu1.cpu_data();
-		const Dtype* gauss_params_mu2 = gauss_param_buffer_mu2.cpu_data();
-		const Dtype* gauss_params_sigma = gauss_param_buffer_sigma.cpu_data();
+		const Dtype* gauss_params_w = gauss_param_buffer_w->cpu_data();
+		const Dtype* gauss_params_mu1 = gauss_param_buffer_mu1->cpu_data();
+		const Dtype* gauss_params_mu2 = gauss_param_buffer_mu2->cpu_data();
+		const Dtype* gauss_params_sigma = gauss_param_buffer_sigma->cpu_data();
 
 		const Dtype* gauss_params_sigma_square_inv = gauss_param_buffer_sigma_square_inv.cpu_data();
 		const Dtype* gauss_params_sigma_cube_inv = gauss_param_buffer_sigma_cube_inv.cpu_data();
