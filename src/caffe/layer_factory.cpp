@@ -16,6 +16,7 @@
 #include "caffe/layers/tanh_layer.hpp"
 #include "caffe/proto/caffe.pb.h"
 #include "caffe/layers/gauss_conv_layer.hpp"
+#include "caffe/layers/batch_norm_scale_layer.hpp"
 
 #ifdef USE_CUDNN
 #include "caffe/layers/cudnn_conv_layer.hpp"
@@ -26,6 +27,7 @@
 #include "caffe/layers/cudnn_sigmoid_layer.hpp"
 #include "caffe/layers/cudnn_softmax_layer.hpp"
 #include "caffe/layers/cudnn_tanh_layer.hpp"
+#include "caffe/layers/cudnn_batch_norm_scale_layer.hpp"
 #endif
 
 #ifdef WITH_PYTHON_LAYER
@@ -283,6 +285,29 @@ shared_ptr<Layer<Dtype> > GetGaussianConvLayer(
 }
 
 REGISTER_LAYER_CREATOR(GaussianConv, GetGaussianConvLayer);
+
+// Get BN layer according to engine.
+template <typename Dtype>
+shared_ptr<Layer<Dtype> > GetBatchNormScaleLayer(const LayerParameter& param) {
+  BatchNormScaleParameter_Engine engine = param.batch_norm_scale_param().engine();
+  if (engine == BatchNormScaleParameter_Engine_DEFAULT) {
+    engine = BatchNormScaleParameter_Engine_CAFFE;
+#ifdef USE_CUDNN
+    engine = BatchNormScaleParameter_Engine_CUDNN;
+#endif
+  }
+  if (engine == BatchNormScaleParameter_Engine_CAFFE) {
+    LOG(FATAL) << "Only CUDNN engine supported for BatchNormScaleLayer.";
+#ifdef USE_CUDNN
+  } else if (engine == BatchNormScaleParameter_Engine_CUDNN) {
+    return shared_ptr<Layer<Dtype> >(new CuDNNBatchNormScaleLayer<Dtype>(param));
+#endif
+  } else {
+    LOG(FATAL) << "Layer " << param.name() << " has unknown engine.";
+  }
+}
+
+REGISTER_LAYER_CREATOR(BatchNormScale, GetBatchNormScaleLayer);
 
 // Layers that use their constructor as their default creator should be
 // registered in their corresponding cpp files. Do not register them here.
