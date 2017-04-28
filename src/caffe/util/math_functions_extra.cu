@@ -68,6 +68,7 @@ void caffe_gpu_set_async(const int N, const Dtype alpha, Dtype* Y, cudaStream_t 
   // NOLINT_NEXT_LINE(whitespace/operators)
   set_kernel<Dtype><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS, 0, streamId>>>(
       N, alpha, Y);
+  CUDA_POST_KERNEL_CHECK;
 }
 
 template void caffe_gpu_set_async<int>(const int N, const int alpha, int* Y, cudaStream_t streamId);
@@ -109,6 +110,7 @@ void caffe_gpu_mul_batched<float>(const int N, const float* a,
   	  mul_kernel<float><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS, 0, streamId>>>(N, a, b, y);
   else
 	  mul_kernel_batched<float><<<CAFFE_GET_BLOCKS(M), CAFFE_CUDA_NUM_THREADS, 0, streamId>>>(N, a, b, y, M);
+  CUDA_POST_KERNEL_CHECK;
 }
 
 template <>
@@ -120,6 +122,7 @@ void caffe_gpu_mul_batched<double>(const int N, const double* a,
 	  mul_kernel<double><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS, 0, streamId>>>(N, a, b, y);
   else
 	  mul_kernel_batched<double><<<CAFFE_GET_BLOCKS(M), CAFFE_CUDA_NUM_THREADS, 0, streamId>>>(N, a, b, y, M);
+  CUDA_POST_KERNEL_CHECK;
 }
 
 
@@ -148,6 +151,7 @@ void caffe_gpu_mul_split<float>(const int N, const float* a,
     const float* b, float* y, const int M, const int K, const int L, cudaStream_t streamId) {
   // NOLINT_NEXT_LINE(whitespace/operators)
   mul_kernel_split<float><<<CAFFE_GET_BLOCKS(M), CAFFE_CUDA_NUM_THREADS, 0, streamId>>>(N, a, b, y, M, K, L);
+  CUDA_POST_KERNEL_CHECK;
 }
 
 template <>
@@ -155,6 +159,7 @@ void caffe_gpu_mul_split<double>(const int N, const double* a,
   const double* b, double* y, const int M, const int K, const int L, cudaStream_t streamId) {
   // NOLINT_NEXT_LINE(whitespace/operators)
   mul_kernel_split<double><<<CAFFE_GET_BLOCKS(M), CAFFE_CUDA_NUM_THREADS, 0, streamId>>>(N, a, b, y, M, K, L);
+  CUDA_POST_KERNEL_CHECK;
 }
 
 
@@ -173,11 +178,13 @@ __global__ void clip_lower_kernel_float(const int n, const float lower_bound, co
 template <>
 void caffe_gpu_clip_lower<float>(const int N, const float lower_bound, const float* x, float* y, cudaStream_t streamId) {
 	clip_lower_kernel_float<<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS, 0, streamId>>>(N, lower_bound, x, y);
+	CUDA_POST_KERNEL_CHECK;
 }
 
 template <>
 void caffe_gpu_clip_lower<double>(const int N, const double lower_bound, const double* x, double* y, cudaStream_t streamId) {
 	clip_lower_kernel_double<<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS, 0, streamId>>>(N, lower_bound, x, y);
+	CUDA_POST_KERNEL_CHECK;
 }
 
 
@@ -196,11 +203,13 @@ __global__ void clip_upper_kernel_float(const int n, const float lower_bound, co
 template <>
 void caffe_gpu_clip_upper<float>(const int N, const float upper_bound, const float* x, float* y, cudaStream_t streamId) {
 	clip_upper_kernel_float<<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS, 0, streamId>>>(N, upper_bound, x, y);
+	CUDA_POST_KERNEL_CHECK;
 }
 
 template <>
 void caffe_gpu_clip_upper<double>(const int N, const double upper_bound, const double* x, double* y, cudaStream_t streamId) {
 	clip_upper_kernel_double<<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS, 0, streamId>>>(N, upper_bound, x, y);
+	CUDA_POST_KERNEL_CHECK;
 }
 
 
@@ -216,10 +225,12 @@ __global__ void clip_eps_kernel(const int n, const Dtype eps_bound, const Dtype*
 template <>
 void caffe_gpu_clip_eps<float>(const int N, const float eps_bound, const float* x, float* y, cudaStream_t streamId) {
 	clip_eps_kernel<float><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS, 0, streamId>>>(N, eps_bound, x, y);
+	CUDA_POST_KERNEL_CHECK;
 }
 template <>
 void caffe_gpu_clip_eps<double>(const int N, const double eps_bound, const double* x, double* y, cudaStream_t streamId) {
 	clip_eps_kernel<double><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS, 0, streamId>>>(N, eps_bound, x, y);
+	CUDA_POST_KERNEL_CHECK;
 }
 
 
