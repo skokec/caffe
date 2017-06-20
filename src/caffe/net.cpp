@@ -167,8 +167,25 @@ void Net<Dtype>::Init(const NetParameter& in_param) {
       }
       memory_used_ += top_vecs_[layer_id][top_id]->count();
     }
+    float mem = memory_used_ * sizeof(Dtype);
+    std::string units;
+    if (mem > 1024*1024*1024) {
+      units = "GB";
+      mem = mem / (1024*1024*1024);
+    } else if (mem > 1024*1024) {
+      units = "MB";
+      mem = mem / (1024*1024);
+    } else if (mem > 1024) {
+      units = "kB";
+      mem = mem / (1024);
+    } else {
+      units = "B";
+    }
+      
     LOG_IF(INFO, Caffe::root_solver())
-        << "Memory required for data: " << memory_used_ * sizeof(Dtype);
+        << "Memory required for data: " << mem << " " << units;
+    
+	
     const int param_size = layer_param.param_size();
     const int num_param_blobs = layers_[layer_id]->blobs().size();
     CHECK_LE(param_size, num_param_blobs)
