@@ -628,10 +628,10 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_weight_derivative_fi
 template <typename Dtype>
 __global__ void axpby_kernel_batched(const int n, const Dtype a_factor, const Dtype* a, const Dtype* x, const Dtype* b, Dtype* y, const int m) {
 
-	for (int j = blockIdx.y * blockDim.y + threadIdx.y; j < m; j += blockDim.y * gridDim.y) {
+	for (int j = blockIdx.x * blockDim.x + threadIdx.x; j < m; j += blockDim.x * gridDim.x) {
 		Dtype a_value = a[j] * a_factor;
 		Dtype b_value = b[j];
-		for (int i = j * n + blockIdx.x * blockDim.x + threadIdx.x; i < n * (1 + j); i += blockDim.x * gridDim.x) {
+		for (int i = j * n + blockIdx.y * blockDim.y + threadIdx.y; i < n * (1 + j); i += blockDim.y * gridDim.y) {
 			y[i] = a_value * x[i] + b_value * y[i];
 		}
 	}
@@ -737,8 +737,8 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_mu1_derivative_filte
 		caffe_gpu_mul_batched(S*F*G, gauss_norm_with_w, deriv_mu1_sums, deriv_mu1_sums, 0, streamId); CUDA_POST_KERNEL_CHECK; // deriv_mu1_sums = deriv_mu1_sums * guass_norm;
 
 		// and add normalizaion (i.e., deriv_mu1 = deriv_mu1 - deriv_weight * deriv_mu1_sums)
-		threadsPerBlock = dim3(K_w* K_h, CAFFE_CUDA_NUM_THREADS/(K_w * K_h));
-		numBlocks = dim3(1, (S*F*G + threadsPerBlock.y - 1) / threadsPerBlock.y);
+		threadsPerBlock = dim3(CAFFE_CUDA_NUM_THREADS/(K_w * K_h),K_w* K_h);
+		numBlocks = dim3((S*F*G + threadsPerBlock.y - 1) / threadsPerBlock.y, 1);
 
 		axpby_kernel_batched<Dtype><<<numBlocks,threadsPerBlock,0,streamId>>>(K_w * K_h, (Dtype)-1, deriv_mu1_sums, deriv_weight,  gauss_norm_with_w, deriv_mu1, S*F*G); CUDA_POST_KERNEL_CHECK;
 	}
@@ -844,8 +844,8 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_mu2_derivative_filte
 
 
 		// and add normalizaion (i.e., deriv_mu1 = deriv_mu1 - deriv_weight * deriv_mu1_sums)
-		threadsPerBlock = dim3(K_w* K_h, CAFFE_CUDA_NUM_THREADS/(K_w * K_h));
-		numBlocks = dim3(1, (S*F*G + threadsPerBlock.y - 1) / threadsPerBlock.y);
+		threadsPerBlock = dim3(CAFFE_CUDA_NUM_THREADS/(K_w * K_h), K_w* K_h);
+		numBlocks = dim3((S*F*G + threadsPerBlock.y - 1) / threadsPerBlock.y, 1);
 
 		axpby_kernel_batched<Dtype><<<numBlocks,threadsPerBlock,0,streamId>>>(K_w * K_h, (Dtype)-1, deriv_mu2_sums, deriv_weight,  gauss_norm_with_w, deriv_mu2, S*F*G); CUDA_POST_KERNEL_CHECK;
 	}
@@ -954,8 +954,8 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_sigma_derivative_fil
 
 
 		// and add normalizaion (i.e., deriv_mu1 = deriv_mu1 - deriv_weight * deriv_mu1_sums)
-		threadsPerBlock = dim3(K_w* K_h, CAFFE_CUDA_NUM_THREADS/(K_w * K_h));
-		numBlocks = dim3(1, (S*F*G + threadsPerBlock.y - 1) / threadsPerBlock.y);
+		threadsPerBlock = dim3(CAFFE_CUDA_NUM_THREADS/(K_w * K_h), K_w* K_h);
+		numBlocks = dim3((S*F*G + threadsPerBlock.y - 1) / threadsPerBlock.y, 1);
 
 		axpby_kernel_batched<Dtype><<<numBlocks,threadsPerBlock,0,streamId>>>(K_w * K_h, (Dtype)-1, deriv_sigma_sums, deriv_weight,  gauss_norm_with_w, deriv_sigma, S*F*G); CUDA_POST_KERNEL_CHECK;
 	}
