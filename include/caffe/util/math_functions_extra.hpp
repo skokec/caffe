@@ -72,6 +72,9 @@ void caffe_gpu_clip_upper(const int N, const Dtype upper_bound, const Dtype* x, 
 template <typename Dtype>
 void caffe_gpu_clip_eps(const int N, const Dtype eps_bound, const Dtype* x, Dtype* y, cudaStream_t streamId = 0);
 
+template <typename Dtype>
+void caffe_gpu_round(const int N, const Dtype* x, Dtype* y, cudaStream_t streamId = 0);
+
 #define CUDNN_CALL_WITH_STREAM(streamId, CALL) \
 { \
   cudaStream_t current_stream; \
