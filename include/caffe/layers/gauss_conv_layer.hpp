@@ -204,6 +204,9 @@ class FastAproxGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
 
   void test_kernel_cpu(const float* filtered_images, const int* filter_offsets_x, const int* filter_offsets_y, const float* filter_offsets_float_x, const float* filter_offsets_float_y, const float* filter_weights, float* output, const int I, const int S, const int F, const int G, const int img_width, const int img_height, const int kernel_width, const int kernel_height);
   void test_kernel_gpu(const float* filtered_images, const int* filter_offsets_x, const int* filter_offsets_y, const float* filter_offsets_float_x, const float* filter_offsets_float_y, const float* filter_weights, float* output, const int I, const int S, const int F, const int G, const int img_width, const int img_height, const int kernel_width, const int kernel_height);
+  void test_backward_kernel_gpu(const float* filtered_images, const float* error_images, const int* filter_offsets_x, const int* filter_offsets_y, const float* filter_offsets_float_x, const float* filter_offsets_float_y, const float* filter_weights, float* output, const int I, const int S, const int F, const int G, const int img_width, const int img_height, const int kernel_width, const int kernel_height);
+
+
 
 };
 

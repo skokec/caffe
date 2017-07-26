@@ -975,143 +975,306 @@ TYPED_TEST(GaussConvolutionLayerTest, TestCuDNNComponentsMerging) {
 
 TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussConvolution) {
 
- typedef typename TypeParam::Dtype Dtype;
 
- if (sizeof(Dtype) > 4)
-	 return;
+    typedef typename TypeParam::Dtype Dtype;
 
- const int N = 128;
- const int F = 128;
- const int S = 128;
- const int G = 2;
- const int W = 64;
- const int H = 64;
 
- // debug print version
+    if (Caffe::mode() == Caffe::CPU)
+        return;
+
+    if (sizeof(Dtype) > 4)
+        return;
+    // evaluate size settings
+    const int N = 128;
+    const int F = 128;
+    const int S = 128;
+    const int G = 2;
+    const int W = 64;
+    const int H = 64;
+
+    // debug print version
 /*
- const int N = 1;
- const int F = 32;
- const int S = 32;
- const int G = 1;
- const int W = 32;
- const int H = 16;
- */
- Blob<float> blob_input(N,S,H,W);
- Blob<int> blob_offsets_x(1, S, G, F);
- Blob<int> blob_offsets_y(1, S, G, F);
- Blob<float> blob_offsets_float_x(1, S, G, F);
- Blob<float> blob_offsets_float_y(1, S, G, F);
- Blob<float> blob_weights(1, S, G, F);
- Blob<float> blob_output(N,F,H,W);
+    const int N = 1;
+    const int F = 32;
+    const int S = 32;
+    const int G = 1;
+    const int W = 32;
+    const int H = 16;
+*/
 
- FillerParameter const_one_filler_param;
- const_one_filler_param.set_value(1);
- ConstantFiller<float> const_one_filer(const_one_filler_param);
+    Blob<float> blob_input(N,S,H,W);
+    Blob<int> blob_offsets_x(1, S, G, F);
+    Blob<int> blob_offsets_y(1, S, G, F);
+    Blob<float> blob_offsets_float_x(1, S, G, F);
+    Blob<float> blob_offsets_float_y(1, S, G, F);
+    Blob<float> blob_weights(1, S, G, F);
+    Blob<float> blob_output(N,F,H,W);
 
- FillerParameter const_zero_filler_param;
- const_zero_filler_param.set_value(0);
- ConstantFiller<int> const_zero_filer(const_zero_filler_param);
- ConstantFiller<float> const_zero_float_filer(const_zero_filler_param);
+    FillerParameter const_one_filler_param;
+    const_one_filler_param.set_value(1);
+    ConstantFiller<float> const_one_filer(const_one_filler_param);
 
- FillerParameter rand_filler_param;
- rand_filler_param.set_value(0.1);
- GaussianFiller<float> input_filler(rand_filler_param);
+    FillerParameter const_zero_filler_param;
+    const_zero_filler_param.set_value(0);
+    ConstantFiller<int> const_zero_filer(const_zero_filler_param);
+    ConstantFiller<float> const_zero_float_filer(const_zero_filler_param);
 
- //input_filler.Fill(&blob_input);
- //input_filler.Fill(&blob_weights);
+    FillerParameter rand_filler_param;
+    rand_filler_param.set_value(0.1);
+    GaussianFiller<float> input_filler(rand_filler_param);
 
- const_one_filer.Fill(&blob_input);
- const_one_filer.Fill(&blob_weights);
+    //input_filler.Fill(&blob_input);
+    //input_filler.Fill(&blob_weights);
 
-
- FillerParameter offset_filler_param;
- offset_filler_param.set_max(2);
- offset_filler_param.set_min(0);
- UniformFiller<float> offset_filler(offset_filler_param);
-
- //offset_filler.Fill(&blob_offsets);
- const_zero_filer.Fill(&blob_offsets_x);
- const_zero_filer.Fill(&blob_offsets_y);
-
- const_zero_float_filer.Fill(&blob_offsets_float_x);
- const_zero_float_filer.Fill(&blob_offsets_float_y);
-
- const_zero_float_filer.Fill(&blob_output);
-
- const float* filtered_images = Caffe::mode() == Caffe::CPU ? blob_input.cpu_data() : blob_input.gpu_data();
- const int* filter_offsets_x = Caffe::mode() == Caffe::CPU ? blob_offsets_x.cpu_data() : blob_offsets_x.gpu_data();
- const int* filter_offsets_y = Caffe::mode() == Caffe::CPU ? blob_offsets_y.cpu_data() : blob_offsets_y.gpu_data();
- const float* filter_offsets_float_x = Caffe::mode() == Caffe::CPU ? blob_offsets_float_x.cpu_data() : blob_offsets_float_x.gpu_data();
- const float* filter_offsets_float_y = Caffe::mode() == Caffe::CPU ? blob_offsets_float_y.cpu_data() : blob_offsets_float_y.gpu_data();
- const float* filter_weights = Caffe::mode() == Caffe::CPU ? blob_weights.cpu_data() : blob_weights.gpu_data();
- float* output = Caffe::mode() == Caffe::CPU ? blob_output.mutable_cpu_data() : blob_output.mutable_gpu_data();
+    const_one_filer.Fill(&blob_input);
+    const_one_filer.Fill(&blob_weights);
 
 
- LayerParameter layer_param;
- FastAproxGaussianConvLayer<float> layer(layer_param);
+    FillerParameter offset_filler_param;
+    offset_filler_param.set_max(2);
+    offset_filler_param.set_min(0);
+    UniformFiller<float> offset_filler(offset_filler_param);
 
- LayerParameter cudnn_layer_param;
+    //offset_filler.Fill(&blob_offsets);
+    const_zero_filer.Fill(&blob_offsets_x);
+    const_zero_filer.Fill(&blob_offsets_y);
 
- ConvolutionParameter* convolution_param =
-		 cudnn_layer_param.mutable_convolution_param();
+    const_zero_float_filer.Fill(&blob_offsets_float_x);
+    const_zero_float_filer.Fill(&blob_offsets_float_y);
 
- convolution_param->add_kernel_size(13);
- convolution_param->add_stride(1);
- convolution_param->add_pad(6);
+    const_zero_float_filer.Fill(&blob_output);
 
- convolution_param->set_num_output(F);
+    const float* filtered_images = Caffe::mode() == Caffe::CPU ? blob_input.cpu_data() : blob_input.gpu_data();
+    const int* filter_offsets_x = Caffe::mode() == Caffe::CPU ? blob_offsets_x.cpu_data() : blob_offsets_x.gpu_data();
+    const int* filter_offsets_y = Caffe::mode() == Caffe::CPU ? blob_offsets_y.cpu_data() : blob_offsets_y.gpu_data();
+    const float* filter_offsets_float_x = Caffe::mode() == Caffe::CPU ? blob_offsets_float_x.cpu_data() : blob_offsets_float_x.gpu_data();
+    const float* filter_offsets_float_y = Caffe::mode() == Caffe::CPU ? blob_offsets_float_y.cpu_data() : blob_offsets_float_y.gpu_data();
+    const float* filter_weights = Caffe::mode() == Caffe::CPU ? blob_weights.cpu_data() : blob_weights.gpu_data();
+    float* output = Caffe::mode() == Caffe::CPU ? blob_output.mutable_cpu_data() : blob_output.mutable_gpu_data();
 
- convolution_param->mutable_weight_filler()->set_type("gaussian");
- convolution_param->mutable_weight_filler()->set_std(0.01);
 
- std::cout << "input size:" << std::endl;
- std::cout << "blob_input: " << blob_input.count()  << std::endl;
- std::cout << "blob_offsets_x: " << blob_offsets_x.count()  << std::endl;
- std::cout << "blob_offsets_y: " << blob_offsets_y.count()  << std::endl;
- std::cout << "blob_weights: " << blob_weights.count()  << std::endl;
- std::cout << "blob_output: " << blob_output.count() << std::endl << std::endl;
+    LayerParameter layer_param;
+    FastAproxGaussianConvLayer<float> layer(layer_param);
 
- shared_ptr<CuDNNConvolutionLayer<float> > cudnn_layer(new CuDNNConvolutionLayer<float>(cudnn_layer_param));
+    LayerParameter cudnn_layer_param;
 
- std::vector<Blob<float>* > blob_bottom_vec;
- std::vector<Blob<float>* > blob_top_vec;
+    ConvolutionParameter* convolution_param =
+            cudnn_layer_param.mutable_convolution_param();
 
- blob_bottom_vec.push_back(&blob_input);
- blob_top_vec.push_back(&blob_output);
+    convolution_param->add_kernel_size(13);
+    convolution_param->add_stride(1);
+    convolution_param->add_pad(6);
 
- cudnn_layer->SetUp(blob_bottom_vec, blob_top_vec);
+    convolution_param->set_num_output(F);
 
- clock_t start_t = clock();
- cudnn_layer->Forward(blob_bottom_vec, blob_top_vec);
- cudaDeviceSynchronize();
+    convolution_param->mutable_weight_filler()->set_type("gaussian");
+    convolution_param->mutable_weight_filler()->set_std(0.01);
 
- clock_t end_t = clock();
- std::cout << "CuDNNConvolutionLayer forward pass in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl << std::endl;
+    std::cout << "input size:" << std::endl;
+    std::cout << "blob_input: " << blob_input.count()  << std::endl;
+    std::cout << "blob_offsets_x: " << blob_offsets_x.count()  << std::endl;
+    std::cout << "blob_offsets_y: " << blob_offsets_y.count()  << std::endl;
+    std::cout << "blob_weights: " << blob_weights.count()  << std::endl;
+    std::cout << "blob_output: " << blob_output.count() << std::endl << std::endl;
 
- for (int ii = 0; ii < 1; ++ii) {
+    shared_ptr<CuDNNConvolutionLayer<float> > cudnn_layer(new CuDNNConvolutionLayer<float>(cudnn_layer_param));
 
-	 if (Caffe::mode() == Caffe::CPU)
-		 layer.test_kernel_cpu(filtered_images, filter_offsets_x, filter_offsets_y, filter_offsets_float_x, filter_offsets_float_y, filter_weights, output, N, S, F, G, W, H, 5, 5);
-	 else
-		 layer.test_kernel_gpu(filtered_images, filter_offsets_x, filter_offsets_y, filter_offsets_float_x, filter_offsets_float_y, filter_weights, output, N, S, F, G, W, H, 5, 5);
+    std::vector<Blob<float>* > blob_bottom_vec;
+    std::vector<Blob<float>* > blob_top_vec;
 
-	 float* output_c = blob_output.mutable_cpu_data();
+    blob_bottom_vec.push_back(&blob_input);
+    blob_top_vec.push_back(&blob_output);
 
-	 // verify data - since we use 1 for input and wights and 0 for offsets we should get S as output value for all
+    cudnn_layer->SetUp(blob_bottom_vec, blob_top_vec);
 
-	 int found_invalid = 0;
+    clock_t start_t = clock();
+    cudnn_layer->Forward(blob_bottom_vec, blob_top_vec);
+    cudaDeviceSynchronize();
+    clock_t end_t = clock();
+    std::cout << "CuDNNConvolutionLayer forward pass in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl << std::endl;
 
-	 for (int jj = 0; jj < blob_output.count(); ++jj) {
-		 if (output_c[jj] != S * G) {
-			 if (found_invalid < 10)
-				 printf("found invalid output (%f) at loc (%d) - should be %d\n", output_c[jj], jj, S *G);
-			 found_invalid++;
-		 }
-	 }
+    for (int ii = 0; ii < 1; ++ii) {
 
-	 if (found_invalid > 0)
-		 printf("found num of invalid output vals: %d/%d\n",found_invalid, blob_output.count());
- }
+	    if (Caffe::mode() == Caffe::CPU)
+		    layer.test_kernel_cpu(filtered_images, filter_offsets_x, filter_offsets_y, filter_offsets_float_x, filter_offsets_float_y, filter_weights, output, N, S, F, G, W, H, 5, 5);
+	    else
+		    layer.test_kernel_gpu(filtered_images, filter_offsets_x, filter_offsets_y, filter_offsets_float_x, filter_offsets_float_y, filter_weights, output, N, S, F, G, W, H, 5, 5);
+
+
+        float* output_c = blob_output.mutable_cpu_data();
+
+        // verify data - since we use 1 for input and wights and 0 for offsets we should get S as output value for all
+
+        int found_invalid = 0;
+
+        for (int jj = 0; jj < blob_output.count(); ++jj) {
+            if (output_c[jj] != S * G) {
+                if (found_invalid < 10)
+                    printf("found invalid output (%f) at loc (%d) - should be %d\n", output_c[jj], jj, S *G);
+                found_invalid++;
+            }
+        }
+
+        if (found_invalid > 0)
+            printf("found num of invalid output vals: %d/%d\n",found_invalid, blob_output.count());
+    }
+}
+
+TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussBackward) {
+
+
+    typedef typename TypeParam::Dtype Dtype;
+
+
+    if (Caffe::mode() == Caffe::CPU)
+        return;
+
+    if (sizeof(Dtype) > 4)
+        return;
+    // evaluate size settings
+    /*
+
+    const int N = 128;
+    const int F = 128;
+    const int S = 128;
+    const int G = 2;
+    const int W = 64;
+    const int H = 64;
+    */
+    // debug print version
+
+    const int N = 128;
+    const int F = 128;
+    const int S = 128;
+    const int G = 1;
+    const int W = 64;
+    const int H = 64;
+
+        /*
+    const int N = 128;
+    const int F = 128;
+    const int S = 128;
+    const int G = 1;
+    const int W = 64;
+    const int H = 64;
+*/
+    Blob<float> blob_input(N,S,H,W);
+    Blob<float> blob_error(N,F,H,W);
+    Blob<int> blob_offsets_x(1, S, G, F);
+    Blob<int> blob_offsets_y(1, S, G, F);
+    Blob<float> blob_offsets_float_x(1, S, G, F);
+    Blob<float> blob_offsets_float_y(1, S, G, F);
+    Blob<float> blob_weights(1, S, G, F);
+    Blob<float> blob_output(1, S, G, F);
+
+    FillerParameter const_one_filler_param;
+    const_one_filler_param.set_value(1);
+    ConstantFiller<float> const_one_filer(const_one_filler_param);
+
+    FillerParameter const_zero_filler_param;
+    const_zero_filler_param.set_value(0);
+    ConstantFiller<int> const_zero_filer(const_zero_filler_param);
+    ConstantFiller<float> const_zero_float_filer(const_zero_filler_param);
+
+    FillerParameter rand_filler_param;
+    rand_filler_param.set_value(0.1);
+    GaussianFiller<float> input_filler(rand_filler_param);
+
+    //input_filler.Fill(&blob_input);
+    //input_filler.Fill(&blob_weights);
+
+    const_one_filer.Fill(&blob_input);
+    const_one_filer.Fill(&blob_error);
+    const_one_filer.Fill(&blob_weights);
+
+
+    FillerParameter offset_filler_param;
+    offset_filler_param.set_max(2);
+    offset_filler_param.set_min(0);
+    UniformFiller<float> offset_filler(offset_filler_param);
+
+    //offset_filler.Fill(&blob_offsets);
+    const_zero_filer.Fill(&blob_offsets_x);
+    const_zero_filer.Fill(&blob_offsets_y);
+
+    const_zero_float_filer.Fill(&blob_offsets_float_x);
+    const_zero_float_filer.Fill(&blob_offsets_float_y);
+
+    const_zero_float_filer.Fill(&blob_output);
+
+    const float* filtered_images = Caffe::mode() == Caffe::CPU ? blob_input.cpu_data() : blob_input.gpu_data();
+    const float* error_images = Caffe::mode() == Caffe::CPU ? blob_error.cpu_data() : blob_error.gpu_data();
+    const int* filter_offsets_x = Caffe::mode() == Caffe::CPU ? blob_offsets_x.cpu_data() : blob_offsets_x.gpu_data();
+    const int* filter_offsets_y = Caffe::mode() == Caffe::CPU ? blob_offsets_y.cpu_data() : blob_offsets_y.gpu_data();
+    const float* filter_offsets_float_x = Caffe::mode() == Caffe::CPU ? blob_offsets_float_x.cpu_data() : blob_offsets_float_x.gpu_data();
+    const float* filter_offsets_float_y = Caffe::mode() == Caffe::CPU ? blob_offsets_float_y.cpu_data() : blob_offsets_float_y.gpu_data();
+    const float* filter_weights = Caffe::mode() == Caffe::CPU ? blob_weights.cpu_data() : blob_weights.gpu_data();
+    float* output = Caffe::mode() == Caffe::CPU ? blob_output.mutable_cpu_data() : blob_output.mutable_gpu_data();
+
+
+    LayerParameter layer_param;
+    FastAproxGaussianConvLayer<float> layer(layer_param);
+
+    LayerParameter cudnn_layer_param;
+
+    ConvolutionParameter* convolution_param =
+         cudnn_layer_param.mutable_convolution_param();
+
+    convolution_param->add_kernel_size(5);
+    convolution_param->add_stride(1);
+    convolution_param->add_pad(2);
+
+    convolution_param->set_num_output(F);
+
+    convolution_param->mutable_weight_filler()->set_type("gaussian");
+    convolution_param->mutable_weight_filler()->set_std(0.01);
+
+    std::cout << "input size:" << std::endl;
+    std::cout << "blob_input: " << blob_input.count()  << std::endl;
+    std::cout << "blob_offsets_x: " << blob_offsets_x.count()  << std::endl;
+    std::cout << "blob_offsets_y: " << blob_offsets_y.count()  << std::endl;
+    std::cout << "blob_weights: " << blob_weights.count()  << std::endl;
+    std::cout << "blob_output: " << blob_output.count() << std::endl << std::endl;
+
+    shared_ptr<CuDNNConvolutionLayer<float> > cudnn_layer(new CuDNNConvolutionLayer<float>(cudnn_layer_param));
+
+    std::vector<Blob<float>* > blob_bottom_vec;
+    std::vector<Blob<float>* > blob_top_vec;
+
+    blob_bottom_vec.push_back(&blob_input);
+    blob_top_vec.push_back(&blob_output);
+
+    /*
+    cudnn_layer->SetUp(blob_bottom_vec, blob_top_vec);
+
+    clock_t start_t = clock();
+    cudnn_layer->Forward(blob_bottom_vec, blob_top_vec);
+    cudaDeviceSynchronize();
+    clock_t end_t = clock();
+    std::cout << "CuDNNConvolutionLayer forward pass in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl << std::endl;
+    */
+    for (int ii = 0; ii < 1; ++ii) {
+
+         if (Caffe::mode() == Caffe::GPU)
+             layer.test_backward_kernel_gpu(filtered_images, error_images, filter_offsets_x, filter_offsets_y, filter_offsets_float_x, filter_offsets_float_y, filter_weights, output, N, S, F, G, W, H, 5, 5);
+
+         float* output_c = blob_output.mutable_cpu_data();
+
+         // verify data - since we use 1 for input and wights and 0 for offsets we should get N*W*H as output value for all
+
+         int found_invalid = 0;
+
+         for (int jj = 0; jj < blob_output.count(); ++jj) {
+             if (output_c[jj] != N*W*H) {
+                 if (found_invalid < 10)
+                     printf("found invalid output (%f) at loc (%d) - should be %d\n", output_c[jj], jj, N*W*H);
+                 found_invalid++;
+             }
+         }
+
+         if (found_invalid > 0)
+             printf("found num of invalid output vals: %d/%d\n",found_invalid, blob_output.count());
+    }
 }
 
 #ifdef USE_CUDNN
