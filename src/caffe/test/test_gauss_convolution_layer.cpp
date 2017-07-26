@@ -1187,6 +1187,12 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussBackward) {
     const_one_filer.Fill(&blob_error);
     const_one_filer.Fill(&blob_weights);
 
+    float* data = blob_input.mutable_cpu_data();
+    for (int n = 0; n < N*S; ++n){
+        for (int i = 0; i < H*W; ++i)
+            data[n*H*W + i] = i;
+    }
+
 
     FillerParameter offset_filler_param;
     offset_filler_param.set_max(2);
@@ -1264,10 +1270,12 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussBackward) {
 
          int found_invalid = 0;
 
+        //int GT_VALUE = N*W*H;
+        int GT_VALUE = N*((W*H)*((W*H-1))/2);
          for (int jj = 0; jj < blob_output.count(); ++jj) {
-             if (output_c[jj] != N*W*H) {
+             if (output_c[jj] != GT_VALUE) {
                  if (found_invalid < 10)
-                     printf("found invalid output (%f) at loc (%d) - should be %d\n", output_c[jj], jj, N*W*H);
+                     printf("found invalid output (%f) at loc (%d) - should be %d\n", output_c[jj], jj, GT_VALUE);
                  found_invalid++;
              }
          }
