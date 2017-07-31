@@ -229,6 +229,10 @@ public:
 
 	__device__
 	float* getDataThreadIndexingRead(int buffer_index = 0){
+        // TODO: if using BATCH_ELEMENTS > 1 then storage_data_for_reading points to the first group of 4 elements; it works OK if using replicate (NUM_BUFFER_REPEAT>1) but will not produce correct indexing for NUM_BUFFER_REPEAT=1
+        // TODO: indexing for reading should be fixed !!!
+        // TODO: could probably be fixed by adding:     (thread_indexing_reading.x + APRON_SIZE) % BATCH_ELEMENTS
+
 		return storage_data_for_reading + buffer_index * ALLOC_HEIGHT * ALLOC_WIDTH * sizeof(ELEMENT_TYPE) / sizeof(float);
 	}
 	__device__
@@ -529,8 +533,8 @@ public:
 			//	continue;
 
 			// add interpolation offset to px_x and px_y
-			px_x = px_x; + interpolation_i;
-			px_y = px_y; + interpolation_j;
+			px_x = px_x + interpolation_i;
+			px_y = px_y + interpolation_j;
 
 			// load data for next loop
 			if (load_data.enabled) {
@@ -688,9 +692,9 @@ fast_gauss_forward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, con
 	typedef BlockSharedMemory<NUM_THREADS, BATCH_COMPUTE_SUBFEATURES_SIZE * BATCH_MEM_SUBFEATURES_SIZE * BATCH_GAUSS_SIZE * BATCH_FEATURES_SIZE * BLOCK_FEATURES,
 								1, 0, DOUBLE_BUFFERING, int4, BATCH_SH_PIXELS_SIZE> SharedMemOffsets;
 
-#define ENABLE_SHARED_WEIGHTS_OFFSETS 1
+#define ENABLE_SHARED_MEM_FOR_WEIGHTS_AND_OFFSETS 1
 
-#ifdef ENABLE_SHARED_WEIGHTS_OFFSETS
+#ifdef ENABLE_SHARED_MEM_FOR_WEIGHTS_AND_OFFSETS
 	__shared__ typename SharedMemWeights::Data data_weights;
 	__shared__ typename SharedMemOffsets::Data data_offsets;
 
@@ -798,7 +802,7 @@ fast_gauss_forward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, con
 																   0,
 																   F_MEM_SIZE, S_MEM_SIZE, G_MEM_SIZE, WEIGHT_BLOCK_MEM_SIZE);
 
-#ifdef ENABLE_SHARED_WEIGHTS_OFFSETS
+#ifdef ENABLE_SHARED_MEM_FOR_WEIGHTS_AND_OFFSETS
 	const int* _filter_offset_next = _filter_offset_current + offsets_sh_class.getThreadIdx().x;
 	const float* _filter_weights_next = _filter_weights_current + weights_sh_class.getThreadIdx().x;
 
@@ -821,14 +825,20 @@ fast_gauss_forward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, con
 		// load first batch of subfeatures/input data into shared memory
 
 		for (int s = 0 ; s < BATCH_MEM_SUBFEATURES_SIZE; ++s) {
+            // TODO: getDataThreadIndexingWrite(s % BATCH_MEM_SUBFEATURES_SIZE) is not correct !!!
+            // since NUM_REPEAT buffers for image_sh_class are DOUBLE_BUFFERING x BATCH_MEM_SUBFEATURES_SIZE x NUM_REPLICATE_OFFSETED+1
+            // we should use instead the following buffer_index (NOTE: This was fixed when doing fast_gauss_backward, but not tested yet !!!!)
+            int buffer_index = OFFSET(0, 0, s, 0, 1, DOUBLE_BUFFERING, BATCH_MEM_SUBFEATURES_SIZE, NUM_REPLICATE_OFFSETED+1);
+
 			image_sh_class.template load_global<IMG_WIDTH + 2 * MAX_OFFSET,NUM_REPLICATE_OFFSETED,false,1>(reinterpret_cast<const float4*>(_image_global_current + (s) * (img_width + 2*MAX_OFFSET) * (img_height + 2*MAX_OFFSET)),
-																					  	  	  	  	  	   reinterpret_cast<float4*>(image_sh_class.getDataThreadIndexingWrite(s % BATCH_MEM_SUBFEATURES_SIZE)),
+																					  	  	  	  	  	   reinterpret_cast<float4*>(image_sh_class.getDataThreadIndexingWrite(buffer_index)),
 																										   img_width + 2 * MAX_OFFSET);
 		}
 	}
 
 	__syncthreads();
 
+	// TODO: is this a bug ??! should it not be S /  (BATCH_COMPUTE_SUBFEATURES_SIZE * BATCH_MEM_SUBFEATURES_SIZE) ????
 	const int MAX_S_OUTER_INDEX = S /  BATCH_COMPUTE_SUBFEATURES_SIZE * BATCH_MEM_SUBFEATURES_SIZE;
 
 	for (int s_offset_outer = 0; s_offset_outer < S; s_offset_outer+=BATCH_COMPUTE_SUBFEATURES_SIZE * BATCH_MEM_SUBFEATURES_SIZE) {
@@ -996,7 +1006,7 @@ fast_gauss_forward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, con
 				int address_off = OFFSET(load_offset_index.s, load_offset_index.g, load_offset_index.f/4, f_block_idx/BATCH_FEATURES_SIZE, BATCH_COMPUTE_SUBFEATURES_SIZE * BATCH_MEM_SUBFEATURES_SIZE, BATCH_GAUSS_SIZE, BATCH_FEATURES_SIZE/4, BLOCK_FEATURES);
 
 				// load offset
-#ifdef ENABLE_SHARED_WEIGHTS_OFFSETS
+#ifdef ENABLE_SHARED_MEM_FOR_WEIGHTS_AND_OFFSETS
 				pipeline.load_offset.offset_address = offset_batch_sh + address_off + (s_offset_outer % DOUBLE_BUFFERING) * OFFSET_BLOCK_MEM_SIZE/4;
 				//pipeline.load_offset.offset_address = &reinterpret_cast<int4*>((int*)filter_offset_current)[address_off];
 
@@ -1010,6 +1020,7 @@ fast_gauss_forward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, con
 
 				int buffer_index = OFFSET(0, double_buffer_index, subfeat_buffer_index, 0, 1, DOUBLE_BUFFERING, BATCH_MEM_SUBFEATURES_SIZE, NUM_REPLICATE_OFFSETED+1);
 
+                // TODO: getDataThreadIndexingRead() does not return correct address unless offseted replicate of data is used !!!
 				pipeline.load_offset.base_address = image_sh_class.getDataThreadIndexingRead(buffer_index);
 				pipeline.load_offset.output = (ptr4*)(use_reg_A ? &off_A[load_offset_index.g][0] : &off_B[load_offset_index.g][0]);
 
@@ -1029,7 +1040,7 @@ fast_gauss_forward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, con
 				int address_off = OFFSET5(load_w_index.s, load_w_index.g, 0, load_w_index.f/4, f_block_idx/BATCH_FEATURES_SIZE, BATCH_COMPUTE_SUBFEATURES_SIZE * BATCH_MEM_SUBFEATURES_SIZE, BATCH_GAUSS_SIZE, PIXELS_INTERPOLATION_SIZE, BATCH_FEATURES_SIZE/4, BLOCK_FEATURES);
 
 				// load w
-#ifdef ENABLE_SHARED_WEIGHTS_OFFSETS
+#ifdef ENABLE_SHARED_MEM_FOR_WEIGHTS_AND_OFFSETS
 				//pipeline.load_weights.address = weights_batch_sh + address_off + (s_offset_outer % 2) * WEIGHT_BLOCK_MEM_SIZE/4;
 				//pipeline.load_weights.address = &reinterpret_cast<float4*>((float*)filter_weights_current)[address_off];
 
@@ -1112,7 +1123,7 @@ fast_gauss_forward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, con
 			pipeline.execute_step();
 
 
-#ifdef ENABLE_SHARED_WEIGHTS_OFFSETS
+#ifdef ENABLE_SHARED_MEM_FOR_WEIGHTS_AND_OFFSETS
 			// if next iteration is not the last one then load offsets and weights for the next one - using double buffering so we do not intereput computation of the current one
 			if (s_outer_index + 1 < MAX_S_OUTER_INDEX && index + 4 ==  NUM_ITER + EXTRA_LOOPS )
 			//if (index + 4 ==  NUM_ITER + EXTRA_LOOPS )

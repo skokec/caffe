@@ -768,6 +768,7 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
         // load offsets for the first one
         offsets_sh_class.template load_global<OFFSET_BLOCK_MEM_SIZE,0,false,0>(reinterpret_cast<const int4*>(_filter_offset_current + offsets_sh_class.getThreadIdx().x),
                                                                                reinterpret_cast<int4*>(offsets_sh_class.getDataThreadIndexingWrite(0)));
+        __syncthreads();
     }
 #else
     const int* _filter_offset_next = _filter_offset_current;
@@ -796,11 +797,12 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
 				int buffer_index = OFFSET(0, 0, s, 0, 1, DOUBLE_BUFFERING, BATCH_MEM_SUBFEATURES_SIZE, NUM_REPLICATE_OFFSETED+1);
 
                 image_sh_class.template load_global<IMG_WIDTH + 2 * MAX_OFFSET,NUM_REPLICATE_OFFSETED,false,1>(reinterpret_cast<const float4*>(_image_global_current + (s) * (img_width + 2*MAX_OFFSET) * (img_height + 2*MAX_OFFSET)),
+                //image_sh_class.template load_global<IMG_WIDTH + 2 * MAX_OFFSET,NUM_REPLICATE_OFFSETED,true,1>(reinterpret_cast<const float4*>(_image_global_current + (s) * (img_width + 2*MAX_OFFSET) * (img_height + 2*MAX_OFFSET)),
                                                                                                                reinterpret_cast<float4*>(image_sh_class.getDataThreadIndexingWrite(buffer_index)),
                                                                                                                img_width + 2 * MAX_OFFSET);
             }
         }
-
+        __syncthreads();
         // load error values for all the features that are needed in this thread i.e. for BATCH_FEATURES_SIZE (or BATCH_COMPUTE_FEATURES_SIZE ?!!)
         float4 err_vals[BATCH_FEATURES_SIZE][(BATCH_PIXELS_SIZE_X * BATCH_PIXELS_SIZE_Y)/BATCH_PIXELS_FLOAT4];
 
@@ -814,12 +816,13 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
                       	/*if (BATCH_PIXELS_FLOAT4 > 0) err_vals[ff][py * BATCH_PIXELS_SIZE_X/BATCH_PIXELS_FLOAT4 + px/BATCH_PIXELS_FLOAT4].x = 1;
                         if (BATCH_PIXELS_FLOAT4 > 1) err_vals[ff][py * BATCH_PIXELS_SIZE_X/BATCH_PIXELS_FLOAT4 + px/BATCH_PIXELS_FLOAT4].y = 1;
                         if (BATCH_PIXELS_FLOAT4 > 2) err_vals[ff][py * BATCH_PIXELS_SIZE_X/BATCH_PIXELS_FLOAT4 + px/BATCH_PIXELS_FLOAT4].z = 1;
-                        if (BATCH_PIXELS_FLOAT4 > 3) err_vals[ff][py * BATCH_PIXELS_SIZE_X/BATCH_PIXELS_FLOAT4 + px/BATCH_PIXELS_FLOAT4.w = 1;*/
-
+                        if (BATCH_PIXELS_FLOAT4 > 3) err_vals[ff][py * BATCH_PIXELS_SIZE_X/BATCH_PIXELS_FLOAT4 + px/BATCH_PIXELS_FLOAT4].w = 1;
+*/
 						if (BATCH_PIXELS_FLOAT4 > 0) err_vals[ff][py * BATCH_PIXELS_SIZE_X/BATCH_PIXELS_FLOAT4 + px/BATCH_PIXELS_FLOAT4].x = _error_global_current[OFFSET(n, ff, py, px + 0, I, F, img_height, img_width)];
 						if (BATCH_PIXELS_FLOAT4 > 1) err_vals[ff][py * BATCH_PIXELS_SIZE_X/BATCH_PIXELS_FLOAT4 + px/BATCH_PIXELS_FLOAT4].y = _error_global_current[OFFSET(n, ff, py, px + 1, I, F, img_height, img_width)];
 						if (BATCH_PIXELS_FLOAT4 > 2) err_vals[ff][py * BATCH_PIXELS_SIZE_X/BATCH_PIXELS_FLOAT4 + px/BATCH_PIXELS_FLOAT4].z = _error_global_current[OFFSET(n, ff, py, px + 2, I, F, img_height, img_width)];
 						if (BATCH_PIXELS_FLOAT4 > 3) err_vals[ff][py * BATCH_PIXELS_SIZE_X/BATCH_PIXELS_FLOAT4 + px/BATCH_PIXELS_FLOAT4].w = _error_global_current[OFFSET(n, ff, py, px + 3, I, F, img_height, img_width)];
+
                     }
                 }
             } else {
@@ -835,16 +838,12 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
 						if (BATCH_PIXELS_FLOAT4 > 1) err_vals[ff][py/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px].y = _error_global_current[OFFSET(0, ff, py + 1, px, I, F, img_height, img_width)];
 						if (BATCH_PIXELS_FLOAT4 > 2) err_vals[ff][py/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px].z = _error_global_current[OFFSET(0, ff, py + 2, px, I, F, img_height, img_width)];
 						if (BATCH_PIXELS_FLOAT4 > 3) err_vals[ff][py/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px].w = _error_global_current[OFFSET(0, ff, py + 3, px, I, F, img_height, img_width)];
-                        /*if (thread_x == 0 && thread_y == 0 && block_y == 0 && block_x == 0) {
-                            float4 pp = err_vals[ff][py/4 * BATCH_PIXELS_SIZE_X + px];
-                            printf("reading error at (%d, %d): s=%d, f=%d, py=%d, px=%d with loaded values %f, %f, %f, %f\n", py, px, s_offset, f_offset + ff, block_y + thread_y + py, block_x + thread_x + px, pp.x, pp.y, pp.z, pp.w);
 
-                        }*/
                     }
                 }
             }
         }
-        __syncthreads();
+        //__syncthreads();
 
         const int MAX_S_OUTER_INDEX = BLOCK_SUBFEATURES; //S /  BATCH_MEM_SUBFEATURES_SIZE;
 
@@ -954,6 +953,7 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
                     // load global
                     if (load_global_enabled) {
                         image_sh_class.template load_global<IMG_WIDTH + 2 * MAX_OFFSET,NUM_REPLICATE_OFFSETED,false,1>(reinterpret_cast<const float4*>(image_global_load + (load_global.s) * (img_width + 2*MAX_OFFSET) * (img_height + 2*MAX_OFFSET)),
+                        //image_sh_class.template load_global<IMG_WIDTH + 2 * MAX_OFFSET,NUM_REPLICATE_OFFSETED,true,1>(reinterpret_cast<const float4*>(image_global_load + (load_global.s) * (img_width + 2*MAX_OFFSET) * (img_height + 2*MAX_OFFSET)),
                                                                                                                        reinterpret_cast<float4*>(image_sh_class.getDataThreadIndexingWrite(buffer_index)),
                                                                                                                        img_width + 2 * MAX_OFFSET);
                     }
@@ -1017,8 +1017,8 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
                     pipeline.load_offset.base_address = image_sh_class.getDataThreadIndexingRead(buffer_index);
                     pipeline.load_offset.output = (ptr4*)(use_reg_A ? &off_A[load_offset_index.g][0] : &off_B[load_offset_index.g][0]);
 
-/*
-                    if (pipeline.load_offset.enabled) {
+
+                    /*if (pipeline.load_offset.enabled) {
                         if (thread_x == 0 && thread_y == 0)
                         if (pipeline.load_offset.offset_address[0].x != 0 ||
                                 pipeline.load_offset.offset_address[0].y != 0 ||
@@ -1066,7 +1066,7 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
 
                 }
 
-
+/*
                 // sync only before data buffer is switched
                 if (require_sync) {
                     // NOTE: sync is not needed if we have more then enough operations to cover the latency of sore operations
@@ -1075,7 +1075,7 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
                     if (BATCH_PIXELS_SIZE_X * BATCH_PIXELS_SIZE_Y * BATCH_FEATURES_SIZE * BATCH_GAUSS_SIZE * PIXELS_INTERPOLATION_SIZE * BATCH_MEM_SUBFEATURES_SIZE  < 512)
                         __syncthreads();
                 }
-
+*/
                 // pipeline handles loading global (features) data, loading offsets, loading shared (features) data and computing final output
 
                 // pipeline load global -> shared data handles:
@@ -1679,10 +1679,10 @@ void fast_gauss_backward<float>(const float* filtered_images, const float* error
 			static const int BATCH_MEM_SUBFEATURES_SIZE = 4;
 			static const int BATCH_GAUSS_SIZE = 1;*/
             static const int BLOCK_FEATURES = 4;
-            static const int BLOCK_SUBFEATURES = 4;
+            static const int BLOCK_SUBFEATURES = 8;
 
             static const int BATCH_FEATURES_SIZE = 8;
-            static const int BATCH_MEM_SUBFEATURES_SIZE = 4;
+            static const int BATCH_MEM_SUBFEATURES_SIZE = 2;
             static const int BATCH_GAUSS_SIZE = 1;
 			/* best wih no global loading !!
             static const int BLOCK_FEATURES = 8;
