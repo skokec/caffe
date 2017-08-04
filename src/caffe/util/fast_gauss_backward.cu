@@ -581,10 +581,10 @@ public:
 				if (BATCH_PIXELS_BY_WIDTH) {
 					load_data.output[i] = reinterpret_cast<float4*>(load_data.address[data_address_index].quad[data_quad_index] + px_x + (px_y) * BlockSharedMemoryT::PITCHED_WIDTH)[0];
 				} else {
-					if (BATCH_PIXELS_FLOAT4 > 0) load_data.output[i].x = reinterpret_cast<float2*>(load_data.address[data_address_index].quad[data_quad_index] + px_x + (px_y + 0) * BlockSharedMemoryT::PITCHED_WIDTH)[0].x;
-					if (BATCH_PIXELS_FLOAT4 > 1) load_data.output[i].y = reinterpret_cast<float2*>(load_data.address[data_address_index].quad[data_quad_index] + px_x + (px_y + 1) * BlockSharedMemoryT::PITCHED_WIDTH)[0].x;
-					if (BATCH_PIXELS_FLOAT4 > 2) load_data.output[i].z = reinterpret_cast<float2*>(load_data.address[data_address_index].quad[data_quad_index] + px_x + (px_y + 2) * BlockSharedMemoryT::PITCHED_WIDTH)[0].x;
-					if (BATCH_PIXELS_FLOAT4 > 3) load_data.output[i].w = reinterpret_cast<float2*>(load_data.address[data_address_index].quad[data_quad_index] + px_x + (px_y + 3) * BlockSharedMemoryT::PITCHED_WIDTH)[0].x;
+					if (BATCH_PIXELS_FLOAT4 > 0) load_data.output[i].x = reinterpret_cast<float4*>(load_data.address[data_address_index].quad[data_quad_index] + px_x + (px_y + 0) * BlockSharedMemoryT::PITCHED_WIDTH)[0].x;
+					if (BATCH_PIXELS_FLOAT4 > 1) load_data.output[i].y = reinterpret_cast<float4*>(load_data.address[data_address_index].quad[data_quad_index] + px_x + (px_y + 1) * BlockSharedMemoryT::PITCHED_WIDTH)[0].x;
+					if (BATCH_PIXELS_FLOAT4 > 2) load_data.output[i].z = reinterpret_cast<float4*>(load_data.address[data_address_index].quad[data_quad_index] + px_x + (px_y + 2) * BlockSharedMemoryT::PITCHED_WIDTH)[0].x;
+					if (BATCH_PIXELS_FLOAT4 > 3) load_data.output[i].w = reinterpret_cast<float4*>(load_data.address[data_address_index].quad[data_quad_index] + px_x + (px_y + 3) * BlockSharedMemoryT::PITCHED_WIDTH)[0].x;
 
 				}
 
@@ -816,6 +816,54 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
     const int* _filter_offset_next = _filter_offset_current;
 #endif
 
+    const float* _filtered_images = filtered_images + OFFSET(0,
+                                                             s_offset,
+                                                             MAX_OFFSET + block_y + image_sh_class.getThreadIdx().y,
+                                                             MAX_OFFSET + block_x + image_sh_class.getThreadIdx().x,
+                                                             I, S, img_height + 2*MAX_OFFSET, img_width + 2*MAX_OFFSET);
+
+    const float* _error_images = error_images + OFFSET(0,
+                                                       f_offset,
+                                                       block_y + thread_y,
+                                                       block_x + thread_x,
+                                                       I, F, img_height, img_width);
+    if (1){
+        // load first batch of subfeatures/input data into shared memory
+        const float* _image_global_current = filtered_images + OFFSET(0,
+                                                                      s_offset,
+                                                                      MAX_OFFSET + block_y + image_sh_class.getThreadIdx().y,
+                                                                      MAX_OFFSET + block_x + image_sh_class.getThreadIdx().x,
+                                                                      I, S, img_height + 2*MAX_OFFSET, img_width + 2*MAX_OFFSET);
+        //const float* _image_global_current = _filtered_images;
+
+        for (int s = 0 ; s < BATCH_MEM_SUBFEATURES_SIZE; ++s) {
+
+            int buffer_index = OFFSET(0, 0, s, 0, 1, DOUBLE_BUFFERING, BATCH_MEM_SUBFEATURES_SIZE, NUM_REPLICATE_OFFSETED+1);
+
+
+            image_sh_class.template load_global<IMG_WIDTH + 2 * MAX_OFFSET,NUM_REPLICATE_OFFSETED,false,1>(reinterpret_cast<const float4*>(_image_global_current + (s) * (img_width + 2*MAX_OFFSET) * (img_height + 2*MAX_OFFSET)),
+                    //image_sh_class.template load_global<IMG_WIDTH + 2 * MAX_OFFSET,NUM_REPLICATE_OFFSETED,true,1>(reinterpret_cast<const float4*>(_image_global_current + (s) * (img_width + 2*MAX_OFFSET) * (img_height + 2*MAX_OFFSET)),
+                                                                                                           reinterpret_cast<float4*>(image_sh_class.getDataThreadIndexingWrite(buffer_index)),
+                                                                                                           img_width + 2 * MAX_OFFSET);
+/*				typename SharedMem::LoadingData ld;
+				image_sh_class.template load_global<IMG_WIDTH + 2 * MAX_OFFSET,NUM_REPLICATE_OFFSETED,false,1>(reinterpret_cast<const float4*>(_image_global_current + (s) * (img_width + 2*MAX_OFFSET) * (img_height + 2*MAX_OFFSET)),
+                                                                                                               reinterpret_cast<float4*>(image_sh_class.getDataThreadIndexingWrite(buffer_index)),
+                                                                                                               img_width + 2 * MAX_OFFSET, &ld);
+
+				image_sh_class.template store_shared<NUM_REPLICATE_OFFSETED>(ld,reinterpret_cast<float4*>(image_sh_class.getDataThreadIndexingWrite(buffer_index)));*/
+        }
+        __syncthreads();
+    }
+/*
+    const int image_offset = S * (img_height + 2*MAX_OFFSET) * (img_width + 2*MAX_OFFSET);
+    const int error_offset = F * img_height * img_width;
+
+    float const* _image_global_current = _filtered_images;
+    float const* _image_global_next = _filtered_images + image_offset;
+
+    float const* _error_global_current = _error_images;
+
+*/
     for (int n = 0; n < I; ++n) {
 
         const float* _image_global_current = filtered_images + OFFSET(n,
@@ -838,7 +886,7 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
 
 
 
-		if (n == 0){
+		if (0){
 			// load first batch of subfeatures/input data into shared memory
 
 			for (int s = 0 ; s < BATCH_MEM_SUBFEATURES_SIZE; ++s) {
@@ -1241,6 +1289,11 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
 #endif
             }
         }
+
+        /*_image_global_current = _image_global_next;
+        _image_global_next = _image_global_current + image_offset;
+
+        _error_global_current = _error_global_current + error_offset;*/
     }
 
     __syncthreads();
@@ -1780,7 +1833,7 @@ void fast_gauss_backward<float>(const float* filtered_images, const float* error
 			static const int BATCH_MEM_SUBFEATURES_SIZE = 4;
 			static const int BATCH_GAUSS_SIZE = 1;*/
             static const int BLOCK_FEATURES = 8;
-            static const int BLOCK_SUBFEATURES = 8;
+            static const int BLOCK_SUBFEATURES = 4;
 
             static const int BATCH_FEATURES_SIZE = 8;
             static const int BATCH_MEM_SUBFEATURES_SIZE = 1;
