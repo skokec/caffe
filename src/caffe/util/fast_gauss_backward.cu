@@ -17,6 +17,8 @@ namespace caffe {
 
 #define MAX(x,y) (x > y ? x : y)
 
+#define CEILING(x,y) (((x) + (y) - 1) / (y))
+
 #define OFFSET(l,k,j,i, num_l, num_k, num_j, num_i) ((( (l)*(num_k) + (k)) * (num_j) + (j))*(num_i) + (i) )
 #define OFFSET5(m, l,k,j,i, num_m, num_l, num_k, num_j, num_i) ((( ((m)*(num_l) + (l))*(num_k) + (k)) * (num_j) + (j))*(num_i) + (i) )
 
@@ -193,6 +195,8 @@ public:
 		WIDTH = _WIDTH,
 		HEIGHT = _HEIGHT,
 		APRON_SIZE = _APRON_SIZE,
+        APRON_SIZE_X = _APRON_SIZE,
+        APRON_SIZE_Y = _APRON_SIZE,
 		NUM_BUFFER_REPEAT = _NUM_BUFFER_REPEAT,
 		BATCH_ELEMENTS = _BATCH_ELEMENTS,
 
@@ -215,7 +219,11 @@ public:
 		// distribute number  of threads per width and height
 		// assign consecutive tid to adjecent memory elemnets where each id handled N-elements (N==BATCH_ELEMENTS)
 		NUM_THREADS_WIDTH = WIDTH / BATCH_ELEMENTS,
-		NUM_THREADS_HEIGHT = NUM_THREADS / NUM_THREADS_WIDTH
+		NUM_THREADS_HEIGHT = NUM_THREADS / NUM_THREADS_WIDTH,
+
+        // number of iterations that will be performed during load/store by one thread
+        NUM_ITERATION_Y = MAX(1,CEILING((HEIGHT + 2*APRON_SIZE_Y), NUM_THREADS_HEIGHT)),
+        NUM_ITERATION_X = MAX(1, CEILING(WIDTH + 2*APRON_SIZE_X, NUM_THREADS_WIDTH * BATCH_ELEMENTS))
 	};
 
 private:
@@ -227,7 +235,7 @@ private:
 	};
 
 	struct _LoadingData {
-		ELEMENT_TYPE data[MAX(1,(HEIGHT + 2*APRON_SIZE) / NUM_THREADS_HEIGHT) ][MAX(1,(WIDTH + 2*APRON_SIZE) / (NUM_THREADS_WIDTH * BATCH_ELEMENTS))];
+		ELEMENT_TYPE data[NUM_ITERATION_Y][NUM_ITERATION_X];
 	};
 
 	float* storage_data_for_writing;
@@ -295,22 +303,21 @@ public:
 			#pragma unroll
 			for (int i = -APRON_SIZE; i < WIDTH + APRON_SIZE; i+=NUM_THREADS_WIDTH * BATCH_ELEMENTS) {
 				// current_image already at position for this block
+                ELEMENT_TYPE tmp;
+
+                // USING GLOBAL - working
+                if (USE_FILL) {
+                    tmp.x = FILL_VALUE; tmp.y = FILL_VALUE; tmp.z = FILL_VALUE; tmp.w = FILL_VALUE;
+                } else {
+                    tmp = global_data[j * GLOBAL_DATA_WIDTH / BATCH_ELEMENTS + i / BATCH_ELEMENTS];
+                }
 
 				if (thread_indexing_writing.x < (WIDTH + APRON_SIZE - i)  && thread_indexing_writing.y < HEIGHT + APRON_SIZE - j)  {
 
-					ELEMENT_TYPE tmp;
-
-					// USING GLOBAL - working
-					if (USE_FILL) {
-						tmp.x = FILL_VALUE; tmp.y = FILL_VALUE; tmp.z = FILL_VALUE; tmp.w = FILL_VALUE;
-					} else {
-						tmp = global_data[j * GLOBAL_DATA_WIDTH / BATCH_ELEMENTS + i / BATCH_ELEMENTS];
-					}
-
-					int write_offset = (j + APRON_SIZE) * ALLOC_WIDTH  + (i + APRON_SIZE) / BATCH_ELEMENTS;
+                    int write_offset = (j + APRON_SIZE) * ALLOC_WIDTH  + (i + APRON_SIZE) / BATCH_ELEMENTS;
 
 					if (loaded_data != NULL)
-						loaded_data->data[(j + APRON_SIZE)/NUM_THREADS_HEIGHT][(i + APRON_SIZE) / (NUM_THREADS_WIDTH * BATCH_ELEMENTS)] = tmp;
+						loaded_data->data[(j + APRON_SIZE_Y)/NUM_THREADS_HEIGHT][(i + APRON_SIZE_X) / (NUM_THREADS_WIDTH * BATCH_ELEMENTS)] = tmp;
 					else {
 						// load to sharred data
 						shared_data[write_offset] = tmp;
@@ -320,9 +327,9 @@ public:
 							ELEMENT_TYPE* replication_shared_data = shared_data + (replication_index+1) * ALLOC_HEIGHT*ALLOC_WIDTH;
 
 							reinterpret_cast<float*>(replication_shared_data + write_offset)[-1 * (replication_index+1) + 0] = tmp.x;
-							reinterpret_cast<float*>(replication_shared_data + write_offset)[-1 * (replication_index+1) + 1] = tmp.x;
-							reinterpret_cast<float*>(replication_shared_data + write_offset)[-1 * (replication_index+1) + 2] = tmp.y;
-							reinterpret_cast<float*>(replication_shared_data + write_offset)[-1 * (replication_index+1) + 3] = tmp.z;
+							reinterpret_cast<float*>(replication_shared_data + write_offset)[-1 * (replication_index+1) + 1] = tmp.y;
+							reinterpret_cast<float*>(replication_shared_data + write_offset)[-1 * (replication_index+1) + 2] = tmp.z;
+							reinterpret_cast<float*>(replication_shared_data + write_offset)[-1 * (replication_index+1) + 3] = tmp.w;
 						}
 					}
 				}
@@ -336,39 +343,41 @@ public:
 	}
 
 
-	template <int REPLICATE_OFFSETED>
-	__device__
-	void store_shared(const LoadingData& loaded_data, ELEMENT_TYPE* shared_data) {
+    template <int REPLICATE_OFFSETED>
+    __device__
+    void store_shared(const LoadingData& loaded_data, ELEMENT_TYPE* shared_data) {
 
-#pragma unroll
-		for (int j = -APRON_SIZE; j < HEIGHT + APRON_SIZE; j+=NUM_THREADS_HEIGHT) {
-#pragma unroll
-			for (int i = -APRON_SIZE; i < WIDTH + APRON_SIZE; i+=NUM_THREADS_WIDTH * BATCH_ELEMENTS) {
-				// current_image already at position for this block
+        #pragma unroll
+        for (int j = -APRON_SIZE_Y; j < HEIGHT + APRON_SIZE_Y; j+=NUM_THREADS_HEIGHT) {
+            #pragma unroll
+            for (int i = -APRON_SIZE_X; i < WIDTH + APRON_SIZE_X; i+=NUM_THREADS_WIDTH * BATCH_ELEMENTS) {
+                // current_image already at position for this block
 
-				if (thread_indexing_writing.x < (WIDTH + APRON_SIZE - i)  && thread_indexing_writing.y < HEIGHT + APRON_SIZE - j)  {
+                if (thread_indexing_writing.x < (WIDTH + APRON_SIZE_X - i)  && thread_indexing_writing.y < HEIGHT + APRON_SIZE_Y - j)  {
 
-					int write_offset = (j + APRON_SIZE) * ALLOC_WIDTH  + (i + APRON_SIZE) / BATCH_ELEMENTS;
+                    int write_offset = (j + APRON_SIZE_Y) * ALLOC_WIDTH  + (i + APRON_SIZE_X) / BATCH_ELEMENTS;
 
-					ELEMENT_TYPE tmp = loaded_data.data[(j + APRON_SIZE)/NUM_THREADS_HEIGHT][(i + APRON_SIZE) / (NUM_THREADS_WIDTH * BATCH_ELEMENTS)];
+                    int jj = (j + APRON_SIZE_Y)/NUM_THREADS_HEIGHT;
+                    int ii = (i + APRON_SIZE_X) / (NUM_THREADS_WIDTH * BATCH_ELEMENTS);
 
-					// load to sharred data
-					shared_data[write_offset] = tmp;
+                    ELEMENT_TYPE tmp = loaded_data.data[jj][ii];
+                    // load to sharred data
+                    shared_data[write_offset] = tmp;
 
-					// replicate the value several times in an offested manner to enable alinged access using float2 or float4 even for unalinged offsets
-					for (int replication_index = 0; replication_index < REPLICATE_OFFSETED; ++replication_index) {
-						ELEMENT_TYPE* replication_shared_data = shared_data + (replication_index+1) * ALLOC_HEIGHT*ALLOC_WIDTH;
+                    // replicate the value several times in an offested manner to enable alinged access using float2 or float4 even for unalinged offsets
+                    for (int replication_index = 0; replication_index < REPLICATE_OFFSETED; ++replication_index) {
+                        ELEMENT_TYPE* replication_shared_data = shared_data + (replication_index+1) * ALLOC_HEIGHT*ALLOC_WIDTH;
 
-						reinterpret_cast<float*>(replication_shared_data + write_offset)[-1 * (replication_index+1) + 0] = tmp.x;
-						reinterpret_cast<float*>(replication_shared_data + write_offset)[-1 * (replication_index+1) + 1] = tmp.x;
-						reinterpret_cast<float*>(replication_shared_data + write_offset)[-1 * (replication_index+1) + 2] = tmp.y;
-						reinterpret_cast<float*>(replication_shared_data + write_offset)[-1 * (replication_index+1) + 3] = tmp.z;
-					}
-				}
-			}
-		}
-	}
-
+                        if (BATCH_ELEMENTS > 0) reinterpret_cast<float*>(replication_shared_data + write_offset)[-1 * (replication_index+1) + 0] = tmp.x;
+                        if (BATCH_ELEMENTS > 1) reinterpret_cast<float*>(replication_shared_data + write_offset)[-1 * (replication_index+1) + 1] = tmp.y;
+                        if (BATCH_ELEMENTS > 2) reinterpret_cast<float*>(replication_shared_data + write_offset)[-1 * (replication_index+1) + 2] = tmp.z;
+                        if (BATCH_ELEMENTS > 3) reinterpret_cast<float*>(replication_shared_data + write_offset)[-1 * (replication_index+1) + 3] = tmp.w;
+                    }
+                }
+            }
+        }
+        //print();
+    }
 
 	__device__
 	void print() {
@@ -469,7 +478,9 @@ template <int BATCH_PIXELS_SIZE_X,
 		int BATCH_MEM_SUBFEATURES_SIZE,
 		int BLOCK_FEATURES,
 		int IMG_WIDTH, int IMG_HEIGHT, int BATCH_PIXELS_FLOAT4,
-		typename  _BlockSharedMemoryT>
+		typename  _BlockSharedMemoryT,
+        int GLOBAL_IMG_READ_WIDTH,
+        int NUM_REPLICATE_OFFSETED>
 class PipelineEngine {
 
 	enum {
@@ -485,6 +496,13 @@ public:
 	PipelineEngine(BlockSharedMemoryT& shared_mem_)
 		: shared_mem(shared_mem_) {
 	}
+
+    struct {
+        bool enabled;
+        typename BlockSharedMemoryT::ELEMENT_TYPE const* reading_ptr;
+        typename BlockSharedMemoryT::ELEMENT_TYPE * writing_ptr;
+        int img_read_width;
+    } load_global;
 
 	// load offset
 	struct {
@@ -531,8 +549,18 @@ public:
 
 	__device__
 	void execute_step() {
+        typename BlockSharedMemoryT::LoadingData ld;
 
-		// load quad of offsets for next one and make it directly into pointer to data
+        if (load_global.enabled) {
+            //shared_mem.template load_global<GLOBAL_IMG_READ_WIDTH,NUM_REPLICATE_OFFSETED,false,1>(load_global.reading_ptr,
+            //                                                                                      load_global.writing_ptr,
+            //                                                                                      load_global.img_read_width);
+            shared_mem.template load_global<GLOBAL_IMG_READ_WIDTH,NUM_REPLICATE_OFFSETED,false,1>(load_global.reading_ptr,
+                                                                                                  load_global.writing_ptr,
+                                                                                                  load_global.img_read_width, &ld);
+        }
+
+        // load quad of offsets for next one and make it directly into pointer to data
 		if (load_offset.enabled) {
 			for (int f_quad_index = 0; f_quad_index < BATCH_COMPUTE_FEATURES_SIZE/4; ++f_quad_index ) {
 				load_offset.output[f_quad_index].quad[0] = (float*)((void*)load_offset.base_address + load_offset.offset_address[f_quad_index].x); // F[0]
@@ -540,28 +568,23 @@ public:
 				load_offset.output[f_quad_index].quad[2] = (float*)((void*)load_offset.base_address + load_offset.offset_address[f_quad_index].z); // F[2]
 				load_offset.output[f_quad_index].quad[3] = (float*)((void*)load_offset.base_address + load_offset.offset_address[f_quad_index].w); // F[3]
 
-                /*if (load_offset.offset_address[f_quad_index].x != 0 ||
-                        load_offset.offset_address[f_quad_index].y != 0 ||
-                        load_offset.offset_address[f_quad_index].z != 0 ||
-                        load_offset.offset_address[f_quad_index].w != 0 ) {
-                    printf("invalid offsets %d, %d, %d, %d\n", load_offset.offset_address[f_quad_index].x, load_offset.offset_address[f_quad_index].y, load_offset.offset_address[f_quad_index].z, load_offset.offset_address[f_quad_index].w);
-                }*/
 			}
 		}
 
-		NDIndexing<BATCH_COMPUTE_FEATURES_SIZE,
+		NDIndexing<(BATCH_PIXELS_SIZE_X * BATCH_PIXELS_SIZE_Y)/BATCH_PIXELS_FLOAT4,
 				NDIndexing<PIXELS_INTERPOLATION_Dy,
 						NDIndexing<PIXELS_INTERPOLATION_Dx,
-								NDIndexingZero<(BATCH_PIXELS_SIZE_X * BATCH_PIXELS_SIZE_Y)/BATCH_PIXELS_FLOAT4> > > > indexing;
+								NDIndexingZero<BATCH_COMPUTE_FEATURES_SIZE> > > > indexing;
 
+        static const int NUM_ITER = BATCH_COMPUTE_FEATURES_SIZE * (BATCH_PIXELS_SIZE_X * BATCH_PIXELS_SIZE_Y) /BATCH_PIXELS_FLOAT4;
 		#pragma unroll
-		for (int i = 0; i < BATCH_COMPUTE_FEATURES_SIZE * (BATCH_PIXELS_SIZE_X * BATCH_PIXELS_SIZE_Y) /BATCH_PIXELS_FLOAT4; ++i) {
+		for (int i = 0; i < NUM_ITER; ++i) {
 
 			// i goes over [BATCH_FEATURES_SIZE][PIXELS_INTERPOLATION_SIZE][BATCH_PIXELS_SIZE_/4] array so get indexes for them manually
-			int f = indexing.getIndex<0>(i);
+			int f = indexing.getIndex<3>(i);
 			int interpolation_j = indexing.getIndex<1>(i);
 			int interpolation_i = indexing.getIndex<2>(i);
-			int px = indexing.getIndex<3>(i);
+			int px = indexing.getIndex<0>(i);
 			// since we store weight and offset into float4/int4 we need a proper index to access array of quad vectors
 			int f_quad_index = f/4;
 
@@ -572,6 +595,8 @@ public:
 			px_x = px_x * (BATCH_PIXELS_BY_WIDTH ?  BATCH_PIXELS_FLOAT4 : 1);
 			px_y = px_y * (BATCH_PIXELS_BY_WIDTH ?  1 : BATCH_PIXELS_FLOAT4);
 
+			int jj = f * (BATCH_PIXELS_SIZE_X * BATCH_PIXELS_SIZE_Y) /BATCH_PIXELS_FLOAT4 +  px;
+
 			// load data for next loop
 			if (load_data.enabled) {
 
@@ -579,30 +604,23 @@ public:
 				int data_quad_index = f % 4;
 
 				if (BATCH_PIXELS_BY_WIDTH) {
-					load_data.output[i] = reinterpret_cast<float4*>(load_data.address[data_address_index].quad[data_quad_index] + px_x + (px_y) * BlockSharedMemoryT::PITCHED_WIDTH)[0];
+					load_data.output[jj] = reinterpret_cast<float4*>(load_data.address[data_address_index].quad[data_quad_index] + px_x + (px_y) * BlockSharedMemoryT::PITCHED_WIDTH)[0];
 				} else {
-					if (BATCH_PIXELS_FLOAT4 > 0) load_data.output[i].x = reinterpret_cast<float4*>(load_data.address[data_address_index].quad[data_quad_index] + px_x + (px_y + 0) * BlockSharedMemoryT::PITCHED_WIDTH)[0].x;
-					if (BATCH_PIXELS_FLOAT4 > 1) load_data.output[i].y = reinterpret_cast<float4*>(load_data.address[data_address_index].quad[data_quad_index] + px_x + (px_y + 1) * BlockSharedMemoryT::PITCHED_WIDTH)[0].x;
-					if (BATCH_PIXELS_FLOAT4 > 2) load_data.output[i].z = reinterpret_cast<float4*>(load_data.address[data_address_index].quad[data_quad_index] + px_x + (px_y + 2) * BlockSharedMemoryT::PITCHED_WIDTH)[0].x;
-					if (BATCH_PIXELS_FLOAT4 > 3) load_data.output[i].w = reinterpret_cast<float4*>(load_data.address[data_address_index].quad[data_quad_index] + px_x + (px_y + 3) * BlockSharedMemoryT::PITCHED_WIDTH)[0].x;
+					if (BATCH_PIXELS_FLOAT4 > 0) load_data.output[jj].x = reinterpret_cast<float4*>(load_data.address[data_address_index].quad[data_quad_index] + px_x + (px_y + 0) * BlockSharedMemoryT::PITCHED_WIDTH)[0].x;
+					if (BATCH_PIXELS_FLOAT4 > 1) load_data.output[jj].y = reinterpret_cast<float4*>(load_data.address[data_address_index].quad[data_quad_index] + px_x + (px_y + 1) * BlockSharedMemoryT::PITCHED_WIDTH)[0].x;
+					if (BATCH_PIXELS_FLOAT4 > 2) load_data.output[jj].z = reinterpret_cast<float4*>(load_data.address[data_address_index].quad[data_quad_index] + px_x + (px_y + 2) * BlockSharedMemoryT::PITCHED_WIDTH)[0].x;
+					if (BATCH_PIXELS_FLOAT4 > 3) load_data.output[jj].w = reinterpret_cast<float4*>(load_data.address[data_address_index].quad[data_quad_index] + px_x + (px_y + 3) * BlockSharedMemoryT::PITCHED_WIDTH)[0].x;
 
 				}
-
-			}
+            }
 
 			// compute for current loop
 			if (compute.enabled) {
-				/*if (f == 0) {
-					printf("value at index (%d+%d,%d+%d), %d is (%f) loaded from address %d\n", block_y,thread_y + px_y + 0, block_x, thread_x + px_x, px_y, compute.data[i].x, load_data.address[f_quad_index].quad[f % 4]);
-					if (BATCH_PIXELS_FLOAT4 > 1) printf("value at index (%d+%d,%d+%d), %d is (%f) loaded from address %d\n", block_y,thread_y + px_y + 1, block_x, thread_x + px_x, px_y, compute.data[i].y, load_data.address[f_quad_index].quad[f % 4]);
-					if (BATCH_PIXELS_FLOAT4 > 2) printf("value at index (%d+%d,%d+%d), %d is (%f) loaded from address %d\n", block_y,thread_y + px_y + 2, block_x, thread_x + px_x, px_y, compute.data[i].z, load_data.address[f_quad_index].quad[f % 4]);
-					if (BATCH_PIXELS_FLOAT4 > 3) printf("value at index (%d+%d,%d+%d), %d is (%f) loaded from address %d\n", block_y,thread_y + px_y + 3, block_x ,thread_x + px_x, px_y, compute.data[i].w, load_data.address[f_quad_index].quad[f % 4]);
-				}
-				*/
-				float computed_value = compute.errors[i].x * compute.data[i].x;
-				if (BATCH_PIXELS_FLOAT4 > 1) computed_value += compute.errors[i].y * compute.data[i].y;
-				if (BATCH_PIXELS_FLOAT4 > 2) computed_value += compute.errors[i].z * compute.data[i].z;
-				if (BATCH_PIXELS_FLOAT4 > 3) computed_value += compute.errors[i].w * compute.data[i].w;
+
+				float computed_value = compute.errors[jj].x * compute.data[jj].x;
+				if (BATCH_PIXELS_FLOAT4 > 1) computed_value += compute.errors[jj].y * compute.data[jj].y;
+				if (BATCH_PIXELS_FLOAT4 > 2) computed_value += compute.errors[jj].z * compute.data[jj].z;
+				if (BATCH_PIXELS_FLOAT4 > 3) computed_value += compute.errors[jj].w * compute.data[jj].w;
 
                 if (f % 4 == 0)
                     compute.output[f_quad_index].x += computed_value;
@@ -613,10 +631,11 @@ public:
                 else if (f % 4 == 3)
                     compute.output[f_quad_index].w += computed_value;
 
-                //if (threadIdx.x == 0)
-                //    printf("thread val: %f (index %d) with = %f * %f (index %d)\n", computed_value, f, compute.errors[i].x , compute.data[i].x, i);
-
 			}
+
+            if (load_global.enabled && i == NUM_ITER/2) {
+                shared_mem.template store_shared<NUM_REPLICATE_OFFSETED>(ld,load_global.writing_ptr);
+            }
 		}
 	}
 
@@ -626,7 +645,7 @@ public:
 
 template <typename BlockIndexingT>
 __global__ void //__launch_bounds__(128, 4)
-fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, const float* filtered_images, const float* error_images,
+fast_gauss_backward_pipeline_kernel(const float* filtered_images, const float* error_images,
                                     const int* filter_offsets, const float* filter_weights, float* output,
 							        const int I, const int S, const int F, const int G,
 							        const int img_width_, const int img_height_,
@@ -669,7 +688,7 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
 	// using float4 for computing pixels
 	static const int BATCH_PIXELS_FLOAT4 = 1;
 
-	static const bool BATCH_PIXELS_BY_WIDTH = BATCH_PIXELS_SIZE_X >= 4 && BATCH_PIXELS_FLOAT4 == 4;
+	static const bool BATCH_PIXELS_BY_WIDTH = false; // we do not support that anymore (BATCH_PIXELS_SIZE_X >= 4 && BATCH_PIXELS_FLOAT4 == 4)
 
 	static const int DOUBLE_BUFFERING = 2;
 
@@ -684,8 +703,6 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
 	int img_height = IMG_HEIGHT; //img_height_; //IMG_HEIGHT;
 
 	BlockIndexingKernel block_indexing(img_width, img_height);
-
-	//int n = block_indexing.getImageIdx();
 
 	int f_offset = block_indexing.getFeatureIdx();
 
@@ -720,8 +737,13 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
 
 	SharedMem image_sh_class(data, make_int2(thread_x, thread_y));
 
+
 	int thread_sh_x = image_sh_class.getThreadIdx().x;
 	int thread_sh_y = image_sh_class.getThreadIdx().y;
+
+    static const int GLOBAL_IMG_READ_WIDTH = IMG_WIDTH + 2 * MAX_OFFSET;
+    const int global_img_read_width = img_width + 2 * MAX_OFFSET;
+
 
     static const int DOUBLE_BUFFERING_OFF = 1; // disable double buffering for offsets since we can load all of them before first loop
 
@@ -738,22 +760,14 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
 	int4* offset_batch_sh = (int4*)offsets_sh_class.getData(0);
 #endif
 
-
-	// WARNING: leave this part in otherwise it works slower !!! (probably due to some compiler optimization)
-//	if (threadIdx.x == 100000000)
-//		for (int i = 0; i < 2 * BATCH_MEM_SUBFEATURES_SIZE; ++i)
-//			image_sh_class.template load_global<IMG_WIDTH + 2*MAX_OFFSET,0,true,0>(reinterpret_cast<float4*>(NULL), reinterpret_cast<float4*>(image_sh_class.getDataThreadIndexingWrite(i)) ) ;
-
-	//__syncthreads();
-
-    float4 out_val[BATCH_GAUSS_SIZE][BATCH_MEM_SUBFEATURES_SIZE * BLOCK_SUBFEATURES][BATCH_FEATURES_SIZE/BATCH_COMPUTE_FEATURES_SIZE];
+    float4 out_val[BATCH_GAUSS_SIZE][BATCH_MEM_SUBFEATURES_SIZE * BLOCK_SUBFEATURES][BATCH_FEATURES_SIZE/4];
 
     #pragma unroll
     for (int g = 0; g < BATCH_GAUSS_SIZE; ++g) {
         #pragma unroll
         for (int s = 0; s < BATCH_MEM_SUBFEATURES_SIZE * BLOCK_SUBFEATURES; ++s) {
             #pragma unroll
-            for (int f = 0; f < BATCH_FEATURES_SIZE / BATCH_COMPUTE_FEATURES_SIZE; ++f) {
+            for (int f = 0; f < BATCH_FEATURES_SIZE / 4; ++f) {
                 out_val[g][s][f].x = 0;
                 out_val[g][s][f].y = 0;
                 out_val[g][s][f].z = 0;
@@ -772,31 +786,15 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
 					BATCH_MEM_SUBFEATURES_SIZE,
 					BLOCK_FEATURES,
 					IMG_WIDTH, IMG_HEIGHT, BATCH_PIXELS_FLOAT4,
-					SharedMem> pipeline(image_sh_class);
+					SharedMem,
+            GLOBAL_IMG_READ_WIDTH,NUM_REPLICATE_OFFSETED> pipeline(image_sh_class);
 
 	pipeline.block_x = block_x;
 	pipeline.block_y = block_y;
 	pipeline.thread_x = thread_x;
 	pipeline.thread_y = thread_y;
 	const int f_start_block = f_offset - f_block_idx;
-/*
-    for (int s = 0 ; s < BATCH_MEM_SUBFEATURES_SIZE; ++s) {
-        int buffer_index = OFFSET(0, 0, s % BATCH_MEM_SUBFEATURES_SIZE, 0, 1, DOUBLE_BUFFERING, BATCH_MEM_SUBFEATURES_SIZE, NUM_REPLICATE_OFFSETED+1);
 
-        image_sh_class.template load_global<IMG_WIDTH + 2 * MAX_OFFSET,NUM_REPLICATE_OFFSETED,true,1>(reinterpret_cast<const float4*>(0 + (s) * (img_width + 2*MAX_OFFSET) * (img_height + 2*MAX_OFFSET)),
-                                                                                                       reinterpret_cast<float4*>(image_sh_class.getDataThreadIndexingWrite(buffer_index)),
-                                                                                                       img_width + 2 * MAX_OFFSET);
-
-        buffer_index = OFFSET(0, 1, s % BATCH_MEM_SUBFEATURES_SIZE, 0, 1, DOUBLE_BUFFERING, BATCH_MEM_SUBFEATURES_SIZE, NUM_REPLICATE_OFFSETED+1);
-        image_sh_class.template load_global<IMG_WIDTH + 2 * MAX_OFFSET,NUM_REPLICATE_OFFSETED,true,1>(reinterpret_cast<const float4*>(0 + (s) * (img_width + 2*MAX_OFFSET) * (img_height + 2*MAX_OFFSET)),
-                                                                                                      reinterpret_cast<float4*>(image_sh_class.getDataThreadIndexingWrite(buffer_index)),
-                                                                                                      img_width + 2 * MAX_OFFSET);
-    }
-    offsets_sh_class.template load_global<OFFSET_BLOCK_MEM_SIZE,0,true,0>(reinterpret_cast<const int4*>(0 + offsets_sh_class.getThreadIdx().x),
-                                                                          reinterpret_cast<int4*>(offsets_sh_class.getDataThreadIndexingWrite(0)));
-    offsets_sh_class.template load_global<OFFSET_BLOCK_MEM_SIZE,0,true,0>(reinterpret_cast<const int4*>(0 + offsets_sh_class.getThreadIdx().x),
-                                                                          reinterpret_cast<int4*>(offsets_sh_class.getDataThreadIndexingWrite(1)));
-*/
     const int* _filter_offset_current = filter_offsets +  OFFSET(f_start_block / (BLOCK_FEATURES * BATCH_FEATURES_SIZE),
                                                                  s_offset / (BLOCK_SUBFEATURES * BATCH_MEM_SUBFEATURES_SIZE),
                                                                  0,
@@ -807,10 +805,9 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
     const int* _filter_offset_next = _filter_offset_current + offsets_sh_class.getThreadIdx().x;
 
     if (1){
-        // load offsets for the first one
+        // load all offsets (since we do not have that may offsets we load them only once and then re-use them)
         offsets_sh_class.template load_global<OFFSET_BLOCK_MEM_SIZE,0,false,0>(reinterpret_cast<const int4*>(_filter_offset_current + offsets_sh_class.getThreadIdx().x),
                                                                                reinterpret_cast<int4*>(offsets_sh_class.getDataThreadIndexingWrite(0)));
-        __syncthreads();
     }
 #else
     const int* _filter_offset_next = _filter_offset_current;
@@ -822,11 +819,6 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
                                                              MAX_OFFSET + block_x + image_sh_class.getThreadIdx().x,
                                                              I, S, img_height + 2*MAX_OFFSET, img_width + 2*MAX_OFFSET);
 
-    const float* _error_images = error_images + OFFSET(0,
-                                                       f_offset,
-                                                       block_y + thread_y,
-                                                       block_x + thread_x,
-                                                       I, F, img_height, img_width);
     if (1){
         // load first batch of subfeatures/input data into shared memory
         const float* _image_global_current = filtered_images + OFFSET(0,
@@ -834,7 +826,6 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
                                                                       MAX_OFFSET + block_y + image_sh_class.getThreadIdx().y,
                                                                       MAX_OFFSET + block_x + image_sh_class.getThreadIdx().x,
                                                                       I, S, img_height + 2*MAX_OFFSET, img_width + 2*MAX_OFFSET);
-        //const float* _image_global_current = _filtered_images;
 
         for (int s = 0 ; s < BATCH_MEM_SUBFEATURES_SIZE; ++s) {
 
@@ -842,28 +833,14 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
 
 
             image_sh_class.template load_global<IMG_WIDTH + 2 * MAX_OFFSET,NUM_REPLICATE_OFFSETED,false,1>(reinterpret_cast<const float4*>(_image_global_current + (s) * (img_width + 2*MAX_OFFSET) * (img_height + 2*MAX_OFFSET)),
-                    //image_sh_class.template load_global<IMG_WIDTH + 2 * MAX_OFFSET,NUM_REPLICATE_OFFSETED,true,1>(reinterpret_cast<const float4*>(_image_global_current + (s) * (img_width + 2*MAX_OFFSET) * (img_height + 2*MAX_OFFSET)),
+            //image_sh_class.template load_global<IMG_WIDTH + 2 * MAX_OFFSET,NUM_REPLICATE_OFFSETED,true,1>(reinterpret_cast<const float4*>(_image_global_current + (s) * (img_width + 2*MAX_OFFSET) * (img_height + 2*MAX_OFFSET)),
                                                                                                            reinterpret_cast<float4*>(image_sh_class.getDataThreadIndexingWrite(buffer_index)),
                                                                                                            img_width + 2 * MAX_OFFSET);
-/*				typename SharedMem::LoadingData ld;
-				image_sh_class.template load_global<IMG_WIDTH + 2 * MAX_OFFSET,NUM_REPLICATE_OFFSETED,false,1>(reinterpret_cast<const float4*>(_image_global_current + (s) * (img_width + 2*MAX_OFFSET) * (img_height + 2*MAX_OFFSET)),
-                                                                                                               reinterpret_cast<float4*>(image_sh_class.getDataThreadIndexingWrite(buffer_index)),
-                                                                                                               img_width + 2 * MAX_OFFSET, &ld);
 
-				image_sh_class.template store_shared<NUM_REPLICATE_OFFSETED>(ld,reinterpret_cast<float4*>(image_sh_class.getDataThreadIndexingWrite(buffer_index)));*/
         }
-        __syncthreads();
     }
-/*
-    const int image_offset = S * (img_height + 2*MAX_OFFSET) * (img_width + 2*MAX_OFFSET);
-    const int error_offset = F * img_height * img_width;
+    __syncthreads();
 
-    float const* _image_global_current = _filtered_images;
-    float const* _image_global_next = _filtered_images + image_offset;
-
-    float const* _error_global_current = _error_images;
-
-*/
     for (int n = 0; n < I; ++n) {
 
         const float* _image_global_current = filtered_images + OFFSET(n,
@@ -878,84 +855,34 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
 																	  MAX_OFFSET + block_y + image_sh_class.getThreadIdx().y,
 																	  MAX_OFFSET + block_x + image_sh_class.getThreadIdx().x,
 																	  I, S, img_height + 2*MAX_OFFSET, img_width + 2*MAX_OFFSET);
-        const float* _error_global_current = error_images + OFFSET(n,
-                                                                   f_offset,
+        const float* _error_global_current = error_images + OFFSET5(n,
+                                                                   f_offset/4,
                                                                    block_y + thread_y,
-                                                                   block_x + thread_x,
-                                                                   I, F, img_height, img_width);
+                                                                   block_x + thread_x, 0,
+                                                                   I, F/4, img_height, img_width,4);
 
 
-
-		if (0){
-			// load first batch of subfeatures/input data into shared memory
-
-			for (int s = 0 ; s < BATCH_MEM_SUBFEATURES_SIZE; ++s) {
-
-				int buffer_index = OFFSET(0, 0, s, 0, 1, DOUBLE_BUFFERING, BATCH_MEM_SUBFEATURES_SIZE, NUM_REPLICATE_OFFSETED+1);
-
-
-				image_sh_class.template load_global<IMG_WIDTH + 2 * MAX_OFFSET,NUM_REPLICATE_OFFSETED,false,1>(reinterpret_cast<const float4*>(_image_global_current + (s) * (img_width + 2*MAX_OFFSET) * (img_height + 2*MAX_OFFSET)),
-						//image_sh_class.template load_global<IMG_WIDTH + 2 * MAX_OFFSET,NUM_REPLICATE_OFFSETED,true,1>(reinterpret_cast<const float4*>(_image_global_current + (s) * (img_width + 2*MAX_OFFSET) * (img_height + 2*MAX_OFFSET)),
-																											   reinterpret_cast<float4*>(image_sh_class.getDataThreadIndexingWrite(buffer_index)),
-																											   img_width + 2 * MAX_OFFSET);
-/*				typename SharedMem::LoadingData ld;
-				image_sh_class.template load_global<IMG_WIDTH + 2 * MAX_OFFSET,NUM_REPLICATE_OFFSETED,false,1>(reinterpret_cast<const float4*>(_image_global_current + (s) * (img_width + 2*MAX_OFFSET) * (img_height + 2*MAX_OFFSET)),
-                                                                                                               reinterpret_cast<float4*>(image_sh_class.getDataThreadIndexingWrite(buffer_index)),
-                                                                                                               img_width + 2 * MAX_OFFSET, &ld);
-
-				image_sh_class.template store_shared<NUM_REPLICATE_OFFSETED>(ld,reinterpret_cast<float4*>(image_sh_class.getDataThreadIndexingWrite(buffer_index)));*/
-			}
-			__syncthreads();
-		}
 
 		// load error values for all the features that are needed in this thread i.e. for BATCH_FEATURES_SIZE (or BATCH_COMPUTE_FEATURES_SIZE ?!!)
         float4 err_vals[BATCH_FEATURES_SIZE][(BATCH_PIXELS_SIZE_X * BATCH_PIXELS_SIZE_Y)/BATCH_PIXELS_FLOAT4];
 
-		// TODO: loading should be done using LDG.128 or LDG.64 !!!
         #pragma unroll
-        for (int ff = 0; ff < BATCH_FEATURES_SIZE; ++ff) {
-            if (BATCH_PIXELS_BY_WIDTH) {
+        for (int ff = 0; ff < BATCH_FEATURES_SIZE; ff+=4) {
+            #pragma unroll
+            for (int py = 0; py < BATCH_PIXELS_SIZE_Y; py+=BATCH_PIXELS_FLOAT4) {
                 #pragma unroll
-                for (int py = 0; py < BATCH_PIXELS_SIZE_Y; ++py) {
-                    #pragma unroll
-                    for (int px = 0; px < BATCH_PIXELS_SIZE_X; px+=BATCH_PIXELS_FLOAT4) {
-                      	/*if (BATCH_PIXELS_FLOAT4 > 0) err_vals[ff][py * BATCH_PIXELS_SIZE_X/BATCH_PIXELS_FLOAT4 + px/BATCH_PIXELS_FLOAT4].x = 1;
-                        if (BATCH_PIXELS_FLOAT4 > 1) err_vals[ff][py * BATCH_PIXELS_SIZE_X/BATCH_PIXELS_FLOAT4 + px/BATCH_PIXELS_FLOAT4].y = 1;
-                        if (BATCH_PIXELS_FLOAT4 > 2) err_vals[ff][py * BATCH_PIXELS_SIZE_X/BATCH_PIXELS_FLOAT4 + px/BATCH_PIXELS_FLOAT4].z = 1;
-                        if (BATCH_PIXELS_FLOAT4 > 3) err_vals[ff][py * BATCH_PIXELS_SIZE_X/BATCH_PIXELS_FLOAT4 + px/BATCH_PIXELS_FLOAT4].w = 1;*/
+                for (int px = 0; px < BATCH_PIXELS_SIZE_X ; ++px) {
 
-						if (BATCH_PIXELS_FLOAT4 > 0) err_vals[ff][py * BATCH_PIXELS_SIZE_X/BATCH_PIXELS_FLOAT4 + px/BATCH_PIXELS_FLOAT4].x = _error_global_current[OFFSET(n, ff, py, px + 0, I, F, img_height, img_width)];
-						if (BATCH_PIXELS_FLOAT4 > 1) err_vals[ff][py * BATCH_PIXELS_SIZE_X/BATCH_PIXELS_FLOAT4 + px/BATCH_PIXELS_FLOAT4].y = _error_global_current[OFFSET(n, ff, py, px + 1, I, F, img_height, img_width)];
-						if (BATCH_PIXELS_FLOAT4 > 2) err_vals[ff][py * BATCH_PIXELS_SIZE_X/BATCH_PIXELS_FLOAT4 + px/BATCH_PIXELS_FLOAT4].z = _error_global_current[OFFSET(n, ff, py, px + 2, I, F, img_height, img_width)];
-						if (BATCH_PIXELS_FLOAT4 > 3) err_vals[ff][py * BATCH_PIXELS_SIZE_X/BATCH_PIXELS_FLOAT4 + px/BATCH_PIXELS_FLOAT4].w = _error_global_current[OFFSET(n, ff, py, px + 3, I, F, img_height, img_width)];
+                    const __restrict__ float4 tmp = __ldg(&reinterpret_cast<const float4*>(_error_global_current)[OFFSET5(0, 0, py + 0, px, ff/4, I, F/4, img_height, img_width, 1)]);
 
-                    }
-                }
-            } else {
-                #pragma unroll
-                for (int py = 0; py < BATCH_PIXELS_SIZE_Y; py+=BATCH_PIXELS_FLOAT4) {
-                    #pragma unroll
-                    for (int px = 0; px < BATCH_PIXELS_SIZE_X ; ++px) {
-                        /*if (BATCH_PIXELS_FLOAT4 > 0) err_vals[ff][py/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px].x = 1;
-                        if (BATCH_PIXELS_FLOAT4 > 1) err_vals[ff][py/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px].y = 1;
-                        if (BATCH_PIXELS_FLOAT4 > 2) err_vals[ff][py/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px].z = 1;
-                        if (BATCH_PIXELS_FLOAT4 > 3) err_vals[ff][py/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px].w = 1;*/
-						const float4 tmp = reinterpret_cast<const float4*>(_error_global_current)[OFFSET(0, ff, py + 0, px/4, I, F, img_height, img_width/4)];
+                    err_vals[ff + 0][py/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px].x = tmp.x;
+                    err_vals[ff + 1][py/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px].x = tmp.y;
+                    err_vals[ff + 2][py/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px].x = tmp.z;
+                    err_vals[ff + 3][py/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px].x = tmp.w;
 
-						err_vals[ff][py/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px].x = px % 4 == 0 ? tmp.x :
-																							(px % 4 == 1 ? tmp.y :
-																							 (px % 4 == 2 ? tmp.z : tmp.w));
-
-						/*if (BATCH_PIXELS_FLOAT4 > 0) err_vals[ff][py/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px].x = _error_global_current[OFFSET(0, ff, py + 0, px, I, F, img_height, img_width)];
-						if (BATCH_PIXELS_FLOAT4 > 1) err_vals[ff][py/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px].y = _error_global_current[OFFSET(0, ff, py + 1, px, I, F, img_height, img_width)];
-						if (BATCH_PIXELS_FLOAT4 > 2) err_vals[ff][py/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px].z = _error_global_current[OFFSET(0, ff, py + 2, px, I, F, img_height, img_width)];
-						if (BATCH_PIXELS_FLOAT4 > 3) err_vals[ff][py/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px].w = _error_global_current[OFFSET(0, ff, py + 3, px, I, F, img_height, img_width)];*/
-
-                    }
                 }
             }
         }
-        //__syncthreads();
 
         const int MAX_S_OUTER_INDEX = BLOCK_SUBFEATURES; //S /  BATCH_MEM_SUBFEATURES_SIZE;
 
@@ -994,9 +921,13 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
             // to simplyfiy the code for global loading we can force global loading to be done BATCH_MEM_SUBFEATURES_SIZE * BATCH_FEATURES_SIZE/BATCH_COMPUTE_FEATURES_SIZE loops before
             // other units start
             static const int start_delay_global_load = 0; //1;
-            static const int start_delay_offset_load = 0;// + BATCH_MEM_SUBFEATURES_SIZE * BATCH_FEATURES_SIZE/BATCH_COMPUTE_FEATURES_SIZE;
-            static const int start_delay_data_load = 1;// + BATCH_MEM_SUBFEATURES_SIZE * BATCH_FEATURES_SIZE/BATCH_COMPUTE_FEATURES_SIZE;
-            static const int start_delay_compute = 2;// + BATCH_MEM_SUBFEATURES_SIZE * BATCH_FEATURES_SIZE/BATCH_COMPUTE_FEATURES_SIZE;
+            //static const int start_delay_offset_load = 0;// + BATCH_MEM_SUBFEATURES_SIZE * BATCH_FEATURES_SIZE/BATCH_COMPUTE_FEATURES_SIZE;
+            //static const int start_delay_data_load = 1;// + BATCH_MEM_SUBFEATURES_SIZE * BATCH_FEATURES_SIZE/BATCH_COMPUTE_FEATURES_SIZE;
+            //static const int start_delay_compute = 2;// + BATCH_MEM_SUBFEATURES_SIZE * BATCH_FEATURES_SIZE/BATCH_COMPUTE_FEATURES_SIZE;
+
+            static const int start_delay_offset_load = 0;
+            static const int start_delay_data_load = 0;
+            static const int start_delay_compute = 0;
 
             // NOTE: EXTRA_LOOPS is max value out of start_delay_global_load, start_delay_offset_load, start_delay_w_load, start_delay_data_load and start_delay_compute
             static const int EXTRA_LOOPS = MAX(start_delay_global_load,
@@ -1029,6 +960,10 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
 
                 bool load_global_enabled = pipeline.should_run(index, start_delay_global_load, NUM_ITER);
 
+                typename SharedMem::ELEMENT_TYPE const* global_load_reading_ptr;
+                typename SharedMem::ELEMENT_TYPE* global_load_writing_ptr;
+                typename SharedMem::ELEMENT_TYPE* shared_store_writing_ptr; // used only when LDG and STS are split
+
                 int global_d = -1;
                 int shared_d_off = -1;
                 int shared_d_current = -1;
@@ -1057,25 +992,12 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
                     // if this is last iteration before moving to next s_outer_index index then load for the next one
                     bool load_next_s_outer = load_global.s < BATCH_MEM_SUBFEATURES_SIZE ;
 
-					if (thread_x == 0 && thread_y == 0 && block_x == 0 && block_y == 0 && f_offset == 0 && s_offset == 0) {
-
-						//printf("load_global.s: %d, load_next_s_outer s: %d, double_buffer_index %d, subfeat_buffer_index: %d\n", load_global.s, load_next_s_outer,  double_buffer_index, subfeat_buffer_index);
-					}
-
 					bool load_next_image = s_outer_index >= MAX_S_OUTER_INDEX - 1 ? true : false;
 
-					//const float* image_global_load =  load_next_s_outer ? image_global_current : image_global_next_s_offset;
 					const float* image_global_load =  load_next_image ? image_global_next_image : image_global_next_s_offset;
-
-					if (load_next_image) {
-
-					}
 
                     load_global.s = load_global.s % (BATCH_MEM_SUBFEATURES_SIZE);
 
-                    // check if this is the last s_outer_index index and skip loading if it is
-					// TODO: we could load the next image instead
-                    //if (s_outer_index >= MAX_S_OUTER_INDEX - 1)
 					if (load_next_image && n >= I-1)
                     	load_global_enabled = false;
 
@@ -1083,21 +1005,8 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
 
                     int buffer_index = OFFSET(0, double_buffer_index, subfeat_buffer_index, 0, 1, DOUBLE_BUFFERING, BATCH_MEM_SUBFEATURES_SIZE, NUM_REPLICATE_OFFSETED+1);
 
-                    // load global
-                    if (load_global_enabled) {
-
-						image_sh_class.template load_global<IMG_WIDTH + 2 * MAX_OFFSET,NUM_REPLICATE_OFFSETED,false,1>(reinterpret_cast<const float4*>(image_global_load + (load_global.s) * (img_width + 2*MAX_OFFSET) * (img_height + 2*MAX_OFFSET)),
-						//image_sh_class.template load_global<IMG_WIDTH + 2 * MAX_OFFSET,NUM_REPLICATE_OFFSETED,true,1>(reinterpret_cast<const float4*>(image_global_load + (load_global.s) * (img_width + 2*MAX_OFFSET) * (img_height + 2*MAX_OFFSET)),
-																													   reinterpret_cast<float4*>(image_sh_class.getDataThreadIndexingWrite(buffer_index)),
-																													   img_width + 2 * MAX_OFFSET);
-
-						/*typename SharedMem::LoadingData ld;
-                        image_sh_class.template load_global<IMG_WIDTH + 2 * MAX_OFFSET,NUM_REPLICATE_OFFSETED,false,1>(reinterpret_cast<const float4*>(image_global_load + (load_global.s) * (img_width + 2*MAX_OFFSET) * (img_height + 2*MAX_OFFSET)),
-                                                                                                                       reinterpret_cast<float4*>(image_sh_class.getDataThreadIndexingWrite(buffer_index)),
-                                                                                                                       img_width + 2 * MAX_OFFSET, &ld);
-
-						image_sh_class.template store_shared<NUM_REPLICATE_OFFSETED>(ld,reinterpret_cast<float4*>(image_sh_class.getDataThreadIndexingWrite(buffer_index)));*/
-                    }
+                    global_load_reading_ptr = reinterpret_cast<const typename SharedMem::ELEMENT_TYPE*>(image_global_load + (load_global.s) * (img_width + 2*MAX_OFFSET) * (img_height + 2*MAX_OFFSET));
+                    global_load_writing_ptr = reinterpret_cast<typename SharedMem::ELEMENT_TYPE*>(image_sh_class.getDataThreadIndexingWrite(buffer_index));
 
                 }
                 bool require_sync = false;
@@ -1155,21 +1064,11 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
                     pipeline.load_offset.offset_address = &reinterpret_cast<int4*>((int*)filter_offset_current)[address_off];
 #endif
 
-                    int buffer_index = OFFSET(0, double_buffer_index, subfeat_buffer_index, 0, 1, DOUBLE_BUFFERING_OFF, BATCH_MEM_SUBFEATURES_SIZE, NUM_REPLICATE_OFFSETED+1);
+                    int buffer_index = OFFSET(0, double_buffer_index, subfeat_buffer_index, 0, 1, DOUBLE_BUFFERING, BATCH_MEM_SUBFEATURES_SIZE, NUM_REPLICATE_OFFSETED+1);
 
                     pipeline.load_offset.base_address = image_sh_class.getDataThreadIndexingRead(buffer_index);
                     pipeline.load_offset.output = (ptr4*)(use_reg_A ? &off_A[load_offset_index.g][0] : &off_B[load_offset_index.g][0]);
 
-
-                    /*if (pipeline.load_offset.enabled) {
-                        if (thread_x == 0 && thread_y == 0)
-                        if (pipeline.load_offset.offset_address[0].x != 0 ||
-                                pipeline.load_offset.offset_address[0].y != 0 ||
-                                pipeline.load_offset.offset_address[0].z != 0 ||
-                                pipeline.load_offset.offset_address[0].w != 0 ) {
-                            printf("invalid offsets at index (%d), s,g,f=(%d+%d +%d,%d,%d + %d), values=%d, %d, %d, %d at block/thread(%d+%d, %d + %d)\n", index, s_offset, s_outer_index, load_offset_index.s, load_offset_index.g, f_offset, load_offset_index.f, pipeline.load_offset.offset_address[0].x, pipeline.load_offset.offset_address[0].y, pipeline.load_offset.offset_address[0].z, pipeline.load_offset.offset_address[0].w, block_y, thread_y, block_x, thread_x);
-                        }
-                    }*/
 
                 }
                 bool load_data_reg_A;
@@ -1205,7 +1104,7 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
                     // compute
                     pipeline.compute.errors = (float4*)(use_reg_A ? err_vals[compute_index.f] : err_vals[compute_index.f]);
                     pipeline.compute.data = (float4*)(use_reg_A ? d_A[compute_index.g][compute_index.f] : d_B[compute_index.g][compute_index.f]);
-                    pipeline.compute.output = &out_val[compute_index.g][s_outer_index * BATCH_MEM_SUBFEATURES_SIZE + compute_index.s][compute_index.f/BATCH_COMPUTE_FEATURES_SIZE];
+                    pipeline.compute.output = &out_val[compute_index.g][s_outer_index * BATCH_MEM_SUBFEATURES_SIZE + compute_index.s][compute_index.f/4];
 
                 }
 
@@ -1214,15 +1113,18 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
                 if (require_sync) {
                     // NOTE: sync is not needed if we have more then enough operations to cover the latency of sore operations
                     // we can rughly say that if there is more then 128 operations then STS latency should be hidden (STS latency should not be more then 100 operations on different platforms)
-                    // however since store may be issued half way through operations then use 512 operations as limit
-                    if (BATCH_PIXELS_SIZE_X * BATCH_PIXELS_SIZE_Y * BATCH_FEATURES_SIZE * BATCH_GAUSS_SIZE * PIXELS_INTERPOLATION_SIZE * BATCH_MEM_SUBFEATURES_SIZE  < 512) {
-						//__syncthreads();
+                    // however since store may be issued half way through operations then use 128 operations as limit
+                    if (BATCH_PIXELS_SIZE_X * BATCH_PIXELS_SIZE_Y * BATCH_FEATURES_SIZE * BATCH_GAUSS_SIZE * PIXELS_INTERPOLATION_SIZE * BATCH_MEM_SUBFEATURES_SIZE  < 128) {
+						__syncthreads();
 						//__threadfence_block();
+					}
+
+
 #if __CUDA_ARCH__ >= 200
-						asm("bar.arrive 15, 1536;"); // # of threads must be greater than 0
+                    // this ensures that processing within each "iteration" step is fully seperated
+                    asm("bar.arrive 15, 1536;"); // # of threads must be greater than 0
 #endif
 
-					}
                 }
 
                 // pipeline handles loading global (features) data, loading offsets, loading shared (features) data and computing final output
@@ -1257,43 +1159,16 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
 
 
                 }*/
-                //if (f_offset == 12 && s_offset == 4)
+
+                pipeline.load_global.enabled = load_global_enabled;
+                pipeline.load_global.reading_ptr = global_load_reading_ptr;
+                pipeline.load_global.writing_ptr = global_load_writing_ptr;
+                pipeline.load_global.img_read_width = global_img_read_width;
+
                 pipeline.execute_step();
 
-
-#ifdef ENABLE_SHARED_MEM_FOR_OFFSETS
-                // if next iteration is not the last one then load offsets and weights for the next one - using double buffering so we do not intereput computation of the current one
-
-// TODO: is this correct or is it a bug ?? !! due to index + 4 ==  NUM_ITER + EXTRA_LOOPS it will not work when NUM_ITER < 2
-                if (s_outer_index + 1 < MAX_S_OUTER_INDEX && index + 4 ==  NUM_ITER + EXTRA_LOOPS )
-
-                //if (index + 4 ==  NUM_ITER + EXTRA_LOOPS )
-
-                //if (s_outer_index + 1 < MAX_S_OUTER_INDEX && index == 0 && 0)
-                // NOTE: we do not need to check for the last index since data should be padded with one extra image to prevent reading invalid data
-                if (index == 0)
-                {
-
-                    { // TODO: split load_global into two function one for load and one for read to force distance between LDG and STS commands
-
-//                        offsets_sh_class.template load_global<OFFSET_BLOCK_MEM_SIZE,0,false,0>(reinterpret_cast<const int4*>(filter_offset_next),
-//                                                                                               reinterpret_cast<int4*>(offsets_sh_class.getDataThreadIndexingWrite((s_outer_index + 1 ) % DOUBLE_BUFFERING_OFF)));
-                        /*__syncthreads();
-                        if (thread_x == 0 && thread_y == 0 && block_x == 0 && block_y == 0 && f_offset == 12 && s_offset == 4) {
-                            offsets_sh_class.print();
-                        }
-                        __syncthreads();*/
-                    }
-
-                }
-#endif
             }
         }
-
-        /*_image_global_current = _image_global_next;
-        _image_global_next = _image_global_current + image_offset;
-
-        _error_global_current = _error_global_current + error_offset;*/
     }
 
     __syncthreads();
@@ -1307,48 +1182,54 @@ fast_gauss_backward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, co
     int warp_id = block_indexing.getWarpId();
     WarpReduce warp_reduce(warp_reduce_storage[warp_id]);
 
-#pragma unroll
-    for (int g = 0; g < BATCH_GAUSS_SIZE; ++g) {
-#pragma unroll
-        for (int s = 0; s < BATCH_MEM_SUBFEATURES_SIZE * BLOCK_SUBFEATURES; ++s) {
-#pragma unroll
-            for (int f = 0; f < BATCH_FEATURES_SIZE / BATCH_COMPUTE_FEATURES_SIZE; ++f) {
-                float fff = out_val[g][s][f].x;
-                out_val[g][s][f].x = warp_reduce.Sum(out_val[g][s][f].x);
-                out_val[g][s][f].y = warp_reduce.Sum(out_val[g][s][f].y);
-                out_val[g][s][f].z = warp_reduce.Sum(out_val[g][s][f].z);
-                out_val[g][s][f].w = warp_reduce.Sum(out_val[g][s][f].w);
+    // if one warp handles multiple features then we need to perform warp reduce for each feature individually
+    for (int i = 0; i < WARP_SIZE; i+=Bx) {
+        // for each feature we will pass values from threads responsible for that feature back to first N threads
+        // and then compute warp-reduce only on valid items, e.g:
+        //   if Bx == 16, then we first perform warp-reduce on [0-16] threads/lane ids (default one) and additional
+        //   warp-reduce on [16-32] threads/lane ids; we let only first 16 lanes perform actual computation and just
+        //   copy data from [16-32] threads/lane ids back to [0-16] threads/lane ids
+        //   (this code can be repeated even smaller Bx)
 
-                //printf("thread (%d, %d) val: %f with sum: %f\n", block_indexing.getThreadId(), warp_id, fff, out_val[g][s][f].x);
+        s_offset = __shfl_down(s_offset, i);
+        f_offset = __shfl_down(f_offset, i);
+        #pragma unroll
+        for (int g = 0; g < BATCH_GAUSS_SIZE; ++g) {
+            #pragma unroll
+            for (int s = 0; s < BATCH_MEM_SUBFEATURES_SIZE * BLOCK_SUBFEATURES; ++s) {
+                #pragma unroll
+                for (int f = 0; f < BATCH_FEATURES_SIZE / 4; ++f) {
+                    out_val[g][s][f].x = warp_reduce.Sum(__shfl_down(out_val[g][s][f].x,i),Bx);
+                    out_val[g][s][f].y = warp_reduce.Sum(__shfl_down(out_val[g][s][f].y,i),Bx);
+                    out_val[g][s][f].z = warp_reduce.Sum(__shfl_down(out_val[g][s][f].z,i),Bx);
+                    out_val[g][s][f].w = warp_reduce.Sum(__shfl_down(out_val[g][s][f].w,i),Bx);
+                }
             }
         }
-    }
 
-    // now we finally write values to global mem
-    // only one thread at [0,0] needs to write it (other threads should have the same value)
+        // now we finally write values to global mem
+        // only one thread at [0,0] needs to write it (other threads should have the same value)
 
-    if (block_indexing.warp_lane_id() == 0) {
-        // TODO: currently supports only Bx*By == WARP_SIZE !! add atomicAdd when Bx*By > WARP_SIZE
-        // TODO: we could store float4 at once if output is rearranged indexes to have F as last index
+        if (block_indexing.warp_lane_id() == 0) {
+            // TODO: currently supports only Bx*By == WARP_SIZE !! add atomicAdd when Bx*By > WARP_SIZE
+            // TODO: we could store float4 at once if output is rearranged indexes to have F as last index
 
-#pragma unroll
-        for (int g = 0; g < BATCH_GAUSS_SIZE; ++g) {
-#pragma unroll
-            for (int s = 0; s < BATCH_MEM_SUBFEATURES_SIZE * BLOCK_SUBFEATURES ; ++s) {
-#pragma unroll
-                for (int f = 0; f < BATCH_FEATURES_SIZE/BATCH_COMPUTE_FEATURES_SIZE; ++f) {
-                    atomicAdd(&(output_batch[OFFSET(0, g, s_offset + s, (f_offset/4 + f), 1, G, S, F/4)].x), out_val[g][s][f].x);
-                    atomicAdd(&(output_batch[OFFSET(0, g, s_offset + s, (f_offset/4 + f), 1, G, S, F/4)].y), out_val[g][s][f].y);
-                    atomicAdd(&(output_batch[OFFSET(0, g, s_offset + s, (f_offset/4 + f), 1, G, S, F/4)].z), out_val[g][s][f].z);
-                    atomicAdd(&(output_batch[OFFSET(0, g, s_offset + s, (f_offset/4 + f), 1, G, S, F/4)].w), out_val[g][s][f].w);
+            #pragma unroll
+            for (int g = 0; g < BATCH_GAUSS_SIZE; ++g) {
+                #pragma unroll
+                for (int s = 0; s < BATCH_MEM_SUBFEATURES_SIZE * BLOCK_SUBFEATURES ; ++s) {
+                    #pragma unroll
+                    for (int f = 0; f < BATCH_FEATURES_SIZE/4; ++f) {
+                        atomicAdd(&(output_batch[OFFSET(0, g, s_offset + s, (f_offset/4 + f), 1, G, S, F/4)].x), out_val[g][s][f].x);
+                        atomicAdd(&(output_batch[OFFSET(0, g, s_offset + s, (f_offset/4 + f), 1, G, S, F/4)].y), out_val[g][s][f].y);
+                        atomicAdd(&(output_batch[OFFSET(0, g, s_offset + s, (f_offset/4 + f), 1, G, S, F/4)].z), out_val[g][s][f].z);
+                        atomicAdd(&(output_batch[OFFSET(0, g, s_offset + s, (f_offset/4 + f), 1, G, S, F/4)].w), out_val[g][s][f].w);
 
-                    //if (thread_x == 0 && thread_y == 0 && block_x == 0 && block_y == 0)
-                    //    printf("written by thread (%d, %d) at s (%d + %d) f (%d + %d) val: %f\n", block_indexing.getThreadId(), warp_id, s_offset, s, f_offset , f, out_val[g][s][f].x);
+                    }
                 }
             }
         }
     }
-
 #endif
 }
 
@@ -1572,6 +1453,13 @@ perpare_weights_and_offsets_bw(const float* filter_weights, const int* filter_of
 	interp_offset_x.z = offset_x.z - (float)(int)(offset_x.z);
 	interp_offset_x.w = offset_x.w - (float)(int)(offset_x.w);
 
+	// get y-floor(y)
+	interp_offset_y.x = offset_y.x - (float)(int)(offset_y.x);
+	interp_offset_y.y = offset_y.y - (float)(int)(offset_y.y);
+	interp_offset_y.z = offset_y.z - (float)(int)(offset_y.z);
+	interp_offset_y.w = offset_y.w - (float)(int)(offset_y.w);
+
+
 	float4 factor_00, factor_01, factor_10, factor_11;
 
 	factor_11.x = interp_offset_x.x * interp_offset_y.x;
@@ -1656,9 +1544,9 @@ float* create_input_with_border_bw(const float* filtered_images, const int img_w
 	float* filtered_images_with_border;
 	cudaMalloc(&filtered_images_with_border, sizeof(float) * new_width * new_height * (NN +1)); // NOTE: we add extra image as padding to prevent double buffering from load invalid data on last batch
 
-	//cudaMemset(filtered_images_with_border, 0,  sizeof(float) * new_width * new_height * NN);
+	cudaMemset(filtered_images_with_border, 0,  sizeof(float) * new_width * new_height * NN);
 
-	caffe_gpu_set<float>(new_width * new_height * NN, 1.0f, filtered_images_with_border);
+	//caffe_gpu_set<float>(new_width * new_height * NN, 0.0f, filtered_images_with_border);
 
 	for (int n = 0; n < NN; ++n) {
 		// position at begining of sub-feature input map
@@ -1682,7 +1570,6 @@ void fast_gauss_backward<float>(const float* filtered_images, const float* error
 								const int img_width, const int img_height,
 								const int kernel_width, const int kernel_height, cudaStream_t streamId) {
 
-
 	static const int CUDA_THREADS = 256;
 	static const int BATCH_PIXELS_SIZE = 4;
 
@@ -1693,21 +1580,21 @@ void fast_gauss_backward<float>(const float* filtered_images, const float* error
 	static const int BATCH_SUBFEATURES_SIZE = 2;
 	static const int MAX_OFFSET = 4;
 
-	dim3 threadsPerBlock(BLOCK_X, BLOCK_Y, 1);
-
-	dim3 numBlocks( ((int)ceil(img_width/(float)BATCH_PIXELS_SIZE) + threadsPerBlock.x - 1) / threadsPerBlock.x,	// over image width (N pixels per thread where N=BATCH_PIXELS_SIZE)
-					((int)ceil(img_height) + threadsPerBlock.y - 1) / threadsPerBlock.y,							// over image height
-                    F/1);																		// over S*G*F
-
-	std::cout << "threadsPerBlock " << threadsPerBlock.x << "," << threadsPerBlock.y << "," << threadsPerBlock.z << std::endl;
-	std::cout << "numBlocks " << numBlocks.x << "," << numBlocks.y << "," << numBlocks.z << std::endl;
-
 	cudaDeviceProp devProp;
 	CUDA_CHECK(cudaGetDeviceProperties(&devProp,0));
 
 	std::cout << "CUDA requrements: texture alignment " << devProp.textureAlignment << ", pitch alingnment " << devProp.texturePitchAlignment << std::endl;
 
     if (0) {
+
+        dim3 threadsPerBlock(BLOCK_X, BLOCK_Y, 1);
+
+        dim3 numBlocks( ((int)ceil(img_width/(float)BATCH_PIXELS_SIZE) + threadsPerBlock.x - 1) / threadsPerBlock.x,	// over image width (N pixels per thread where N=BATCH_PIXELS_SIZE)
+                        ((int)ceil(img_height) + threadsPerBlock.y - 1) / threadsPerBlock.y,							// over image height
+                        F/1);																		// over S*G*F
+
+        std::cout << "threadsPerBlock " << threadsPerBlock.x << "," << threadsPerBlock.y << "," << threadsPerBlock.z << std::endl;
+        std::cout << "numBlocks " << numBlocks.x << "," << numBlocks.y << "," << numBlocks.z << std::endl;
 
         std::cout << "started fast_gauss_backward_basic_kernel" << std::endl;
 
@@ -1718,85 +1605,10 @@ void fast_gauss_backward<float>(const float* filtered_images, const float* error
 
         clock_t end_t = clock();
         std::cout << "fast_gauss_backward_basic_kernel in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
-        //
+
     }
 
 	if (1) {
-
-		clock_t start_tx_create = clock();
-
-		// prepare cuArray and texture obj for each image
-		struct cudaExtent cuArray_size = make_cudaExtent(img_width / 4, img_height, S);
-		cudaArray** cuArray_list = new cudaArray*[I];
-
-		// create texture for each image in batch (current HW limit is 256 textures)
-		cudaTextureObject_t* filtered_images_tex_layered = new cudaTextureObject_t[I];
-
-		struct cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc(32, 32, 32, 32, cudaChannelFormatKindFloat);
-
-		// prepare params for copying
-		struct cudaMemcpy3DParms copy_param = {0};
-
-		copy_param.srcPos = make_cudaPos(0,0,0);
-		//copy_param.srcPtr;
-		//copy_param.dstArray;
-		copy_param.extent = cuArray_size;
-		copy_param.kind = cudaMemcpyDeviceToDevice;
-
-		// prepare params for texture resource type
-		struct cudaResourceDesc resDesc;
-		memset(&resDesc, 0, sizeof(resDesc));
-
-		resDesc.resType = cudaResourceTypeArray;
-		//resDesc.res.array.array;
-
-		// prepare params for texture addressing and filtering
-		struct cudaTextureDesc texDesc;
-		memset(&texDesc, 0, sizeof(texDesc));
-		texDesc.addressMode[0]   = cudaAddressModeBorder;
-		texDesc.addressMode[1]   = cudaAddressModeBorder;
-
-		//texDesc.filterMode       = cudaFilterModeLinear;
-		texDesc.filterMode       = cudaFilterModePoint;
-		texDesc.readMode         = cudaReadModeElementType;
-		texDesc.normalizedCoords = 0;
-
-		// create a list of  2D layered images and assign each feature to a layer in a single image
-		for (int i = 0; i < I; ++i) {
-
-			// allocate memory
-			CUDA_CHECK(cudaMalloc3DArray(&cuArray_list[i], &channelDesc, cuArray_size, cudaArrayLayered));
-
-			// set resource pointer
-			resDesc.res.array.array = cuArray_list[i];
-
-			// create texture
-			CUDA_CHECK(cudaCreateTextureObject(&filtered_images_tex_layered[i], &resDesc, &texDesc, NULL));
-		}
-
-		clock_t end_tx_create = clock();
-		std::cout << "texture created  in " << (((float)(end_tx_create-start_tx_create))/CLOCKS_PER_SEC) << std::endl;
-
-		clock_t start_tx_cpy = clock();
-		for (int i = 0; i < I; ++i) {
-
-			// prepare src and dst pointers for copying data
-			copy_param.srcPtr = make_cudaPitchedPtr((void*)&filtered_images[i * (S * img_width * img_height)], img_width * sizeof(float), img_width, img_height);
-			copy_param.dstArray = cuArray_list[i];
-
-			// copy data
-			CUDA_CHECK(cudaMemcpy3D(&copy_param));
-		}
-
-		// copy array cudaTextureObject_t references to GPU memory
-		cudaTextureObject_t* filtered_images_tex_layered_gpu;
-
-		cudaMalloc(&filtered_images_tex_layered_gpu, sizeof(cudaTextureObject_t) * I);
-		cudaMemcpy(filtered_images_tex_layered_gpu, filtered_images_tex_layered, sizeof(cudaTextureObject_t)* I, cudaMemcpyHostToDevice);
-
-		clock_t end_tx_cpy = clock();
-		std::cout << "texture copied  in " << (((float)(end_tx_cpy-start_tx_cpy))/CLOCKS_PER_SEC) << std::endl;
-
 
 
 		if (1) {
@@ -1817,35 +1629,23 @@ void fast_gauss_backward<float>(const float* filtered_images, const float* error
             //  - features:     one warp always handles only BATCH_FEATURES_SIZE features, but N warps are used for different features where N=BLOCK_FEATURES
             //  - subfeatures:  at once only BATCH_MEM_SUBFEATURES_SIZE subfeatures are loaded, but N-times iterated over that where N=BLOCK_SUBFEATURES
 
-			static const int BATCH_PIXELS_SIZE_X = 2;
+			static const int BATCH_PIXELS_SIZE_X = 1;
 			static const int BATCH_PIXELS_SIZE_Y = 8;
 
 			static const int PIXELS_INTERPOLATION_Dx = 1;
 			static const int PIXELS_INTERPOLATION_Dy = 1;
 
-			static const int BLOCK_X = 32/BATCH_PIXELS_SIZE_X;
-			static const int BLOCK_Y = 16/BATCH_PIXELS_SIZE_Y;
-			/* best with global loading
-			static const int BLOCK_FEATURES = 4;
-            static const int BLOCK_SUBFEATURES = 4;
+			static const int BLOCK_X = 16/BATCH_PIXELS_SIZE_X;
+			static const int BLOCK_Y = 8/BATCH_PIXELS_SIZE_Y;
 
-			static const int BATCH_FEATURES_SIZE = 8;
-			static const int BATCH_MEM_SUBFEATURES_SIZE = 4;
-			static const int BATCH_GAUSS_SIZE = 1;*/
-            static const int BLOCK_FEATURES = 8;
-            static const int BLOCK_SUBFEATURES = 4;
-
-            static const int BATCH_FEATURES_SIZE = 8;
-            static const int BATCH_MEM_SUBFEATURES_SIZE = 1;
-            static const int BATCH_GAUSS_SIZE = 1;
-			/* best wih no global loading !!
-            static const int BLOCK_FEATURES = 8;
-            static const int BLOCK_SUBFEATURES = 8;
+            static const int BLOCK_FEATURES = 16;
+            static const int BLOCK_SUBFEATURES = 2;
 
             static const int BATCH_FEATURES_SIZE = 4;
-            static const int BATCH_MEM_SUBFEATURES_SIZE = 4;
-            static const int BATCH_GAUSS_SIZE = 1; //*/
-			static const int IMG_WIDTH = 64;
+            static const int BATCH_MEM_SUBFEATURES_SIZE = 1;
+            static const int BATCH_GAUSS_SIZE = 2;
+
+            static const int IMG_WIDTH = 64;
 			static const int IMG_HEIGHT = 64;
 			static const int MAX_OFFSET = 4;
 
@@ -1950,14 +1750,15 @@ void fast_gauss_backward<float>(const float* filtered_images, const float* error
 			std::cout << "threadsPerBlock " << threadsPerBlock.x << "," << threadsPerBlock.y << "," << threadsPerBlock.z << std::endl;
 			std::cout << "numBlocks " << numBlocks.x << "," << numBlocks.y << "," << numBlocks.z << std::endl;
 
-
-			clock_t start_t = clock();
-			fast_gauss_backward_pipeline_kernel<BlockIndexingPipelineT><<<numBlocks,threadsPerBlock>>>(filtered_images_tex_layered_gpu, filtered_images_with_border, error_images, prepared_filter_offsets, prepared_filter_weights, output, I, S, F, G, img_width, img_height, kernel_width, kernel_height);
-			CUDA_POST_KERNEL_CHECK;
 			std::cout << "waiting for cudaDeviceSynchronize" << std::endl;
+			clock_t start_t = clock();
+
+			fast_gauss_backward_pipeline_kernel<BlockIndexingPipelineT><<<numBlocks,threadsPerBlock>>>(filtered_images_with_border, error_images, prepared_filter_offsets, prepared_filter_weights, output, I, S, F, G, img_width, img_height, kernel_width, kernel_height);
 			cudaDeviceSynchronize();
 
 			clock_t end_t = clock();
+			CUDA_POST_KERNEL_CHECK;
+
 			std::cout << "fast_gauss_backward_pipeline_kernel in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
 
 			cudaFree(prepared_filter_weights);
@@ -1965,17 +1766,7 @@ void fast_gauss_backward<float>(const float* filtered_images, const float* error
 
 			cudaFree(filtered_images_with_border);
 		}
-
-		for (int i = 0; i < I; ++i) {
-			cudaFreeArray(cuArray_list[i]);
-		}
-
-		cudaFree(filtered_images_tex_layered_gpu);
-
-		free(cuArray_list);
-		free(filtered_images_tex_layered);
 	}
-
 
 }
 

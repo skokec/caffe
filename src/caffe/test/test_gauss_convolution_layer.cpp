@@ -1061,9 +1061,9 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussConvolution) {
     ConvolutionParameter* convolution_param =
             cudnn_layer_param.mutable_convolution_param();
 
-    convolution_param->add_kernel_size(13);
+    convolution_param->add_kernel_size(3);
     convolution_param->add_stride(1);
-    convolution_param->add_pad(6);
+    convolution_param->add_pad(1);
 
     convolution_param->set_num_output(F);
 
@@ -1146,7 +1146,7 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussBackward) {
     const int N = 128;
     const int F = 128;
     const int S = 128;
-    const int G = 1;
+    const int G = 2;
     const int W = 64;
     const int H = 64;
 
@@ -1284,6 +1284,190 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussBackward) {
              printf("found num of invalid output vals: %d/%d\n",found_invalid, blob_output.count());
     }
 }
+    TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussBackwardMultiSubfeatures) {
+
+
+        typedef typename TypeParam::Dtype Dtype;
+
+        Caffe::SetDevice(3);
+
+        if (Caffe::mode() == Caffe::CPU)
+            return;
+
+        if (sizeof(Dtype) > 4)
+            return;
+        // evaluate size settings
+        /*
+
+        const int N = 128;
+        const int F = 128;
+        const int S = 128;
+        const int G = 2;
+        const int W = 64;
+        const int H = 64;
+        */
+        // debug print version
+
+        const int N = 128;
+        const int F = 128;
+        const int S = 128;
+        const int G = 2;
+        const int W = 64;
+        const int H = 64;
+
+        /*
+    const int N = 128;
+    const int F = 128;
+    const int S = 128;
+    const int G = 1;
+    const int W = 64;
+    const int H = 64;
+*/
+        // number of Guassian learning parameters we have (w,mu1,mu2,sigma)
+        // for each parameter we need convolution of input data with specific kernel
+        const int K = 4;
+
+        Blob<float> blob_input(N,S * K,H,W);
+        Blob<float> blob_error(N,F,H,W);
+        Blob<int> blob_offsets_x(1, S, G, F);
+        Blob<int> blob_offsets_y(1, S, G, F);
+        Blob<float> blob_offsets_float_x(1, S, G, F);
+        Blob<float> blob_offsets_float_y(1, S, G, F);
+        Blob<float> blob_weights(1, S, G, F);
+        Blob<float> blob_output(K, S, G, F);
+
+        FillerParameter const_one_filler_param;
+        const_one_filler_param.set_value(1);
+        ConstantFiller<float> const_one_filer(const_one_filler_param);
+
+        FillerParameter const_zero_filler_param;
+        const_zero_filler_param.set_value(0);
+        ConstantFiller<int> const_zero_filer(const_zero_filler_param);
+        ConstantFiller<float> const_zero_float_filer(const_zero_filler_param);
+
+        FillerParameter rand_filler_param;
+        rand_filler_param.set_value(0.1);
+        GaussianFiller<float> input_filler(rand_filler_param);
+
+        //input_filler.Fill(&blob_input);
+        //input_filler.Fill(&blob_weights);
+
+        const_one_filer.Fill(&blob_input);
+        const_one_filer.Fill(&blob_error);
+        const_one_filer.Fill(&blob_weights);
+
+        float* data = blob_input.mutable_cpu_data();
+        for (int n = 0; n < N*S*K; ++n){
+            for (int i = 0; i < H*W; ++i) {
+                data[n*H*W + i] = i % W ;
+            }
+        }
+
+        float* error = blob_error.mutable_cpu_data();
+        for (int n = 0; n < N*F; ++n){
+            for (int i = 0; i < H*W; ++i) {
+                error[n*H*W + i] = i % W;
+            }
+        }
+
+
+        FillerParameter offset_filler_param;
+        offset_filler_param.set_max(2);
+        offset_filler_param.set_min(0);
+        UniformFiller<float> offset_filler(offset_filler_param);
+
+        //offset_filler.Fill(&blob_offsets);
+        const_zero_filer.Fill(&blob_offsets_x);
+        const_zero_filer.Fill(&blob_offsets_y);
+
+        const_zero_float_filer.Fill(&blob_offsets_float_x);
+        const_zero_float_filer.Fill(&blob_offsets_float_y);
+
+        const_zero_float_filer.Fill(&blob_output);
+
+        const float* filtered_images = Caffe::mode() == Caffe::CPU ? blob_input.cpu_data() : blob_input.gpu_data();
+        const float* error_images = Caffe::mode() == Caffe::CPU ? blob_error.cpu_data() : blob_error.gpu_data();
+        const int* filter_offsets_x = Caffe::mode() == Caffe::CPU ? blob_offsets_x.cpu_data() : blob_offsets_x.gpu_data();
+        const int* filter_offsets_y = Caffe::mode() == Caffe::CPU ? blob_offsets_y.cpu_data() : blob_offsets_y.gpu_data();
+        const float* filter_offsets_float_x = Caffe::mode() == Caffe::CPU ? blob_offsets_float_x.cpu_data() : blob_offsets_float_x.gpu_data();
+        const float* filter_offsets_float_y = Caffe::mode() == Caffe::CPU ? blob_offsets_float_y.cpu_data() : blob_offsets_float_y.gpu_data();
+        const float* filter_weights = Caffe::mode() == Caffe::CPU ? blob_weights.cpu_data() : blob_weights.gpu_data();
+        float* output = Caffe::mode() == Caffe::CPU ? blob_output.mutable_cpu_data() : blob_output.mutable_gpu_data();
+
+
+        LayerParameter layer_param;
+        FastAproxGaussianConvLayer<float> layer(layer_param);
+
+        LayerParameter cudnn_layer_param;
+
+        ConvolutionParameter* convolution_param =
+                cudnn_layer_param.mutable_convolution_param();
+
+        convolution_param->add_kernel_size(5);
+        convolution_param->add_stride(1);
+        convolution_param->add_pad(2);
+
+        convolution_param->set_num_output(F);
+
+        convolution_param->mutable_weight_filler()->set_type("gaussian");
+        convolution_param->mutable_weight_filler()->set_std(0.01);
+
+        std::cout << "input size:" << std::endl;
+        std::cout << "blob_input: " << blob_input.count()  << std::endl;
+        std::cout << "blob_offsets_x: " << blob_offsets_x.count()  << std::endl;
+        std::cout << "blob_offsets_y: " << blob_offsets_y.count()  << std::endl;
+        std::cout << "blob_weights: " << blob_weights.count()  << std::endl;
+        std::cout << "blob_output: " << blob_output.count() << std::endl << std::endl;
+
+        shared_ptr<CuDNNConvolutionLayer<float> > cudnn_layer(new CuDNNConvolutionLayer<float>(cudnn_layer_param));
+
+        std::vector<Blob<float>* > blob_bottom_vec;
+        std::vector<Blob<float>* > blob_top_vec;
+
+        blob_bottom_vec.push_back(&blob_input);
+        blob_top_vec.push_back(&blob_output);
+
+        /*
+        cudnn_layer->SetUp(blob_bottom_vec, blob_top_vec);
+
+        clock_t start_t = clock();
+        cudnn_layer->Forward(blob_bottom_vec, blob_top_vec);
+        cudaDeviceSynchronize();
+        clock_t end_t = clock();
+        std::cout << "CuDNNConvolutionLayer forward pass in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl << std::endl;
+        */
+        for (int ii = 0; ii < 1; ++ii) {
+
+            if (Caffe::mode() == Caffe::GPU)
+                layer.test_backward_multi_subfeature_kernel_gpu(filtered_images, error_images, filter_offsets_x, filter_offsets_y, filter_offsets_float_x, filter_offsets_float_y, filter_weights, output, K, N, S, F, G, W, H, 5, 5);
+
+            float* output_c = blob_output.mutable_cpu_data();
+
+            // verify data - since we use 1 for input and wights and 0 for offsets we should get N*W*H as output value for all
+
+            int found_invalid = 0;
+
+            //double WH = (double)W*(double)H;
+            double WH = (double)W;
+
+            //double GT_VALUE = (double)N*W*H;
+            //double GT_VALUE = N*((WH)*((WH-1))/2); // input x error <== [1..N] x [1 1 .. 1]
+            //double GT_VALUE = H*((WH)*((WH-1))/2); // input x error <== [1..N] x [1 1 .. 1]
+            //double GT_VALUE = N*(((WH-1)*((WH-1)+1)*(2*(WH-1)+1))/6);
+            double GT_VALUE = H*N*(((WH-1)*((WH-1)+1)*(2*(WH-1)+1))/6);
+
+            for (int jj = 0; jj < blob_output.count(); ++jj) {
+                if (output_c[jj] != GT_VALUE) {
+                    if (found_invalid < 10)
+                        printf("found invalid output (%f) at loc (%d) - should be %f\n", output_c[jj], jj, GT_VALUE);
+                    found_invalid++;
+                }
+            }
+
+            if (found_invalid > 0)
+                printf("found num of invalid output vals: %d/%d\n",found_invalid, blob_output.count());
+        }
+    }
 
 #ifdef USE_CUDNN
 
