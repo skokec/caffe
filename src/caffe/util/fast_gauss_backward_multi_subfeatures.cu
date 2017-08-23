@@ -89,16 +89,20 @@ public:
 			return dim3(Bx * By * BLOCK_FEATURES, 1, 1);
             // only BLOCK_FEATURES are distributed over threads while BLOCK_SUBFEATURES are iterated over inside of each thread
 		}
-		dim3 getBlocksPerGrid(int num_images, int num_features, int num_subfeatures, int img_width, int img_height) {
+		dim3 getBlocksPerGrid(int num_images, int num_features, int num_subfeatures, int num_gaussian, int img_width, int img_height) {
 
-			checkInputSize(num_features, BLOCK_FEATURES * BATCH_FEATURES_SIZE, "BLOCK_FEATURES * BATCH_FEATURES_SIZE");
-			checkInputSize(num_subfeatures, BLOCK_SUBFEATURES * BATCH_MEM_SUBFEATURES_SIZE, "BLOCK_SUBFEATURES * BATCH_MEM_SUBFEATURES_SIZE");
-			checkInputSize(img_width, Bx * BATCH_PIXELS_SIZE_X, "Bx * BATCH_PIXELS_SIZE_X");
-			checkInputSize(img_height, By * BATCH_PIXELS_SIZE_Y, "By * BATCH_PIXELS_SIZE_Y");
-			checkInputSize(num_images, BATCH_IMAGES, "BATCH_IMAGES");
+			checkInputSize(num_features, BLOCK_FEATURES * BATCH_FEATURES_SIZE, "num_features");
+			checkInputSize(num_subfeatures, BLOCK_SUBFEATURES * BATCH_MEM_SUBFEATURES_SIZE, "num_subfeatures");
+			checkInputSize(img_width, Bx * BATCH_PIXELS_SIZE_X, "img_width", false);
+			checkInputSize(img_height, By * BATCH_PIXELS_SIZE_Y, "img_height", false);
+			checkInputSize(num_images, BATCH_IMAGES, "num_images");
+			checkInputSize(num_gaussian, BATCH_GAUSS_SIZE, "num_gaussian");
 
-			int num_feature_blocks = (int)ceil(num_features/(BLOCK_FEATURES * BATCH_FEATURES_SIZE));
-			int num_subfeature_blocks = (int)ceil(num_subfeatures/(BLOCK_SUBFEATURES * BATCH_MEM_SUBFEATURES_SIZE));
+
+			int num_feature_blocks = (int)ceil(num_features/(float)(BLOCK_FEATURES * BATCH_FEATURES_SIZE));
+			int num_subfeature_blocks = (int)ceil(num_subfeatures/(float)(BLOCK_SUBFEATURES * BATCH_MEM_SUBFEATURES_SIZE));
+			int num_gaussian_blocks = (int)ceil(num_gaussian/(float)(BATCH_GAUSS_SIZE));
+
 
 			int num_pixel_blocks_x = (int)ceil(img_width /  (float)(Bx * BATCH_PIXELS_SIZE_X) );
 			int num_pixel_blocks_y = (int)ceil(img_height / (float)(By * BATCH_PIXELS_SIZE_Y) );
@@ -107,13 +111,17 @@ public:
 
 			// number of blocks per kernel launch
 			return dim3 ( num_feature_blocks,
-						  num_subfeature_blocks,
+						  num_subfeature_blocks * num_gaussian_blocks,
 						  num_pixel_blocks_x * num_pixel_blocks_y * num_image_blocs);
 		}
 	private:
-		void checkInputSize(int input_size, int min_allowed, std::string param_name) {
+		void checkInputSize(int input_size, int min_allowed, const std::string& param_name, bool allow_only_multiple_of_min = true) {
 			if (input_size < min_allowed) {
-				std::cout << "Using more " << param_name << " (" << min_allowed << ") then there is input size " << input_size << std::endl;
+				printf("Invalid %s value of %d. Min allowed %d.\n", param_name.c_str(), input_size, min_allowed);
+				throw std::exception();
+			}
+			if (allow_only_multiple_of_min && input_size % min_allowed != 0) {
+				printf("Invalid %s value of %d. Only a multiple of %d allowed.\n", param_name.c_str(), input_size, min_allowed);
 				throw std::exception();
 			}
 		}
@@ -131,9 +139,10 @@ public:
 		int img_block_idx;
 		int f_block_idx;
         int s_block_idx;
+		int g_block_idx;
 		int px_block_idx;
 
-		__device__ Kernel(int img_width, int img_height) {
+		__device__ Kernel(int img_width, int img_height, int num_gaussian) {
 			img_size.x = img_width;
 			img_size.y = img_height;
 
@@ -141,7 +150,11 @@ public:
 			px_thread_idx = threadIdx.x % (Bx * By);
 
 			f_block_idx = blockIdx.x;
-            s_block_idx = blockIdx.y;
+
+			int num_gaussian_blocks = (int)ceil(num_gaussian/(float)(BATCH_GAUSS_SIZE));
+
+			g_block_idx = blockIdx.y % num_gaussian_blocks;
+            s_block_idx = blockIdx.y / num_gaussian_blocks;
 
 			int num_pixel_blocks_x = (int)ceil(img_width /  (float)(Bx * BATCH_PIXELS_SIZE_X) );
 			int num_pixel_blocks_y = (int)ceil(img_height / (float)(By * BATCH_PIXELS_SIZE_Y) );
@@ -169,6 +182,10 @@ public:
 
 		__device__ int getSubfeatureIdx() {
             return s_block_idx * (BLOCK_SUBFEATURES * BATCH_MEM_SUBFEATURES_SIZE)  + 0;
+		}
+
+		__device__ int getGaussianIdx() {
+			return g_block_idx * BATCH_GAUSS_SIZE + 0;
 		}
 
 		__device__ int2 getPosBlockSize() {
@@ -922,7 +939,7 @@ public:
 
 
 template <typename BlockIndexingT>
-__global__ void //__launch_bounds__(256, 2)
+__global__ void //__launch_bounds__(128, 3)
 fast_gauss_backward_multi_pipeline_kernel(const float* filtered_images, const float* error_images,
                                     const int* filter_offsets, const float* filter_weights, float* output,
 							        const int I, const int S, const int F, const int G, const int K,
@@ -981,7 +998,7 @@ fast_gauss_backward_multi_pipeline_kernel(const float* filtered_images, const fl
 	int img_width =  IMG_WIDTH; // img_width_; //
 	int img_height = IMG_HEIGHT; // img_height_; //
 
-	BlockIndexingKernel block_indexing(img_width, img_height);
+	BlockIndexingKernel block_indexing(img_width, img_height, G);
 
 	int n_offset = block_indexing.getImageIdx();
 
@@ -990,6 +1007,8 @@ fast_gauss_backward_multi_pipeline_kernel(const float* filtered_images, const fl
     int f_block_idx = block_indexing.getFeatureBlockIdx();
 
     int s_offset = block_indexing.getSubfeatureIdx();
+
+	int g_offset = block_indexing.getGaussianIdx();
 
 	int block_width = block_indexing.getPosBlockSize().x;
 	int block_height = block_indexing.getPosBlockSize().y;
@@ -1104,13 +1123,13 @@ fast_gauss_backward_multi_pipeline_kernel(const float* filtered_images, const fl
 
     const int* _filter_offset_current = filter_offsets +  OFFSET(f_start_block / (BLOCK_FEATURES * BATCH_FEATURES_SIZE),
                                                                  s_offset / (BLOCK_SUBFEATURES * BATCH_MEM_SUBFEATURES_SIZE),
-                                                                 0,
+																 g_offset/ BATCH_GAUSS_SIZE,
                                                                  0,
                                                                  F_MEM_SIZE, S_MEM_SIZE, G_MEM_SIZE, OFFSET_BLOCK_MEM_SIZE);
 
 	const float* _filter_weights_current = filter_weights +  OFFSET(f_start_block / (BLOCK_FEATURES * BATCH_FEATURES_SIZE),
 																 s_offset / (BLOCK_SUBFEATURES * BATCH_MEM_SUBFEATURES_SIZE),
-																 0,
+																 g_offset/ BATCH_GAUSS_SIZE,
 																 0,
 																 F_MEM_SIZE, S_MEM_SIZE, G_MEM_SIZE, WEIGHTS_BLOCK_MEM_SIZE);
 
@@ -1350,7 +1369,7 @@ fast_gauss_backward_multi_pipeline_kernel(const float* filtered_images, const fl
 
 					// TODO: if this is last s_outer_index index the load next image (we could also load next errors)
 
-					int double_buffer_index = (s_buffer_index + load_global.s/BATCH_MEM_SUBFEATURES_SIZE ) % DOUBLE_BUFFERING;
+					int double_buffer_index = (s_buffer_index + load_global.s/BATCH_MEM_SUBFEATURES_SIZE) % DOUBLE_BUFFERING;
 					int subfeat_buffer_index = load_global.s % BATCH_MEM_SUBFEATURES_SIZE;
 
 					const float* image_global_load =  load_next_image ? image_global_next_image : image_global_next_s_offset;
@@ -1406,7 +1425,7 @@ fast_gauss_backward_multi_pipeline_kernel(const float* filtered_images, const fl
                     load_offset_index.g = indexing.getIndex<2>(index - start_delay_offset_load);
                     load_offset_index.f = indexing.getIndex<1>(index - start_delay_offset_load) * BATCH_COMPUTE_FEATURES_SIZE;
 
-                    int double_buffer_index =   (s_buffer_index + load_offset_index.s/BATCH_MEM_SUBFEATURES_SIZE) % DOUBLE_BUFFERING;
+                    int double_buffer_index =   (s_buffer_index + load_offset_index.s/BATCH_MEM_SUBFEATURES_SIZE ) % DOUBLE_BUFFERING;
                     int subfeat_buffer_index = load_offset_index.s % BATCH_MEM_SUBFEATURES_SIZE;
 
                     int next_s = indexing.getIndex<0>((index - start_delay_offset_load) - 1);
@@ -1520,7 +1539,7 @@ fast_gauss_backward_multi_pipeline_kernel(const float* filtered_images, const fl
 						__syncthreads();
                     }
 #if __CUDA_ARCH__ >= 200
-					asm("bar.arrive 15, 1536;"); // # of threads must be greater than 0
+					//asm("bar.arrive 15, 1536;"); // # of threads must be greater than 0
 #endif
                 }
 
@@ -1705,10 +1724,10 @@ fast_gauss_backward_multi_pipeline_kernel(const float* filtered_images, const fl
 					for (int f = 0; f < BATCH_FEATURES_SIZE/NUM_READ_FEATURES; ++f) {
 						#pragma unroll
 						for (int k = 0; k < NUM_K; ++k) {
-							if (NUM_READ_FEATURES > 0) atomicAdd(&(output[OFFSET(k, g, s_offset + s, f_offset + f * NUM_READ_FEATURES + 0, NUM_K, G, S, F)]), out_val[g][s][f][k].x);
-							if (NUM_READ_FEATURES > 1) atomicAdd(&(output[OFFSET(k, g, s_offset + s, f_offset + f * NUM_READ_FEATURES + 1, NUM_K, G, S, F)]), out_val[g][s][f][k].y);
-							if (NUM_READ_FEATURES > 2) atomicAdd(&(output[OFFSET(k, g, s_offset + s, f_offset + f * NUM_READ_FEATURES + 2, NUM_K, G, S, F)]), out_val[g][s][f][k].z);
-							if (NUM_READ_FEATURES > 3) atomicAdd(&(output[OFFSET(k, g, s_offset + s, f_offset + f * NUM_READ_FEATURES + 3, NUM_K, G, S, F)]), out_val[g][s][f][k].w);
+							if (NUM_READ_FEATURES > 0) atomicAdd(&(output[OFFSET(k, g_offset + g, s_offset + s, f_offset + f * NUM_READ_FEATURES + 0, NUM_K, G, S, F)]), out_val[g][s][f][k].x);
+							if (NUM_READ_FEATURES > 1) atomicAdd(&(output[OFFSET(k, g_offset + g, s_offset + s, f_offset + f * NUM_READ_FEATURES + 1, NUM_K, G, S, F)]), out_val[g][s][f][k].y);
+							if (NUM_READ_FEATURES > 2) atomicAdd(&(output[OFFSET(k, g_offset + g, s_offset + s, f_offset + f * NUM_READ_FEATURES + 2, NUM_K, G, S, F)]), out_val[g][s][f][k].z);
+							if (NUM_READ_FEATURES > 3) atomicAdd(&(output[OFFSET(k, g_offset + g, s_offset + s, f_offset + f * NUM_READ_FEATURES + 3, NUM_K, G, S, F)]), out_val[g][s][f][k].w);
 						}
 					}
 				}
@@ -1719,64 +1738,7 @@ fast_gauss_backward_multi_pipeline_kernel(const float* filtered_images, const fl
 #endif
 }
 
-
-template <int Bx, int By, int BATCH_PIXELS_SIZE>
-__global__ void
-fast_gauss_backward_multi_basic_kernel(const float* filtered_images, const float* error_images,
-                                 const int* filter_offsets_x, const int* filter_offsets_y, float* output,
-                                 const int I, const int S, const int F, const int G,
-                                 const int img_width, const int img_height) {
-
-// INPUT: filtered images  	[I x S x H x W]
-//        error images  	[I x S x H x W]
-//		  filter offsets   	[F x S x G]
-// OUTPUT output  		 	[F x S x G]
-
-#ifndef CUBIN_EMBEDDING
-
-    int thread_x = BATCH_PIXELS_SIZE * (blockIdx.x * Bx + threadIdx.x);
-    int thread_y = blockIdx.y * By + threadIdx.y;
-    int thread_f = blockIdx.z * 1;
-
-    for (int f = 0; f < 1; ++f) {
-        for (int s = 0; s < S; ++s) {
-            for (int g = 0; g < G; ++g) {
-
-                float out_value = 0;
-
-                int offset_x = filter_offsets_x[OFFSET(0,s,g,f + thread_f,1,S,G,F)];
-                int offset_y = filter_offsets_y[OFFSET(0,s,g,f + thread_f,1,S,G,F)];
-
-                for (int i = 0; i < I; ++i) {
-                    float4 x_value, error_value;
-
-                    x_value.x = IS_VALID_PIXEL(thread_x + 0 + offset_x, thread_y + offset_y, img_width, img_height) ? filtered_images[OFFSET(i, s, thread_y + offset_y, thread_x + 0 + offset_x, I, S, img_height, img_width)] : 0;
-                    x_value.y = IS_VALID_PIXEL(thread_x + 1 + offset_x, thread_y + offset_y, img_width, img_height) ? filtered_images[OFFSET(i, s, thread_y + offset_y, thread_x + 1 + offset_x, I, S, img_height, img_width)] : 0;
-                    x_value.z = IS_VALID_PIXEL(thread_x + 2 + offset_x, thread_y + offset_y, img_width, img_height) ? filtered_images[OFFSET(i, s, thread_y + offset_y, thread_x + 2 + offset_x, I, S, img_height, img_width)] : 0;
-                    x_value.w = IS_VALID_PIXEL(thread_x + 3 + offset_x, thread_y + offset_y, img_width, img_height) ? filtered_images[OFFSET(i, s, thread_y + offset_y, thread_x + 3 + offset_x, I, S, img_height, img_width)] : 0;
-
-                    error_value.x = IS_VALID_PIXEL(thread_x + 0 + offset_x, thread_y + offset_y, img_width, img_height) ? error_images[OFFSET(i, s, thread_y, thread_x + 0, I, S, img_height, img_width)] : 0;
-                    error_value.y = IS_VALID_PIXEL(thread_x + 1 + offset_x, thread_y + offset_y, img_width, img_height) ? error_images[OFFSET(i, s, thread_y, thread_x + 1, I, S, img_height, img_width)] : 0;
-                    error_value.z = IS_VALID_PIXEL(thread_x + 2 + offset_x, thread_y + offset_y, img_width, img_height) ? error_images[OFFSET(i, s, thread_y, thread_x + 2, I, S, img_height, img_width)] : 0;
-                    error_value.w = IS_VALID_PIXEL(thread_x + 3 + offset_x, thread_y + offset_y, img_width, img_height) ? error_images[OFFSET(i, s, thread_y, thread_x + 3, I, S, img_height, img_width)] : 0;
-
-                    out_value += x_value.x * error_value.x +
-                                            x_value.y * error_value.y +
-                                            x_value.z * error_value.z +
-                                            x_value.w * error_value.w;
-
-                }
-
-                atomicAdd(output + OFFSET(0, s, g, f + thread_f, 1, S, G, F), out_value);
-            }
-        }
-    }
-
-#endif
-}
-
 #include <iostream>
-
 
 template <typename BlockIndexingT,
         typename ELEMENT_FLOAT_TYPE,
@@ -2098,16 +2060,6 @@ print2d_array_bw_multi(const float* input, int width, int height, int N) {
 }
 
 
-template <>
-void fast_gauss_backward_multi_subfeatures<double>(const double* filtered_images, const double* error_images, const int* filter_offsets_x, const int* filter_offsets_y, const float* filter_offsets_float_x, const float* filter_offsets_float_y,
-								const double* filter_weights, double* output,
-								const int I, const int S, const int F, const int G, const int K,
-								const int img_width, const int img_height,
-								const int kernel_width, const int kernel_height, cudaStream_t streamId) {
-
-}
-
-
 template <int TILE_DIM_X, int TILE_DIM_Y, int TILE_DIM_IMAGE, int BATCH_FEATURES_SIZE, int NEW_WIDTH, int NEW_HEIGHT>
 __global__ void
 interleave_error_data_kernel(const float* error_data, float* output_data, const int N, const int F, const int img_width, const int img_height, const int num_img_patches_width, const int num_img_patches_height) {
@@ -2135,8 +2087,9 @@ interleave_error_data_kernel(const float* error_data, float* output_data, const 
     int n = blockIdx.z * TILE_DIM_IMAGE + threadIdx.z;
 
 	if (xy < img_height * img_width)
-    for (int i = 0; i < TILE_DIM_IMAGE; ++i)
-        tile[i][thread_f][thread_yx] = error_data[OFFSET(0,n+i,f,xy, 1,N * F/BATCH_FEATURES_SIZE,BATCH_FEATURES_SIZE,(img_height * img_width))];
+		#pragma unroll
+		for (int i = 0; i < TILE_DIM_IMAGE; ++i)
+			tile[i][thread_f][thread_yx] = error_data[OFFSET(0,n+i,f,xy, 1,N * F/BATCH_FEATURES_SIZE,BATCH_FEATURES_SIZE,(img_height * img_width))];
 
     // transpose block offset
     int tid = threadIdx.x +
@@ -2165,12 +2118,13 @@ interleave_error_data_kernel(const float* error_data, float* output_data, const 
     __syncthreads();
 
 	if (transposed_yx < img_height * img_width)
-    for (int i = 0; i < TILE_DIM_IMAGE; ++i) {
-        int output_index = OFFSET8(0, 0, img_patch_y, img_patch_x, n+i, transposed_patch_y, transposed_patch_x, transposed_f,
-                                   1, 1, num_img_patches_height, num_img_patches_width, N * F / BATCH_FEATURES_SIZE, NEW_HEIGHT, NEW_WIDTH,  BATCH_FEATURES_SIZE);
+		#pragma unroll
+		for (int i = 0; i < TILE_DIM_IMAGE; ++i) {
+			int output_index = OFFSET8(0, 0, img_patch_y, img_patch_x, n+i, transposed_patch_y, transposed_patch_x, transposed_f,
+									   1, 1, num_img_patches_height, num_img_patches_width, N * F / BATCH_FEATURES_SIZE, NEW_HEIGHT, NEW_WIDTH,  BATCH_FEATURES_SIZE);
 
-        output_data[output_index] = tile[i][transposed_thread_f][transposed_thread_yx];
-    }
+			output_data[output_index] = tile[i][transposed_thread_f][transposed_thread_yx];
+		}
 #endif
 }
 
@@ -2202,7 +2156,7 @@ interleave_input_data_kernel(const float* input_data, float* output_data, const 
 	int n = blockIdx.z * TILE_DIM_IMAGE + threadIdx.z;
 
 
-	//if (yx < img_height * img_width)
+	if (yx < img_height * img_width)
 		#pragma unroll
 		for (int i = 0; i < TILE_DIM_IMAGE; ++i)
 			tile[i][thread_k][thread_yx] = input_data[OFFSET(0,n+i,k,yx, 1,N,K,(img_height * img_width))];
@@ -2213,7 +2167,7 @@ interleave_input_data_kernel(const float* input_data, float* output_data, const 
 			  TILE_DIM_YX * TILE_DIM_K * threadIdx.z;
 
 	int transposed_thread_k = tid % (TILE_DIM_K);
-	int transposed_thread_yx = tid / (TILE_DIM_K);
+	int transposed_thread_yx = (tid / (TILE_DIM_K));// * TILE_DIM_K)  % TILE_DIM_YX;
 
 	int transposed_k = blockIdx.y * TILE_DIM_K + transposed_thread_k;
 	int transposed_yx = blockIdx.x * TILE_DIM_YX + transposed_thread_yx;
@@ -2230,7 +2184,7 @@ interleave_input_data_kernel(const float* input_data, float* output_data, const 
 
 	__syncthreads();
 
-	//if (transposed_yx < img_height * img_width)
+	if (transposed_yx < img_height * img_width)
 		//int dy = 0;
 		#pragma unroll
 		for (int dy = -1; dy <= 1; ++dy)
@@ -2287,350 +2241,571 @@ interleave_input_data_kernel(const float* input_data, float* output_data, const 
 #endif
 }
 
-template <int NUM_K, int BATCH_PIXELS_X, int BATCH_K, int NEW_WIDTH, int NEW_HEIGHT, int BORDER_SIZE>
-float* create_input_with_border_bw_multi(float* interleaved_images_output, const float* filtered_images, const int img_width, const int img_height, const int N, const int S, const int K, int new_img_parts_width, int new_img_parts_height, cudaStream_t streamId = NULL) {
+template <typename BlockIndexingT>
+class FastBackwardInputImage {
+private:
+	enum {
+		// values from main block indexing sizes
+		NUM_K = BlockIndexingT::NUM_K,
+		BATCH_PIXELS_X = BlockIndexingT::BATCH_PIXELS_SIZE_X,
+		BATCH_K = BlockIndexingT::BATCH_K_SIZE,
+		NEW_WIDTH = BlockIndexingT::IMG_WIDTH,
+		NEW_HEIGHT = BlockIndexingT::IMG_HEIGHT,
+		BORDER_SIZE = BlockIndexingT::MAX_OFFSET,
 
-	static const int CUDA_THREADS = 256;
+		// values specific for this kernel
+		CUDA_THREADS = 256,
 
-	// TILE_DIM_X * TILE_DIM_Y * TILE_DIM_IMAGE gets us to 512 of shared data per block (i.e. 2 kB)
-	static const int TILE_DIM_X = CUDA_THREADS/8;
-	static const int TILE_DIM_Y = NUM_K;
-	static const int TILE_DIM_IMAGE = 4;
+		// TILE_DIM_X * TILE_DIM_Y * TILE_DIM_IMAGE gets us to 512 of shared data per block (i.e. 2 kB)
+		TILE_DIM_X = CUDA_THREADS/8,
+		TILE_DIM_Y = NUM_K,
+		TILE_DIM_IMAGE = BlockIndexingT::BATCH_IMAGES >= 4 ? 4 : 1	//
+	};
+	const int img_width;
+	const int img_height;
+	const int N;
+	const int S;
+	const int K;
 
-	dim3 threadsPerBlock(TILE_DIM_X, TILE_DIM_Y, 1);
-	dim3 numBlocks( ((int)ceil(img_width*img_height) + threadsPerBlock.x - 1) / threadsPerBlock.x,	// over image width and height
-					((int)ceil(K) + threadsPerBlock.y - 1) / threadsPerBlock.y,												// over K
-					((int)ceil(N*S/(float)TILE_DIM_IMAGE) + threadsPerBlock.z - 1) / threadsPerBlock.z);					// over N * S
+	int new_img_parts_width;
+	int new_img_parts_height;
 
-	interleave_input_data_kernel<TILE_DIM_X,TILE_DIM_Y,TILE_DIM_IMAGE, BATCH_PIXELS_X, BATCH_K, NEW_WIDTH, NEW_HEIGHT, BORDER_SIZE><<<numBlocks,threadsPerBlock, 0, streamId>>>(filtered_images, interleaved_images_output, N*S, K, img_width, img_height, new_img_parts_width, new_img_parts_height);
+	dim3 threadsPerBlock;
+	dim3 numBlocks;
 
+public:
+	FastBackwardInputImage(const int img_width, const int img_height, const int N, const int S, const int K, int new_img_parts_width, int new_img_parts_height) :
+			img_width(img_width), img_height(img_height), N(N), S(S), K(K), new_img_parts_width(new_img_parts_width), new_img_parts_height(new_img_parts_height) {
 
-	if (0){
-		// check correctness of interleaved data
-		float* filtered_images_cpu = new float[img_width * img_height * K * S *  N ];
-		float* interleaved_images_cpu = new float[(NEW_WIDTH + 2*BORDER_SIZE) * (NEW_HEIGHT + 2*BORDER_SIZE) * K * S *  N * new_img_parts_width * new_img_parts_height];
+		threadsPerBlock = dim3 (TILE_DIM_X, TILE_DIM_Y, 1);
 
-		cudaMemcpy(interleaved_images_cpu, interleaved_images_output, sizeof(float)* (NEW_WIDTH + 2*BORDER_SIZE) * (NEW_HEIGHT + 2*BORDER_SIZE) * K * S * N * new_img_parts_width * new_img_parts_height, cudaMemcpyDeviceToHost);
-		cudaMemcpy(filtered_images_cpu, filtered_images, sizeof(float)* img_width * img_height * K * S *  N, cudaMemcpyDeviceToHost);
-		cudaDeviceSynchronize();
+		numBlocks = dim3( ((int)ceil(img_width*img_height) + threadsPerBlock.x - 1) / threadsPerBlock.x,	// over image width and height
+						((int)ceil(K) + threadsPerBlock.y - 1) / threadsPerBlock.y,												// over K
+						((int)ceil(N*S/(float)TILE_DIM_IMAGE) + threadsPerBlock.z - 1) / threadsPerBlock.z);					// over N * S
 
-		for (int i = 0; i < N*new_img_parts_width * new_img_parts_height; ++i) {
-			printf("img index: %d\n" ,i);
-		   //for (int s = 0; s < S; ++s)
-			{
-			int s = 0;
-				for (int y = 0; y < NEW_HEIGHT + 2*BORDER_SIZE; ++y) {
-				  for (int k2 = 0; k2 < NUM_K/BATCH_K; ++k2) {
-				   for (int x = 0; x < NEW_WIDTH+ 2*BORDER_SIZE; ++x) {
-					   for (int k1 = 0; k1 < BATCH_K; ++k1) {
-
-						   //OFFSET5(i,s,y,x,k, N,S,img_height,img_width,K)
-						   //int interleaved_offset = OFFSET8(0, i,s,y,x_outer, k_outer, x_inner, k_inner,
-							//								1, N,S,img_height, BATCH_PIXELS_X, K / BATCH_K, img_width / BATCH_PIXELS_X,  BATCH_K);
-
-						   float val = interleaved_images_cpu[OFFSET6(i,s,y,k2, x,k1, N,S,NEW_HEIGHT+ 2*BORDER_SIZE,NUM_K/BATCH_K, NEW_WIDTH + 2*BORDER_SIZE, BATCH_K )];
-						   printf("%d ", (int)val);
-					   }
-				   }
-				   printf("\n");
-				  }
-			   }
-			   printf("\n");
-		   }
-		}
 	}
-	return interleaved_images_output;
-}
-template <int BATCH_FEATURES_SIZE, int NEW_WIDTH, int NEW_HEIGHT>
-float* create_error_bw_multi(float* interleaved_error_output, const float* error_images, const int img_width, const int img_height, const int N, const int F, int new_img_parts_width, int new_img_parts_height, cudaStream_t streamId = NULL) {
-
-	static const int CUDA_THREADS = 256;
-
-	// TILE_DIM_X * TILE_DIM_Y * TILE_DIM_IMAGE gets us to 1024 of shared data per block (i.e. 4 kB)
-	static const int TILE_DIM_X = CUDA_THREADS/8;
-	static const int TILE_DIM_Y = BATCH_FEATURES_SIZE;
-	static const int TILE_DIM_IMAGE = 4;
-
-	dim3 threadsPerBlock(TILE_DIM_X, TILE_DIM_Y, 1);
-	dim3 numBlocks( ((int)ceil(img_width*img_height) + threadsPerBlock.x - 1) / threadsPerBlock.x,	// over image width and height
-					((int)ceil(BATCH_FEATURES_SIZE) + threadsPerBlock.y - 1) / threadsPerBlock.y,												// over BATCH_FEATURES_SIZE
-					((int)ceil((N*F/BATCH_FEATURES_SIZE)/(float)TILE_DIM_IMAGE) + threadsPerBlock.z - 1) / threadsPerBlock.z);					// over N * F/BATCH_FEATURES_SIZE
-
-	interleave_error_data_kernel<TILE_DIM_X,TILE_DIM_Y,TILE_DIM_IMAGE, BATCH_FEATURES_SIZE, NEW_WIDTH, NEW_HEIGHT><<<numBlocks,threadsPerBlock, 0, streamId>>>(error_images, interleaved_error_output, N, F, img_width, img_height, new_img_parts_width, new_img_parts_height);
-
-	if (0){
-		// check correctness of interleaved data
-		float* filtered_images_cpu = new float[img_width * img_height * F *  N];
-		float* interleaved_images_cpu = new float[NEW_WIDTH * NEW_HEIGHT * F *  N * new_img_parts_width *new_img_parts_height];
-
-		for (int i = 0; i < NEW_WIDTH * NEW_HEIGHT * F *  N * new_img_parts_width * new_img_parts_height; ++i)
-			interleaved_images_cpu[i] = -1;
-
-		cudaMemcpy(interleaved_images_cpu, interleaved_error_output, sizeof(int)* NEW_WIDTH * NEW_HEIGHT * F *  N * new_img_parts_width*new_img_parts_height, cudaMemcpyDeviceToHost);
-		cudaMemcpy(filtered_images_cpu, error_images, sizeof(int)* img_width * img_height * F *  N, cudaMemcpyDeviceToHost);
-		cudaDeviceSynchronize();
-
-		for (int n = 0; n < N*new_img_parts_width * new_img_parts_height; ++n) {
-			printf("img index: %d\n" ,n);
-			//for (int f = 0; f < F; ++f) {
-			int f = 0;
-			{
-				for (int y = 0; y < NEW_HEIGHT; ++y) {
-					for (int x = 0; x < NEW_WIDTH; ++x) {
-						for (int k = 0; k < BATCH_FEATURES_SIZE; ++k) {
-							float interleaved_val = interleaved_images_cpu[OFFSET5(n, f, y, x, k, N,F/BATCH_FEATURES_SIZE, NEW_HEIGHT, NEW_WIDTH, BATCH_FEATURES_SIZE)];
-							printf("%d ", (int)interleaved_val);
-						}
-					}
-					printf("\n");
-				}
-			}
-			printf("\n\n");
-		}
+	size_t get_allocation_size() {
+		return sizeof(float) * (NEW_WIDTH + 2*BORDER_SIZE) * (NEW_WIDTH + 2*BORDER_SIZE) * K * S *  (N+1) * new_img_parts_width * new_img_parts_height;
 	}
-	return interleaved_error_output;
-}
-template <>
-void fast_gauss_backward_multi_subfeatures<float>(const float* filtered_images, const float* error_images, const int* filter_offsets_x, const int* filter_offsets_y, const float* filter_offsets_float_x, const float* filter_offsets_float_y,
-								const float* filter_weights, float* output,
-								const int I, const int S, const int F, const int G, const int K,
-								const int img_width, const int img_height,
-								const int kernel_width, const int kernel_height, cudaStream_t streamId) {
+	float* create_input(float* interleaved_images_output, const float* filtered_images, cudaStream_t streamId = NULL) {
 
-	static const int CUDA_THREADS = 256;
 
-    if (0) {
-        static const int BATCH_PIXELS_SIZE = 4;
+		interleave_input_data_kernel<TILE_DIM_X,TILE_DIM_Y,TILE_DIM_IMAGE, BATCH_PIXELS_X, BATCH_K, NEW_WIDTH, NEW_HEIGHT, BORDER_SIZE><<<numBlocks,threadsPerBlock, 0, streamId>>>(filtered_images, interleaved_images_output, N*S, K, img_width, img_height, new_img_parts_width, new_img_parts_height);
 
-        static const int BLOCK_X = 32/BATCH_PIXELS_SIZE;
-        static const int BLOCK_Y = 16;
 
-        static const int BATCH_FEATURES_SIZE = 16;
-        static const int BATCH_SUBFEATURES_SIZE = 2;
-        static const int MAX_OFFSET = 4;
+		/*if (0){
+			// check correctness of interleaved data
+			float* filtered_images_cpu = new float[img_width * img_height * K * S *  N ];
+			float* interleaved_images_cpu = new float[(NEW_WIDTH + 2*BORDER_SIZE) * (NEW_HEIGHT + 2*BORDER_SIZE) * K * S *  N * new_img_parts_width * new_img_parts_height];
 
-        dim3 threadsPerBlock(BLOCK_X, BLOCK_Y, 1);
-
-        dim3 numBlocks( ((int)ceil(img_width/(float)BATCH_PIXELS_SIZE) + threadsPerBlock.x - 1) / threadsPerBlock.x,	// over image width (N pixels per thread where N=BATCH_PIXELS_SIZE)
-                        ((int)ceil(img_height) + threadsPerBlock.y - 1) / threadsPerBlock.y,							// over image height
-                        F/1);																		// over S*G*F
-
-        std::cout << "threadsPerBlock " << threadsPerBlock.x << "," << threadsPerBlock.y << "," << threadsPerBlock.z << std::endl;
-        std::cout << "numBlocks " << numBlocks.x << "," << numBlocks.y << "," << numBlocks.z << std::endl;
-
-        std::cout << "started fast_gauss_backward_basic_kernel" << std::endl;
-
-        clock_t start_t = clock();
-        fast_gauss_backward_multi_basic_kernel<BLOCK_X,BLOCK_Y,BATCH_PIXELS_SIZE><<<numBlocks,threadsPerBlock>>>(filtered_images, error_images, filter_offsets_x, filter_offsets_y, output, I, S, F, G, img_width, img_height);
-        std::cout << "waiting for cudaDeviceSynchronize" << std::endl;
-        cudaDeviceSynchronize();
-
-        clock_t end_t = clock();
-        std::cout << "fast_gauss_backward_basic_kernel in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
-        //
-    }
-
-	if (1) {
-
-
-		if (1) {
-
-            // each block of multiple threads handles:
-            //  - pixel:        BLOCK_X * BLOCK_Y
-            //  - features:     BLOCK_FEATURES * BATCH_FEATURES_SIZE
-            //  - subfeatures:  BLOCK_SUBFEATURES * BATCH_MEM_SUBFEATURES_SIZE
-            //  - gauss krn:    BATCH_GAUSS_SIZE
-
-            // within block each thread handles:
-            //  - pixels:       BATCH_PIXELS_SIZE_X * BATCH_PIXELS_SIZE_Y
-            //  - features:     BATCH_FEATURES_SIZE
-            //  - subfeatures:  BLOCK_SUBFEATURES * BATCH_MEM_SUBFEATURES_SIZE
-            //  - gauss krn:    BATCH_GAUSS_SIZE
-
-            // each thread handles features and subfeatures as:
-            //  - features:     one warp always handles only BATCH_FEATURES_SIZE features, but N warps are used for different features where N=BLOCK_FEATURES
-            //  - subfeatures:  at once only BATCH_MEM_SUBFEATURES_SIZE subfeatures are loaded, but N-times iterated over that where N=BLOCK_SUBFEATURES
-
-			// we are processing with K subfeature types (w,mu1,mu2,sigma) that will all have the same offsets and use the same error data
-			static const int NUM_K = 4;
-
-            if (NUM_K != K)
-                throw std::exception();
-
-			// number of K elements to load at once (we use only LDS.64 since it only leads to two-way bank conflict which has minor penalty
-			static const int BATCH_K_SIZE = 2;
-
-			static const int BATCH_PIXELS_SIZE_X = 1;
-			static const int BATCH_PIXELS_SIZE_Y = 8;
-
-			static const int PIXELS_INTERPOLATION_Dx = 2;
-			static const int PIXELS_INTERPOLATION_Dy = 2;
-
-			static const int BLOCK_X = 16/BATCH_PIXELS_SIZE_X;
-			static const int BLOCK_Y = 8/BATCH_PIXELS_SIZE_Y;
-
-            static const int BLOCK_FEATURES = 8;
-            static const int BLOCK_SUBFEATURES = 2; // MUST NOT be bellow 2 due to double buffering of input (subfeatures) loading
-
-            static const int BATCH_FEATURES_SIZE = 2;
-			static const int BATCH_COMPUTE_FEATURES_SIZE = 2;
-            static const int BATCH_MEM_SUBFEATURES_SIZE = 1;
-            static const int BATCH_GAUSS_SIZE = 2;
-
-			static const int IMG_WIDTH = 32;
-			static const int IMG_HEIGHT = 32;
-			static const int MAX_OFFSET = 4;
-
-			static const int BATCH_IMAGES = 256;
-
-			static const int NUM_SM = 1; // number of streaming multiprocessors
-
-			typedef class BlockIndexing<NUM_SM,
-							BLOCK_X, BLOCK_Y, BLOCK_FEATURES, BLOCK_SUBFEATURES,
-							BATCH_PIXELS_SIZE_X, BATCH_PIXELS_SIZE_Y,
-					        BATCH_IMAGES,
-					        NUM_K, BATCH_K_SIZE,
-							PIXELS_INTERPOLATION_Dx, PIXELS_INTERPOLATION_Dy,
-							BATCH_FEATURES_SIZE,
-					        BATCH_COMPUTE_FEATURES_SIZE,
-							BATCH_MEM_SUBFEATURES_SIZE,
-							BATCH_GAUSS_SIZE,
-							IMG_WIDTH, IMG_HEIGHT,
-							MAX_OFFSET> BlockIndexingPipelineT;
-
-			BlockIndexingPipelineT::Launch block_indexing;
-
-			// we will split image into patches of size [IMG_HEIGHT x IMG_WIDTH] so use that as image size, however,
-			// we need to increase the number of images that will be process as each patch is now considered as one image
-			// there is no need to recombine the output since we just sum over all patches to get gradients
-			int new_img_parts_width = (int)ceil((float)img_width / IMG_WIDTH);
-			int new_img_parts_height = (int)ceil((float)img_height / IMG_HEIGHT);
-
-			dim3 threadsPerBlock = block_indexing.getThreadsPerBlock(I * new_img_parts_width * new_img_parts_height, F, S, IMG_WIDTH, IMG_HEIGHT);
-
-			dim3 numBlocks = block_indexing.getBlocksPerGrid(I * new_img_parts_width * new_img_parts_height, F, S, IMG_WIDTH, IMG_HEIGHT);
-
-			float* filtered_images_with_border;
-			float* error_images_interleaved;
-
-			{
-
-				float* interleaved_errors;
-				CUDA_CHECK(cudaMalloc(&interleaved_errors, sizeof(float) * IMG_WIDTH * IMG_HEIGHT * F *  (I+1) * new_img_parts_width * new_img_parts_height));
-				CUDA_CHECK(cudaMemset(interleaved_errors, 0,  sizeof(float) * IMG_WIDTH * IMG_HEIGHT * F *  (I+1) * new_img_parts_width * new_img_parts_height));
-
-				float* interleaved_images;
-				CUDA_CHECK(cudaMalloc(&interleaved_images, sizeof(float) * (IMG_WIDTH + 2*MAX_OFFSET) * (IMG_HEIGHT + 2*MAX_OFFSET) * K * S *  (I+1) * new_img_parts_width * new_img_parts_height));
-				CUDA_CHECK(cudaMemset(interleaved_images, 0,  sizeof(float) * (IMG_WIDTH + 2*MAX_OFFSET) * (IMG_HEIGHT + 2*MAX_OFFSET) * K * S *  (I+1) * new_img_parts_width * new_img_parts_height));
-
-				cudaDeviceSynchronize();
-
-				std::cout << "started create_input_with_border_bw" << std::endl;
-
-				clock_t start_t = clock();
-
-				filtered_images_with_border = create_input_with_border_bw_multi<NUM_K, BATCH_PIXELS_SIZE_X, BATCH_K_SIZE, IMG_WIDTH, IMG_HEIGHT, MAX_OFFSET>(interleaved_images, filtered_images, img_width, img_height, I,S, K, new_img_parts_width,new_img_parts_height);
-				cudaDeviceSynchronize();
-
-				clock_t end_t = clock();
-				CUDA_POST_KERNEL_CHECK;
-				std::cout << "create_input_with_border_bw_multi in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
-
-				start_t = clock();
-
-
-				error_images_interleaved = create_error_bw_multi<BATCH_FEATURES_SIZE, IMG_WIDTH, IMG_HEIGHT>(interleaved_errors, error_images, img_width, img_height, I, F, new_img_parts_width,new_img_parts_height);
-				cudaDeviceSynchronize();
-
-				end_t = clock();
-				CUDA_POST_KERNEL_CHECK;
-				std::cout << "create_error_bw_multi in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
-
-
-			}
-
-			float* prepared_filter_weights;
-			int* prepared_filter_offsets;
-
-			{
-
-				// allocate additional block of data so that double buffering can load valid data on last batch
-				static const int OFFSET_BLOCK_MEM_SIZE = BLOCK_SUBFEATURES * BATCH_MEM_SUBFEATURES_SIZE * BATCH_GAUSS_SIZE * BATCH_FEATURES_SIZE *  BLOCK_FEATURES;
-                static const int WEIGHT_BLOCK_MEM_SIZE = BLOCK_SUBFEATURES * BATCH_MEM_SUBFEATURES_SIZE * BATCH_GAUSS_SIZE * PIXELS_INTERPOLATION_Dx*PIXELS_INTERPOLATION_Dy * BATCH_FEATURES_SIZE * BLOCK_FEATURES;
-
-				cudaMalloc(&prepared_filter_weights, sizeof(float) * ( 4*S*G*F + WEIGHT_BLOCK_MEM_SIZE));
-
-				cudaMalloc(&prepared_filter_offsets, sizeof(float) * ( S*G*F + OFFSET_BLOCK_MEM_SIZE));
-                cudaMemset(prepared_filter_offsets,0, sizeof(float) * ( S*G*F + OFFSET_BLOCK_MEM_SIZE));
-
-
-				static const int NUM_BATCH_FEATURES =  BATCH_COMPUTE_FEATURES_SIZE >= 4 ? 4 :
-																(BATCH_COMPUTE_FEATURES_SIZE >= 2 ? 2 : 1);
-
-				int NUM_THREADS_PER_BLOCK = F/NUM_BATCH_FEATURES >= 16 && S > 16? 16 :
-												(F/NUM_BATCH_FEATURES >= 8 && S > 8? 8 :
-													(F/NUM_BATCH_FEATURES >= 4 && S > 4 ? 4 : 1));
-
-
-				dim3 threadsPerBlock(NUM_THREADS_PER_BLOCK, 1, NUM_THREADS_PER_BLOCK);
-
-				dim3 numBlocks((int)ceil((F/NUM_BATCH_FEATURES)/threadsPerBlock.x),
-								(int)ceil(G/threadsPerBlock.y),
-								(int)ceil(S/threadsPerBlock.z));
-
-				std::cout << "threadsPerBlock " << threadsPerBlock.x << "," << threadsPerBlock.y << "," << threadsPerBlock.z << std::endl;
-				std::cout << "numBlocks " << numBlocks.x << "," << numBlocks.y << "," << numBlocks.z << std::endl;
-
-				std::cout << "started copy_permute_weights" << std::endl;
-
-				std::cout << "waiting for copy_permute_weights" << std::endl;
-				clock_t start_t = clock();
-
-				if (NUM_BATCH_FEATURES == 4)
-					perpare_weights_and_offsets_bw_multi<BlockIndexingPipelineT, float4, int4><<<numBlocks,threadsPerBlock>>>(filter_weights, filter_offsets_x, filter_offsets_y, prepared_filter_weights, prepared_filter_offsets, S, G, F/4);
-				else if (NUM_BATCH_FEATURES == 2)
-					perpare_weights_and_offsets_bw_multi<BlockIndexingPipelineT, float2, int2><<<numBlocks,threadsPerBlock>>>(filter_weights, filter_offsets_x, filter_offsets_y, prepared_filter_weights, prepared_filter_offsets, S, G, F/4);
-				else
-					perpare_weights_and_offsets_bw_multi<BlockIndexingPipelineT, float, int><<<numBlocks,threadsPerBlock>>>(filter_weights, filter_offsets_x, filter_offsets_y, prepared_filter_weights, prepared_filter_offsets, S, G, F/4);
-
-				CUDA_POST_KERNEL_CHECK;
-				cudaDeviceSynchronize();
-
-				clock_t end_t = clock();
-				std::cout << "copy_permute_weights in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
-
-			}
-
-			std::cout << "started fast_gauss_backward_pipeline_kernel" << std::endl;
-
-			std::cout << "threadsPerBlock " << threadsPerBlock.x << "," << threadsPerBlock.y << "," << threadsPerBlock.z << std::endl;
-			std::cout << "numBlocks " << numBlocks.x << "," << numBlocks.y << "," << numBlocks.z << std::endl;
-
-			std::cout << "waiting for cudaDeviceSynchronize" << std::endl;
+			cudaMemcpy(interleaved_images_cpu, interleaved_images_output, sizeof(float)* (NEW_WIDTH + 2*BORDER_SIZE) * (NEW_HEIGHT + 2*BORDER_SIZE) * K * S * N * new_img_parts_width * new_img_parts_height, cudaMemcpyDeviceToHost);
+			cudaMemcpy(filtered_images_cpu, filtered_images, sizeof(float)* img_width * img_height * K * S *  N, cudaMemcpyDeviceToHost);
 			cudaDeviceSynchronize();
 
-			for (int jj = 0; jj < 1; ++jj) {
+			for (int i = 0; i < N*new_img_parts_width * new_img_parts_height; ++i) {
+				printf("img index: %d\n" ,i);
+			   //for (int s = 0; s < S; ++s)
+				{
+				int s = 0;
+					for (int y = 0; y < NEW_HEIGHT + 2*BORDER_SIZE; ++y) {
+					  for (int k2 = 0; k2 < NUM_K/BATCH_K; ++k2) {
+					   for (int x = 0; x < NEW_WIDTH+ 2*BORDER_SIZE; ++x) {
+						   for (int k1 = 0; k1 < BATCH_K; ++k1) {
 
-				clock_t start_t = clock();
+							   //OFFSET5(i,s,y,x,k, N,S,img_height,img_width,K)
+							   //int interleaved_offset = OFFSET8(0, i,s,y,x_outer, k_outer, x_inner, k_inner,
+								//								1, N,S,img_height, BATCH_PIXELS_X, K / BATCH_K, img_width / BATCH_PIXELS_X,  BATCH_K);
 
-				fast_gauss_backward_multi_pipeline_kernel<BlockIndexingPipelineT><<<numBlocks,threadsPerBlock>>>(filtered_images_with_border, error_images_interleaved, prepared_filter_offsets, prepared_filter_weights, output, I * new_img_parts_width * new_img_parts_height, S, F, G, K, img_width, img_height);
-				cudaDeviceSynchronize();
-
-				clock_t end_t = clock();
-				CUDA_POST_KERNEL_CHECK;
-
-				std::cout << "fast_gauss_backward_pipeline_kernel in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
+							   float val = interleaved_images_cpu[OFFSET6(i,s,y,k2, x,k1, N,S,NEW_HEIGHT+ 2*BORDER_SIZE,NUM_K/BATCH_K, NEW_WIDTH + 2*BORDER_SIZE, BATCH_K )];
+							   printf("%d ", (int)val);
+						   }
+					   }
+					   printf("\n");
+					  }
+				   }
+				   printf("\n");
+			   }
 			}
-			cudaFree(prepared_filter_weights);
-			cudaFree(prepared_filter_offsets);
+		}*/
+		return interleaved_images_output;
+	}
+};
 
-			cudaFree(filtered_images_with_border);
-		}
+template <typename BlockIndexingT>
+class FastBackwardInputError {
+	enum {
+		// values from main block indexing sizes
+		BATCH_FEATURES_SIZE = BlockIndexingT::BATCH_FEATURES_SIZE,
+		NEW_WIDTH = BlockIndexingT::IMG_WIDTH,
+		NEW_HEIGHT = BlockIndexingT::IMG_HEIGHT,
+
+		// values specific for this kernel
+		CUDA_THREADS = 256,
+
+		// TILE_DIM_X * TILE_DIM_Y * TILE_DIM_IMAGE gets us to 512 of shared data per block (i.e. 2 kB)
+		TILE_DIM_X = CUDA_THREADS/8,
+		TILE_DIM_Y = BATCH_FEATURES_SIZE,
+		TILE_DIM_IMAGE = BlockIndexingT::BATCH_IMAGES >= 8 ? 8 : 1
+	};
+	const int img_width;
+	const int img_height;
+	const int N;
+	const int F;
+
+	int new_img_parts_width;
+	int new_img_parts_height;
+
+	dim3 threadsPerBlock;
+	dim3 numBlocks;
+
+public:
+
+	FastBackwardInputError(const int img_width, const int img_height, const int N, const int F, int new_img_parts_width, int new_img_parts_height) :
+		img_width(img_width), img_height(img_height), N(N), F(F), new_img_parts_width(new_img_parts_width), new_img_parts_height(new_img_parts_height)
+	{
+		threadsPerBlock = dim3 (TILE_DIM_X, TILE_DIM_Y, 1);
+
+		numBlocks = dim3 ( ((int)ceil(img_width*img_height) + threadsPerBlock.x - 1) / threadsPerBlock.x,	// over image width and height
+						((int)ceil((float)BATCH_FEATURES_SIZE) + threadsPerBlock.y - 1) / threadsPerBlock.y,												// over BATCH_FEATURES_SIZE
+						((int)ceil((N*F/BATCH_FEATURES_SIZE)/(float)TILE_DIM_IMAGE) + threadsPerBlock.z - 1) / threadsPerBlock.z);					// over N * F/BATCH_FEATURES_SIZE
 	}
 
+	size_t get_allocation_size() {
+		return sizeof(float) * NEW_WIDTH * NEW_HEIGHT * F * (N+1) * new_img_parts_width * new_img_parts_height;
+	}
+
+	float* create_input(float* interleaved_error_output, const float* error_images, cudaStream_t streamId = NULL) {
+
+		interleave_error_data_kernel<TILE_DIM_X,TILE_DIM_Y,TILE_DIM_IMAGE, BATCH_FEATURES_SIZE, NEW_WIDTH, NEW_HEIGHT><<<numBlocks,threadsPerBlock, 0, streamId>>>(error_images, interleaved_error_output, N, F, img_width, img_height, new_img_parts_width, new_img_parts_height);
+
+		/*if (0){
+			// check correctness of interleaved data
+			float* filtered_images_cpu = new float[img_width * img_height * F *  N];
+			float* interleaved_images_cpu = new float[NEW_WIDTH * NEW_HEIGHT * F *  N * new_img_parts_width *new_img_parts_height];
+
+			for (int i = 0; i < NEW_WIDTH * NEW_HEIGHT * F *  N * new_img_parts_width * new_img_parts_height; ++i)
+				interleaved_images_cpu[i] = -1;
+
+			cudaMemcpy(interleaved_images_cpu, interleaved_error_output, sizeof(int)* NEW_WIDTH * NEW_HEIGHT * F *  N * new_img_parts_width*new_img_parts_height, cudaMemcpyDeviceToHost);
+			cudaMemcpy(filtered_images_cpu, error_images, sizeof(int)* img_width * img_height * F *  N, cudaMemcpyDeviceToHost);
+			cudaDeviceSynchronize();
+
+			for (int n = 0; n < N*new_img_parts_width * new_img_parts_height; ++n) {
+				printf("img index: %d\n" ,n);
+				//for (int f = 0; f < F; ++f) {
+				int f = 0;
+				{
+					for (int y = 0; y < NEW_HEIGHT; ++y) {
+						for (int x = 0; x < NEW_WIDTH; ++x) {
+							for (int k = 0; k < BATCH_FEATURES_SIZE; ++k) {
+								float interleaved_val = interleaved_images_cpu[OFFSET5(n, f, y, x, k, N,F/BATCH_FEATURES_SIZE, NEW_HEIGHT, NEW_WIDTH, BATCH_FEATURES_SIZE)];
+								printf("%d ", (int)interleaved_val);
+							}
+						}
+						printf("\n");
+					}
+				}
+				printf("\n\n");
+			}
+		}*/
+		return interleaved_error_output;
+	}
+};
+
+
+
+template <typename BlockIndexingT>
+class FastBackwardInputWeightAndOffsets {
+	enum {
+		// values from main block indexing sizes
+		BATCH_FEATURES_SIZE = BlockIndexingT::BATCH_FEATURES_SIZE,
+		NUM_BATCH_FEATURES =  BlockIndexingT::BATCH_COMPUTE_FEATURES_SIZE >= 4 ? 4 :
+							  	(BlockIndexingT::BATCH_COMPUTE_FEATURES_SIZE >= 2 ? 2 : 1),
+
+		OFFSET_BLOCK_MEM_SIZE = BlockIndexingT::BLOCK_SUBFEATURES * BlockIndexingT::BATCH_MEM_SUBFEATURES_SIZE * BlockIndexingT::BATCH_GAUSS_SIZE * BATCH_FEATURES_SIZE *  BlockIndexingT::BLOCK_FEATURES,
+		WEIGHT_BLOCK_MEM_SIZE = BlockIndexingT::BLOCK_SUBFEATURES * BlockIndexingT::BATCH_MEM_SUBFEATURES_SIZE * BlockIndexingT::BATCH_GAUSS_SIZE * BlockIndexingT::PIXELS_INTERPOLATION_Dx*BlockIndexingT::PIXELS_INTERPOLATION_Dy * BATCH_FEATURES_SIZE * BlockIndexingT::BLOCK_FEATURES,
+
+		// values specific for this kernel
+		CUDA_THREADS = 256,
+
+	};
+	const int img_width;
+	const int img_height;
+	const int N;
+	const int S;
+	const int G;
+	const int F;
+
+	dim3 threadsPerBlock;
+	dim3 numBlocks;
+
+public:
+
+	FastBackwardInputWeightAndOffsets(const int img_width, const int img_height, const int N, const int F, const int S, const int G) :
+			img_width(img_width), img_height(img_height), N(N), F(F), S(S), G(G)
+	{
+
+		int NUM_THREADS_PER_BLOCK = F/NUM_BATCH_FEATURES >= 16 && S > 16? 16 :
+									(F/NUM_BATCH_FEATURES >= 8 && S > 8? 8 :
+									 (F/NUM_BATCH_FEATURES >= 4 && S > 4 ? 4 : 1));
+
+		threadsPerBlock = dim3(NUM_THREADS_PER_BLOCK, 1, NUM_THREADS_PER_BLOCK);
+
+		numBlocks = dim3((int)ceil((F/NUM_BATCH_FEATURES)/threadsPerBlock.x),
+					   (int)ceil(G/threadsPerBlock.y),
+					   (int)ceil(S/threadsPerBlock.z));
+	}
+
+	size_t get_offsets_allocation_size() {
+		return sizeof(float) * ( S*G*F + OFFSET_BLOCK_MEM_SIZE);
+	}
+	size_t get_weights_allocation_size() {
+		return sizeof(float) * ( 4*S*G*F + WEIGHT_BLOCK_MEM_SIZE);
+	}
+
+	void create_input(float* prepared_filter_weights, int* prepared_filter_offsets, // OUTPUT
+					  const float* filter_weights, const int* filter_offsets_x, const int* filter_offsets_y, const float* filter_offsets_float_x, const float* filter_offsets_float_y, // INPUT
+					  cudaStream_t streamId = NULL) {
+
+		if (NUM_BATCH_FEATURES == 4)
+			perpare_weights_and_offsets_bw_multi<BlockIndexingT, float4, int4><<<numBlocks,threadsPerBlock>>>(filter_weights, filter_offsets_x, filter_offsets_y, prepared_filter_weights, prepared_filter_offsets, S, G, F/NUM_BATCH_FEATURES);
+		else if (NUM_BATCH_FEATURES == 2)
+			perpare_weights_and_offsets_bw_multi<BlockIndexingT, float2, int2><<<numBlocks,threadsPerBlock>>>(filter_weights, filter_offsets_x, filter_offsets_y, prepared_filter_weights, prepared_filter_offsets, S, G, F/NUM_BATCH_FEATURES);
+		else
+			perpare_weights_and_offsets_bw_multi<BlockIndexingT, float, int><<<numBlocks,threadsPerBlock>>>(filter_weights, filter_offsets_x, filter_offsets_y, prepared_filter_weights, prepared_filter_offsets, S, G, F/NUM_BATCH_FEATURES);
+
+	}
+};
+
+template<int _IMG_SIZE, int _MAX_OFFSET, int _BATCH_IMAGES, bool _USE_INTERPOLATION>
+class FastGaussBackwardMultiSubfeaturesCUDA {
+	enum {
+		// Variable parameters
+
+		// IMG_WIDTH and IMG_HEIGHT: 	32x32 .. N and M > 32
+		// 								16x16 .. otherwise
+
+		// BATCH_IMAGES :	256	.. N > 256
+		// 					128	.. N > 128
+		// 					32	.. N > 32
+		// 					1	.. N > 1
+
+		// MAX_OFFSET:	4 if kernels <= 9
+		//				8 if kernels <= 17
+		//				16 if kernels <= 33
+
+		// BATCH_FEATURES_SIZE * BLOCK_FEATURES:  	16 min allowed
+		// BLOCK_SUBFEATURES:  	2 min allowed
+		// BATCH_GAUSS_SIZE:	2 min allowed
+
+		// special cases for:
+		//	- BATCH_GAUSS_SIZE == 1
+		//	- INTERPOLATION == false
+
+		IMG_WIDTH = _IMG_SIZE,
+		IMG_HEIGHT = _IMG_SIZE,
+		MAX_OFFSET = _MAX_OFFSET,
+		BATCH_IMAGES = _BATCH_IMAGES,
+
+		PIXELS_INTERPOLATION_Dx = _USE_INTERPOLATION ? 2 : 1,
+		PIXELS_INTERPOLATION_Dy = _USE_INTERPOLATION ? 2 : 1,
+
+
+		// each block of multiple threads handles:
+		//  - pixel:        BLOCK_X * BLOCK_Y
+		//  - features:     BLOCK_FEATURES * BATCH_FEATURES_SIZE
+		//  - subfeatures:  BLOCK_SUBFEATURES * BATCH_MEM_SUBFEATURES_SIZE
+		//  - gauss krn:    BATCH_GAUSS_SIZE
+
+		// within block each thread handles:
+		//  - pixels:       BATCH_PIXELS_SIZE_X * BATCH_PIXELS_SIZE_Y
+		//  - features:     BATCH_FEATURES_SIZE
+		//  - subfeatures:  BLOCK_SUBFEATURES * BATCH_MEM_SUBFEATURES_SIZE
+		//  - gauss krn:    BATCH_GAUSS_SIZE
+
+		// each thread handles features and subfeatures as:
+		//  - features:     one warp always handles only BATCH_FEATURES_SIZE features, but N warps are used for different features where N=BLOCK_FEATURES
+		//  - subfeatures:  at once only BATCH_MEM_SUBFEATURES_SIZE subfeatures are loaded, but N-times iterated over that where N=BLOCK_SUBFEATURES
+
+		// Fixed parameters
+		NUM_SM = 1, // number of streaming multiprocessors
+
+		// we are processing with K subfeature types (w,mu1,mu2,sigma) that will all have the same offsets and use the same error data
+		NUM_K = 4,
+
+		// number of K elements to load at once (we use only LDS.64 since it only leads to two-way bank conflict which has minor penalty
+		BATCH_K_SIZE = 2,
+
+		BATCH_PIXELS_SIZE_X = 1,
+		BATCH_PIXELS_SIZE_Y = 8,
+
+		BLOCK_X = 16 / BATCH_PIXELS_SIZE_X,
+		BLOCK_Y = 8 / BATCH_PIXELS_SIZE_Y,
+
+		BLOCK_FEATURES = 8,
+		BLOCK_SUBFEATURES = 2, // MUST NOT be bellow 2 due to double buffering of input (subfeature) loading
+
+		BATCH_FEATURES_SIZE = 2,
+		BATCH_COMPUTE_FEATURES_SIZE = 2,
+		BATCH_MEM_SUBFEATURES_SIZE = 1,
+		BATCH_GAUSS_SIZE = 2,
+
+	};
+	const int img_width,img_height;
+	const int I,S,F,G,K;
+
+	int new_img_parts_width;
+	int new_img_parts_height;
+
+	dim3 threadsPerBlock;
+	dim3 numBlocks;
+public:
+
+	typedef BlockIndexing<NUM_SM,
+			BLOCK_X, BLOCK_Y, BLOCK_FEATURES, BLOCK_SUBFEATURES,
+			BATCH_PIXELS_SIZE_X, BATCH_PIXELS_SIZE_Y,
+			BATCH_IMAGES,
+			NUM_K, BATCH_K_SIZE,
+			PIXELS_INTERPOLATION_Dx, PIXELS_INTERPOLATION_Dy,
+			BATCH_FEATURES_SIZE,
+			BATCH_COMPUTE_FEATURES_SIZE,
+			BATCH_MEM_SUBFEATURES_SIZE,
+			BATCH_GAUSS_SIZE,
+			IMG_WIDTH, IMG_HEIGHT,
+			MAX_OFFSET> BlockIndexingPipelineT;
+
+	FastBackwardInputImage<BlockIndexingPipelineT> image_cuda_prepare;
+	FastBackwardInputError<BlockIndexingPipelineT> error_cuda_prepare;
+	FastBackwardInputWeightAndOffsets<BlockIndexingPipelineT> weight_and_offsets_cuda_prepare;
+
+	FastGaussBackwardMultiSubfeaturesCUDA(const int img_width, const int img_height, const int I, const int S, const int F, const int G, const int K) :
+		img_width(img_height), img_height(img_height), I(I), S(S), F(F), G(G), K(K),
+
+		// we will split image into patches of size [IMG_HEIGHT x IMG_WIDTH] so use that as image size, however,
+		// we need to increase the number of images that will be process as each patch is now considered as one image
+		// there is no need to recombine the output since we just sum over all patches to get gradients
+
+		new_img_parts_width((int)ceil((float)img_width / IMG_WIDTH)),
+		new_img_parts_height((int)ceil((float)img_height / IMG_HEIGHT)),
+
+		// initialize classes that will generate inputs
+		image_cuda_prepare(img_width, img_height, I, S, K, new_img_parts_width,new_img_parts_height),
+		error_cuda_prepare(img_width, img_height, I, F, new_img_parts_width,new_img_parts_height),
+		weight_and_offsets_cuda_prepare(img_width, img_height, I, F, S, G) {
+
+		if (NUM_K != K) throw std::exception();
+
+		if (F < BATCH_FEATURES_SIZE * BLOCK_FEATURES) throw std::exception();
+		if (S < BLOCK_SUBFEATURES) throw std::exception();
+		if (G < BATCH_GAUSS_SIZE) throw std::exception();
+
+		class BlockIndexingPipelineT::Launch block_indexing;
+
+		threadsPerBlock = block_indexing.getThreadsPerBlock(I * new_img_parts_width * new_img_parts_height, F, S, IMG_WIDTH, IMG_HEIGHT);
+		numBlocks = block_indexing.getBlocksPerGrid(I * new_img_parts_width * new_img_parts_height, F, S, G, IMG_WIDTH, IMG_HEIGHT);
+	}
+
+	void get_allocation_sizes(size_t* alloc_img, size_t* alloc_err, size_t* alloc_w, size_t* alloc_off) {
+
+		if (alloc_img != NULL) *alloc_img = image_cuda_prepare.get_allocation_size();
+		if (alloc_err != NULL) *alloc_err = error_cuda_prepare.get_allocation_size();
+		if (alloc_w != NULL) *alloc_w = weight_and_offsets_cuda_prepare.get_weights_allocation_size();
+		if (alloc_off != NULL) *alloc_off = weight_and_offsets_cuda_prepare.get_offsets_allocation_size();
+	}
+
+	void run_kernel(const float* filtered_images, const float* error_images,
+					  const int* filter_offsets_x, const int* filter_offsets_y,
+					  const float* filter_offsets_float_x, const float* filter_offsets_float_y,
+					  const float* filter_weights, float* output,
+					  float* prepared_filtered_images,
+					  float* prepared_error_images,
+					  float* prepared_filter_weights,
+					  int* prepared_filter_offsets,cudaStream_t streamId) {
+
+		{
+#ifdef PROFILE_CUDA
+			std::cout << "started create_input_with_border_bw" << std::endl;
+
+			clock_t start_t = clock();
+#endif
+			prepared_filtered_images = image_cuda_prepare.create_input(prepared_filtered_images, filtered_images);
+#ifdef PROFILE_CUDA
+			cudaDeviceSynchronize();
+
+			clock_t end_t = clock();
+			CUDA_POST_KERNEL_CHECK;
+			std::cout << "create_input_with_border_bw_multi in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
+#endif
+		}
+
+		{
+#ifdef PROFILE_CUDA
+			clock_t start_t = clock();
+#endif
+			prepared_error_images = error_cuda_prepare.create_input(prepared_error_images, error_images);
+#ifdef PROFILE_CUDA
+			cudaDeviceSynchronize();
+
+			clock_t end_t = clock();
+			CUDA_POST_KERNEL_CHECK;
+			std::cout << "create_error_bw_multi in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
+#endif
+		}
+
+		{
+#ifdef PROFILE_CUDA
+			std::cout << "started copy_permute_weights" << std::endl;
+
+			clock_t start_t = clock();
+#endif
+			weight_and_offsets_cuda_prepare.create_input(prepared_filter_weights, prepared_filter_offsets, filter_weights, filter_offsets_x, filter_offsets_y, filter_offsets_float_x, filter_offsets_float_y);
+#ifdef PROFILE_CUDA
+			cudaDeviceSynchronize();
+
+			clock_t end_t = clock();
+			CUDA_POST_KERNEL_CHECK;
+
+			std::cout << "copy_permute_weights in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
+#endif
+		}
+#ifdef PROFILE_CUDA
+		std::cout << "started fast_gauss_backward_pipeline_kernel" << std::endl;
+
+		std::cout << "threadsPerBlock " << threadsPerBlock.x << "," << threadsPerBlock.y << "," << threadsPerBlock.z << std::endl;
+		std::cout << "numBlocks " << numBlocks.x << "," << numBlocks.y << "," << numBlocks.z << std::endl;
+
+		for (int jj = 0; jj < 1; ++jj) {
+
+			clock_t start_t = clock();
+#endif
+			fast_gauss_backward_multi_pipeline_kernel<BlockIndexingPipelineT><<<numBlocks,threadsPerBlock>>>(prepared_filtered_images, prepared_error_images, prepared_filter_offsets, prepared_filter_weights, output, I * new_img_parts_width * new_img_parts_height, S, F, G, K, img_width, img_height);
+#ifdef PROFILE_CUDA
+			cudaDeviceSynchronize();
+
+			clock_t end_t = clock();
+			CUDA_POST_KERNEL_CHECK;
+
+			std::cout << "fast_gauss_backward_pipeline_kernel in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
+		}
+#endif
+	}
+};
+
+template <>
+void fast_gauss_backward_multi_subfeatures<float>(const float* filtered_images, const float* error_images,
+												  const int* filter_offsets_x, const int* filter_offsets_y, const float* filter_offsets_float_x, const float* filter_offsets_float_y,
+												  const float* filter_weights,
+												  float* output,
+												  const int I, const int S, const int F, const int G, const int K,
+												  const int img_width, const int img_height,
+												  const int kernel_width, const int kernel_height,
+												  float* prepared_filtered_images, size_t* prepared_filtered_images_size,
+												  float* prepared_error_images, size_t* prepared_error_images_size,
+												  float* prepared_filter_weights, size_t* prepared_filter_weights_size,
+												  int* prepared_filter_offsets, size_t* prepared_filter_offsets_size,
+												  cudaStream_t streamId) {
+
+
+	// calls either FastGaussBackwardMultiSubfeaturesCUDA->run_kernel() or FastGaussBackwardMultiSubfeaturesCUDA->get_allocation_sizes()
+	// if prepared_filtered_images_size, prepared_error_images_size, prepared_filter_weights_size OR prepared_filter_offsets_size are not NULL
+
+#define RUN_KERNEL_R0(CLASS_NAME, IMG_PATCH_SIZE, MAX_OFFSET, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, K, ...) \
+    { \
+        CLASS_NAME<IMG_PATCH_SIZE, MAX_OFFSET, BATCH_IMAGES, USE_INTERPOLATION> _kernel_class(IMG_WIDTH, IMG_HEIGHT, I, S, F, G, K); \
+		if (prepared_filtered_images_size != NULL || 	\
+			prepared_error_images_size != NULL ||	 	\
+			prepared_filter_weights_size != NULL ||	 	\
+			prepared_filter_offsets_size != NULL) { 	\
+			_kernel_class.get_allocation_sizes(prepared_filtered_images_size, prepared_error_images_size, prepared_filter_weights_size, prepared_filter_offsets_size); \
+		} else { \
+			_kernel_class.run_kernel(__VA_ARGS__);\
+		} \
+	}
+
+#define RUN_KERNEL_R1(CLASS_NAME, IMG_PATCH_SIZE, MAX_OFFSET, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, K, ...) \
+	if (USE_INTERPOLATION) { \
+		RUN_KERNEL_R0(CLASS_NAME, IMG_PATCH_SIZE, MAX_OFFSET, BATCH_IMAGES, true, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, K, __VA_ARGS__) \
+	} else { \
+		printf("Disabling interpolation is not supported yet"); \
+        throw std::exception(); \
+	}
+	/*else { \
+		RUN_KERNEL_R0(CLASS_NAME, IMG_PATCH_SIZE, MAX_OFFSET, BATCH_IMAGES, false, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, K, __VA_ARGS__) \
+	}*/
+
+
+#define RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE, MAX_OFFSET, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, K, ...) \
+	if (IMG_PATCH_SIZE >= 32) { \
+		RUN_KERNEL_R1(CLASS_NAME, 32, MAX_OFFSET, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, K, __VA_ARGS__) \
+	} else { \
+        RUN_KERNEL_R1(CLASS_NAME, 16, MAX_OFFSET, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, K, __VA_ARGS__) \
+	}
+
+#define RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE, MAX_OFFSET, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, K, ...) \
+	if (MAX_OFFSET <= 9) { \
+		RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE, 4, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, K, __VA_ARGS__) \
+	} else if (MAX_OFFSET <= 17) { \
+        RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE, 8, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, K, __VA_ARGS__) \
+	} else { \
+        printf("Unsupported filter size: %d. Supported only max up to 9x9 and 17x17 at the moment\n", MAX_OFFSET); \
+        throw std::exception(); \
+    }
+
+    /*else if (MAX_OFFSET <= 33) { \
+        RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE, 16, BATCH_IMAGES, USE_INTERPOLATION, __VA_ARGS__) \
+	*/
+
+#define RUN_KERNEL_R4(CLASS_NAME, IMG_PATCH_SIZE, MAX_OFFSET, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, K, ...) \
+	if (BATCH_IMAGES >=  256) { \
+		RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE, MAX_OFFSET, 256, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, K, __VA_ARGS__) \
+	} else if (BATCH_IMAGES >= 128) { \
+        RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE, MAX_OFFSET, 128, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, K, __VA_ARGS__) \
+	} else { \
+        RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE, MAX_OFFSET, 1, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, K, __VA_ARGS__) \
+	}/*
+    else if (BATCH_IMAGES >= 32) { \
+        RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE, MAX_OFFSET, 32, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, K, __VA_ARGS__) \
+	}*/
+
+	bool use_interpolation = true;
+
+	int img_size = MAX(img_width, img_height) >= 32 ? 32 : 16;
+	int max_offset = MAX(kernel_width, kernel_height);
+
+	// we will split image into patches of size [IMG_HEIGHT x IMG_WIDTH] so use that as image size, however,
+	// we need to increase the number of images that will be process as each patch is now considered as one image
+	// there is no need to recombine the output since we just sum over all patches to get gradients
+	int new_img_parts_width = (int)ceil((float)img_width / img_size);
+	int new_img_parts_height = (int)ceil((float)img_height / img_size);
+
+	int num_images = I* new_img_parts_width * new_img_parts_height;
+
+	// CALL RUN_KERNEL_R4 macro that will call run_kernel() function on supplied class where first 4 parameters are replaced with compile-time known variables
+	// replacing variables with compile-time known values allows CUDA compiler to generate kernels in advanced with pre-defined sizes
+
+	RUN_KERNEL_R4(FastGaussBackwardMultiSubfeaturesCUDA, img_size, max_offset, num_images, use_interpolation,
+				  img_width, img_height, I, S, F, G, K,
+				  filtered_images, error_images, filter_offsets_x, filter_offsets_y, filter_offsets_float_x, filter_offsets_float_y, filter_weights, output,
+				  prepared_filtered_images, prepared_error_images, prepared_filter_weights, prepared_filter_offsets,
+				  streamId);
 
 }
 
+
+
+template <>
+void fast_gauss_backward_multi_subfeatures<double>(const double* filtered_images, const double* error_images, const int* filter_offsets_x, const int* filter_offsets_y, const float* filter_offsets_float_x, const float* filter_offsets_float_y,
+												   const double* filter_weights, double* output,
+												   const int I, const int S, const int F, const int G, const int K,
+												   const int img_width, const int img_height,
+												   const int kernel_width, const int kernel_height,
+												   float* prepared_filtered_images, size_t* prepared_filtered_images_size,
+												   float* prepared_error_images, size_t* prepared_error_images_size,
+												   float* prepared_filter_weights, size_t* prepared_filter_weights_size,
+                                                   int* prepared_filter_offsets, size_t* prepared_filter_offsets_size,
+												   cudaStream_t streamId) {
+
+}
 
 }  // namespace caffe
 

@@ -292,9 +292,9 @@ public:
 						ELEMENT_TYPE* replication_shared_data = shared_data + (replication_index+1) * ALLOC_HEIGHT*ALLOC_WIDTH;
 
 						reinterpret_cast<float*>(replication_shared_data + write_offset)[-1 * (replication_index+1) + 0] = tmp.x;
-						reinterpret_cast<float*>(replication_shared_data + write_offset)[-1 * (replication_index+1) + 1] = tmp.x;
-						reinterpret_cast<float*>(replication_shared_data + write_offset)[-1 * (replication_index+1) + 2] = tmp.y;
-						reinterpret_cast<float*>(replication_shared_data + write_offset)[-1 * (replication_index+1) + 3] = tmp.z;
+						reinterpret_cast<float*>(replication_shared_data + write_offset)[-1 * (replication_index+1) + 1] = tmp.y;
+						reinterpret_cast<float*>(replication_shared_data + write_offset)[-1 * (replication_index+1) + 2] = tmp.z;
+						reinterpret_cast<float*>(replication_shared_data + write_offset)[-1 * (replication_index+1) + 3] = tmp.w;
 					}
 				}
 			}
@@ -594,7 +594,7 @@ public:
 
 
 template <typename BlockIndexingT>
-__global__ void
+__global__ void __launch_bounds__(256, 2)
 fast_gauss_forward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, const float* filtered_images, const int* filter_offsets, const float* filter_weights, float* output,
 							const int I, const int S, const int F, const int G,
 							const int img_width_, const int img_height_,
@@ -1051,7 +1051,7 @@ fast_gauss_forward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, con
 
 				//pipeline.load_weights.address = &weights_batch_sh[load_w_index.s][load_w_index.g][0][load_w_index.f/4][f_block_idx/BATCH_FEATURES_SIZE];
 #else
-				pipeline.load_weights.addre2ss = &reinterpret_cast<float4*>((float*)filter_weights_current)[address_off];
+				pipeline.load_weights.address = &reinterpret_cast<float4*>((float*)filter_weights_current)[address_off];
 #endif
 				pipeline.load_weights.output = (float4*)(use_reg_A ? w_A[load_w_index.g][0] : w_B[load_w_index.g][0]);
 
@@ -1203,6 +1203,7 @@ fast_gauss_forward_pipeline_kernel(cudaTextureObject_t* filtered_images_tex, con
 	////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	// HACK: inject this code to force compiler to use around 110-128 registers (N=95 gets around 110 registers)
 	// (by default compiler agressively optimiztes num of registers even if it could affort more registers
+	// TODO: maybe use launch_bounds to force compiler to use specific number of registers !!
 /*
 	if (threadIdx.y == 11111111) {
 		float4* image_sh = (float4*)image_sh_class.getData(0);
@@ -2880,10 +2881,17 @@ perpare_weights_and_offsets(const float* filter_weights, const int* filter_offse
 
 	float4 interp_offset_y,interp_offset_x;
 
+    // get x-floor(y)
 	interp_offset_x.x = offset_x.x - (float)(int)(offset_x.x);
 	interp_offset_x.y = offset_x.y - (float)(int)(offset_x.y);
 	interp_offset_x.z = offset_x.z - (float)(int)(offset_x.z);
 	interp_offset_x.w = offset_x.w - (float)(int)(offset_x.w);
+
+    // get y-floor(y)
+    interp_offset_y.x = offset_y.x - (float)(int)(offset_y.x);
+    interp_offset_y.y = offset_y.y - (float)(int)(offset_y.y);
+    interp_offset_y.z = offset_y.z - (float)(int)(offset_y.z);
+    interp_offset_y.w = offset_y.w - (float)(int)(offset_y.w);
 
 	float4 factor_00, factor_01, factor_10, factor_11;
 
@@ -3021,9 +3029,9 @@ float* create_input_with_border(const float* filtered_images, const int img_widt
 	float* filtered_images_with_border;
 	cudaMalloc(&filtered_images_with_border, sizeof(float) * new_width * new_height * (NN +1)); // NOTE: we add extra image as padding to prevent double buffering from load invalid data on last batch
 
-	//cudaMemset(filtered_images_with_border, 0,  sizeof(float) * new_width * new_height * NN);
+	cudaMemset(filtered_images_with_border, 0,  sizeof(float) * new_width * new_height * NN);
 
-	caffe_gpu_set<float>(new_width * new_height * NN, 1.0f, filtered_images_with_border);
+	//caffe_gpu_set<float>(new_width * new_height * NN, 1.0f, filtered_images_with_border);
 
 	for (int n = 0; n < NN; ++n) {
 		// position at begining of sub-feature input map
