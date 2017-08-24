@@ -818,6 +818,8 @@ public:
 		}
 
         {
+
+
             NDIndexing<BATCH_COMPUTE_FEATURES_SIZE/NUM_READ_FEATURES,
                     NDIndexing<(BATCH_PIXELS_SIZE_X * BATCH_PIXELS_SIZE_Y)/BATCH_PIXELS_FLOAT4,
                             NDIndexing<PIXELS_INTERPOLATION_Dy,
@@ -846,10 +848,10 @@ public:
 
 				//if (interpolation_j == 0 && interpolation_i == 0)
 				{
-				if (NUM_READ_FEATURES > 0) weighted_errors[NUM_READ_FEATURES*f_quad_index + 0][px] += compute.weights[weight_in_index].x * compute.errors[error_in_index.x].x;
-				if (NUM_READ_FEATURES > 1) weighted_errors[NUM_READ_FEATURES*f_quad_index + 1][px] += compute.weights[weight_in_index].y * compute.errors[error_in_index.y].x;
-				if (NUM_READ_FEATURES > 2) weighted_errors[NUM_READ_FEATURES*f_quad_index + 2][px] += compute.weights[weight_in_index].z * compute.errors[error_in_index.z].x;
-				if (NUM_READ_FEATURES > 3) weighted_errors[NUM_READ_FEATURES*f_quad_index + 3][px] += compute.weights[weight_in_index].w * compute.errors[error_in_index.w].x;
+				if (NUM_READ_FEATURES > 0) weighted_errors[NUM_READ_FEATURES*f_quad_index + 0][px] += (PIXELS_INTERPOLATION_SIZE > 1 ? compute.weights[weight_in_index].x : 1) * compute.errors[error_in_index.x].x;
+				if (NUM_READ_FEATURES > 1) weighted_errors[NUM_READ_FEATURES*f_quad_index + 1][px] += (PIXELS_INTERPOLATION_SIZE > 1 ? compute.weights[weight_in_index].y : 1) * compute.errors[error_in_index.y].x;
+				if (NUM_READ_FEATURES > 2) weighted_errors[NUM_READ_FEATURES*f_quad_index + 2][px] += (PIXELS_INTERPOLATION_SIZE > 1 ? compute.weights[weight_in_index].z : 1) * compute.errors[error_in_index.z].x;
+				if (NUM_READ_FEATURES > 3) weighted_errors[NUM_READ_FEATURES*f_quad_index + 3][px] += (PIXELS_INTERPOLATION_SIZE > 1 ? compute.weights[weight_in_index].w : 1) * compute.errors[error_in_index.w].x;
 				}
 				/*if (f_quad_index == 0 && s_index == 0 && f_index == 0 && thread_x == 0 && thread_y == 0) {
 					printf("weighted_errors value from error %f * weight %f = weighted_errors %f at position j,i=%d,%d and interpolation dy,dx=%d,%d\n", compute.errors[error_in_index.x].x, compute.weights[weight_in_index].x,weighted_errors[f_quad_index + 0][px] , px / BATCH_PIXELS_SIZE_X, px % BATCH_PIXELS_SIZE_X, PIXELS_INTERPOLATION_Dy - 1 - interpolation_j, PIXELS_INTERPOLATION_Dx - 1 - interpolation_i);
@@ -2593,11 +2595,10 @@ public:
 		error_cuda_prepare(img_width, img_height, I, F, new_img_parts_width,new_img_parts_height),
 		weight_and_offsets_cuda_prepare(img_width, img_height, I, F, S, G) {
 
-		if (NUM_K != K) throw std::exception();
-
-		if (F < BATCH_FEATURES_SIZE * BLOCK_FEATURES) throw std::exception();
-		if (S < BLOCK_SUBFEATURES) throw std::exception();
-		if (G < BATCH_GAUSS_SIZE) throw std::exception();
+		if (NUM_K != K) {
+			printf("Invalid input K %d in FastGaussBackwardMultiSubfeaturesCUDA. Only a value of %d supported.\n", K, NUM_K);
+			throw std::exception();
+		}
 
 		class BlockIndexingPipelineT::Launch block_indexing;
 
@@ -2623,6 +2624,7 @@ public:
 					  int* prepared_filter_offsets,cudaStream_t streamId) {
 
 		{
+//#define PROFILE_CUDA
 #ifdef PROFILE_CUDA
 			std::cout << "started create_input_with_border_bw" << std::endl;
 
@@ -2698,13 +2700,19 @@ void fast_gauss_backward_multi_subfeatures<float>(const float* filtered_images, 
 												  float* output,
 												  const int I, const int S, const int F, const int G, const int K,
 												  const int img_width, const int img_height,
-												  const int kernel_width, const int kernel_height,
+												  const int kernel_width, const int kernel_height, const bool use_interpolation,
 												  float* prepared_filtered_images, size_t* prepared_filtered_images_size,
 												  float* prepared_error_images, size_t* prepared_error_images_size,
 												  float* prepared_filter_weights, size_t* prepared_filter_weights_size,
 												  int* prepared_filter_offsets, size_t* prepared_filter_offsets_size,
 												  cudaStream_t streamId) {
 
+
+
+	// TODO:
+	//	- make interpolation weights in 16 bit float (they are computed with 32 bit error so cannot use 16 bit float arithmetics)
+	//  - make input data in 16 bit float but retain error in 32 bit float and perform computation in 16 bit (this will reduce memory bandwidth required)
+	//  - make data and computation with 16 bit float
 
 	// calls either FastGaussBackwardMultiSubfeaturesCUDA->run_kernel() or FastGaussBackwardMultiSubfeaturesCUDA->get_allocation_sizes()
 	// if prepared_filtered_images_size, prepared_error_images_size, prepared_filter_weights_size OR prepared_filter_offsets_size are not NULL
@@ -2726,12 +2734,9 @@ void fast_gauss_backward_multi_subfeatures<float>(const float* filtered_images, 
 	if (USE_INTERPOLATION) { \
 		RUN_KERNEL_R0(CLASS_NAME, IMG_PATCH_SIZE, MAX_OFFSET, BATCH_IMAGES, true, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, K, __VA_ARGS__) \
 	} else { \
-		printf("Disabling interpolation is not supported yet"); \
-        throw std::exception(); \
-	}
-	/*else { \
 		RUN_KERNEL_R0(CLASS_NAME, IMG_PATCH_SIZE, MAX_OFFSET, BATCH_IMAGES, false, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, K, __VA_ARGS__) \
-	}*/
+	}
+
 
 
 #define RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE, MAX_OFFSET, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, K, ...) \
@@ -2762,12 +2767,10 @@ void fast_gauss_backward_multi_subfeatures<float>(const float* filtered_images, 
         RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE, MAX_OFFSET, 128, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, K, __VA_ARGS__) \
 	} else { \
         RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE, MAX_OFFSET, 1, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, K, __VA_ARGS__) \
-	}/*
-    else if (BATCH_IMAGES >= 32) { \
+	}
+    /*else if (BATCH_IMAGES >= 32) { \
         RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE, MAX_OFFSET, 32, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, K, __VA_ARGS__) \
 	}*/
-
-	bool use_interpolation = true;
 
 	int img_size = MAX(img_width, img_height) >= 32 ? 32 : 16;
 	int max_offset = MAX(kernel_width, kernel_height);
@@ -2798,7 +2801,7 @@ void fast_gauss_backward_multi_subfeatures<double>(const double* filtered_images
 												   const double* filter_weights, double* output,
 												   const int I, const int S, const int F, const int G, const int K,
 												   const int img_width, const int img_height,
-												   const int kernel_width, const int kernel_height,
+												   const int kernel_width, const int kernel_height, const bool use_interpolation,
 												   float* prepared_filtered_images, size_t* prepared_filtered_images_size,
 												   float* prepared_error_images, size_t* prepared_error_images_size,
 												   float* prepared_filter_weights, size_t* prepared_filter_weights_size,

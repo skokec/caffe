@@ -68,7 +68,7 @@ void FastAproxGaussianConvLayer<Dtype>::test_backward_multi_subfeature_kernel_gp
 																 const float* filter_weights, float* output,
 																 const int K, const int I, const int S, const int F, const int G,
 																 const int img_width, const int img_height,
-																 const int kernel_width, const int kernel_height) {
+																 const int kernel_width, const int kernel_height, const bool use_interpolation) {
 	float* prepared_filtered_images;
 	float* prepared_error_images;
 	float* prepared_filter_weights;
@@ -86,6 +86,7 @@ void FastAproxGaussianConvLayer<Dtype>::test_backward_multi_subfeature_kernel_gp
 														I, S, F, G, K,
 														img_width, img_height,
 														kernel_width, kernel_height,
+														use_interpolation,
 														0,&prepared_filtered_images_size,
 														0,&prepared_error_images_size,
 														0,&prepared_filter_weights_size,
@@ -113,6 +114,7 @@ void FastAproxGaussianConvLayer<Dtype>::test_backward_multi_subfeature_kernel_gp
                                                         I, S, F, G, K,
                                                         img_width, img_height,
                                                         kernel_width, kernel_height,
+														use_interpolation,
                                                         prepared_filtered_images,0,
                                                         prepared_error_images,0,
                                                         prepared_filter_weights,0,

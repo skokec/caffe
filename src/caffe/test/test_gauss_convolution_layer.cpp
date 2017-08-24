@@ -976,6 +976,8 @@ TYPED_TEST(GaussConvolutionLayerTest, TestCuDNNComponentsMerging) {
 TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussConvolution) {
 
 
+    Caffe::SetDevice(3);
+
     typedef typename TypeParam::Dtype Dtype;
 
 
@@ -1061,7 +1063,7 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussConvolution) {
     ConvolutionParameter* convolution_param =
             cudnn_layer_param.mutable_convolution_param();
 
-    convolution_param->add_kernel_size(3);
+    convolution_param->add_kernel_size(5);
     convolution_param->add_stride(1);
     convolution_param->add_pad(1);
 
@@ -1121,6 +1123,8 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussConvolution) {
 }
 
 TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussBackward) {
+
+    Caffe::SetDevice(3);
 
 
     typedef typename TypeParam::Dtype Dtype;
@@ -1326,6 +1330,7 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussBackward) {
         // number of Guassian learning parameters we have (w,mu1,mu2,sigma)
         // for each parameter we need convolution of input data with specific kernel
         const int K = 4;
+        const bool use_interpolation = true;
 
         Blob<float> blob_input(N,S * K,H,W);
         Blob<float> blob_error(N,F,H,W);
@@ -1439,7 +1444,7 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussBackward) {
         for (int ii = 0; ii < 1; ++ii) {
 
             if (Caffe::mode() == Caffe::GPU)
-                layer.test_backward_multi_subfeature_kernel_gpu(filtered_images, error_images, filter_offsets_x, filter_offsets_y, filter_offsets_float_x, filter_offsets_float_y, filter_weights, output, K, N, S, F, G, W, H, 5, 5);
+                layer.test_backward_multi_subfeature_kernel_gpu(filtered_images, error_images, filter_offsets_x, filter_offsets_y, filter_offsets_float_x, filter_offsets_float_y, filter_weights, output, K, N, S, F, G, W, H, 5, 5, use_interpolation);
 
             float* output_c = blob_output.mutable_cpu_data();
 

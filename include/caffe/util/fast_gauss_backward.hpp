@@ -19,7 +19,7 @@ void fast_gauss_backward_multi_subfeatures(const Dtype* filtered_images, const D
 										   Dtype* output,
 										   const int I, const int S, const int F, const int G, const int K,
 										   const int img_width, const int img_height,
-										   const int kernel_width, const int kernel_height,
+										   const int kernel_width, const int kernel_height, const bool use_interpolation,
 										   float* prepared_filtered_images, size_t* prepared_filtered_images_size,
 										   float* prepared_error_images, size_t* prepared_error_images_size,
 										   float* prepared_filter_weights, size_t* prepared_filter_weights_size,

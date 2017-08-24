@@ -1114,7 +1114,8 @@ fast_gauss_backward_pipeline_kernel(const float* filtered_images, const float* e
                     // NOTE: sync is not needed if we have more then enough operations to cover the latency of sore operations
                     // we can rughly say that if there is more then 128 operations then STS latency should be hidden (STS latency should not be more then 100 operations on different platforms)
                     // however since store may be issued half way through operations then use 128 operations as limit
-                    if (BATCH_PIXELS_SIZE_X * BATCH_PIXELS_SIZE_Y * BATCH_FEATURES_SIZE * BATCH_GAUSS_SIZE * PIXELS_INTERPOLATION_SIZE * BATCH_MEM_SUBFEATURES_SIZE  < 128) {
+                    //if (BATCH_PIXELS_SIZE_X * BATCH_PIXELS_SIZE_Y * BATCH_FEATURES_SIZE * BATCH_GAUSS_SIZE * PIXELS_INTERPOLATION_SIZE * BATCH_MEM_SUBFEATURES_SIZE  < 128)
+                    {
 						__syncthreads();
 						//__threadfence_block();
 					}
@@ -1638,8 +1639,8 @@ void fast_gauss_backward<float>(const float* filtered_images, const float* error
 			static const int BLOCK_X = 16/BATCH_PIXELS_SIZE_X;
 			static const int BLOCK_Y = 8/BATCH_PIXELS_SIZE_Y;
 
-            static const int BLOCK_FEATURES = 16;
-            static const int BLOCK_SUBFEATURES = 2;
+            static const int BLOCK_FEATURES = 8;
+            static const int BLOCK_SUBFEATURES = 4;
 
             static const int BATCH_FEATURES_SIZE = 4;
             static const int BATCH_MEM_SUBFEATURES_SIZE = 1;
