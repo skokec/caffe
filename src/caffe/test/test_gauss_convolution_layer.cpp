@@ -976,7 +976,7 @@ TYPED_TEST(GaussConvolutionLayerTest, TestCuDNNComponentsMerging) {
 TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussConvolution) {
 
 
-    Caffe::SetDevice(3);
+    Caffe::SetDevice(0);
 
     typedef typename TypeParam::Dtype Dtype;
 
@@ -1032,6 +1032,18 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussConvolution) {
     const_one_filer.Fill(&blob_weights);
 
 
+    float* data = blob_input.mutable_cpu_data();
+    for (int n = 0; n < N; ++n){
+        for (int s = 0; s < S; ++s) {
+            for (int i = 0; i < H * W; ++i) {
+                //data[(n * S + s )* H * W + i] = s;
+                data[(n * S + s )* H * W + i] = n + (i % W + 1);
+                //data[(n * S + s )* H * W + i] = (i % W);
+
+            }
+        }
+    }
+
     FillerParameter offset_filler_param;
     offset_filler_param.set_max(2);
     offset_filler_param.set_min(0);
@@ -1063,7 +1075,7 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussConvolution) {
     ConvolutionParameter* convolution_param =
             cudnn_layer_param.mutable_convolution_param();
 
-    convolution_param->add_kernel_size(5);
+    convolution_param->add_kernel_size(3);
     convolution_param->add_stride(1);
     convolution_param->add_pad(1);
 
@@ -1089,12 +1101,14 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussConvolution) {
 
     cudnn_layer->SetUp(blob_bottom_vec, blob_top_vec);
 
-    clock_t start_t = clock();
-    cudnn_layer->Forward(blob_bottom_vec, blob_top_vec);
-    cudaDeviceSynchronize();
-    clock_t end_t = clock();
-    std::cout << "CuDNNConvolutionLayer forward pass in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl << std::endl;
-
+    for (int i = 0; i < 30; ++i) {
+        clock_t start_t = clock();
+        cudnn_layer->Forward(blob_bottom_vec, blob_top_vec);
+        cudaDeviceSynchronize();
+        clock_t end_t = clock();
+        std::cout << "CuDNNConvolutionLayer forward pass in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
+    }
+    std::cout << std::endl;
     for (int ii = 0; ii < 1; ++ii) {
 
 	    if (Caffe::mode() == Caffe::CPU)
@@ -1108,15 +1122,37 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussConvolution) {
         // verify data - since we use 1 for input and wights and 0 for offsets we should get S as output value for all
 
         int found_invalid = 0;
+        //double valid_value = S *G;
+        double valid_value = (S-1) * (S)/2 * G;
 
+        for (int n = 0; n < N; ++n){
+            for (int f = 0; f < F; ++f) {
+                for (int i = 0; i < H * W; ++i) {
+                    int index = (n * F + f )* H * W + i;
+                    float val = output_c[index];
+                    float valid_value = (n + i % W +1 )*G*S;
+                    //float valid_value = (i % W  ) *G*S;
+                    if (val != valid_value) {
+                        if (found_invalid < 10)
+                            printf("found invalid output (%f) at loc (%d) - should be %f\n", val, index, valid_value);
+                        found_invalid++;
+                    }
+                    /*if (i % W == 0)
+                        std::cout << std::endl;
+                    std::cout << val << " ";*/
+                }
+            }
+        }
+        std::cout << std::endl;
+/*
         for (int jj = 0; jj < blob_output.count(); ++jj) {
-            if (output_c[jj] != S * G) {
+            if (output_c[jj] != valid_value) {
                 if (found_invalid < 10)
-                    printf("found invalid output (%f) at loc (%d) - should be %d\n", output_c[jj], jj, S *G);
+                    printf("found invalid output (%f) at loc (%d) - should be %f\n", output_c[jj], jj, valid_value);
                 found_invalid++;
             }
         }
-
+*/
         if (found_invalid > 0)
             printf("found num of invalid output vals: %d/%d\n",found_invalid, blob_output.count());
     }
@@ -1124,7 +1160,7 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussConvolution) {
 
 TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussBackward) {
 
-    Caffe::SetDevice(3);
+    Caffe::SetDevice(0);
 
 
     typedef typename TypeParam::Dtype Dtype;
@@ -1293,7 +1329,7 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussBackward) {
 
         typedef typename TypeParam::Dtype Dtype;
 
-        Caffe::SetDevice(3);
+        Caffe::SetDevice(0);
 
         if (Caffe::mode() == Caffe::CPU)
             return;
