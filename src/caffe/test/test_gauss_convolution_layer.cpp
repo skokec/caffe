@@ -993,6 +993,7 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussConvolution) {
     const int G = 2;
     const int W = 64;
     const int H = 64;
+    const bool use_interpolation = true;
 
     // debug print version
 /*
@@ -1112,9 +1113,9 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussConvolution) {
     for (int ii = 0; ii < 1; ++ii) {
 
 	    if (Caffe::mode() == Caffe::CPU)
-		    layer.test_kernel_cpu(filtered_images, filter_offsets_x, filter_offsets_y, filter_offsets_float_x, filter_offsets_float_y, filter_weights, output, N, S, F, G, W, H, 5, 5);
+		    layer.test_kernel_cpu(filtered_images, filter_offsets_x, filter_offsets_y, filter_offsets_float_x, filter_offsets_float_y, filter_weights, output, N, S, F, G, W, H, 5, 5, use_interpolation);
 	    else
-		    layer.test_kernel_gpu(filtered_images, filter_offsets_x, filter_offsets_y, filter_offsets_float_x, filter_offsets_float_y, filter_weights, output, N, S, F, G, W, H, 5, 5);
+		    layer.test_kernel_gpu(filtered_images, filter_offsets_x, filter_offsets_y, filter_offsets_float_x, filter_offsets_float_y, filter_weights, output, N, S, F, G, W, H, 5, 5, use_interpolation);
 
 
         float* output_c = blob_output.mutable_cpu_data();

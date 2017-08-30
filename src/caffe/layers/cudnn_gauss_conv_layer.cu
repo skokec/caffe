@@ -12,7 +12,7 @@ namespace caffe {
 
 template <typename Dtype>
 void FastAproxGaussianConvLayer<Dtype>::Forward_gpu(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top) {
-	caffe::fast_gauss_forward<float>(NULL, NULL, NULL, NULL, NULL, NULL, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+	//caffe::fast_gauss_forward<float>(NULL, NULL, NULL, NULL, NULL, NULL, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }
 
 __global__ void sync_gauss_conv_groups() { }
