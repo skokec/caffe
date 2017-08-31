@@ -81,26 +81,27 @@ void FastAproxGaussianConvLayer<Dtype>::test_kernel_gpu(const float* filtered_im
 	CUDA_CHECK(cudaMalloc(&prepared_filter_offsets_and_weights, prepared_filter_weights_size+prepared_filter_offsets_size));
 	CUDA_CHECK(cudaMemset(prepared_filter_offsets_and_weights,0, prepared_filter_weights_size+prepared_filter_offsets_size));
 
-    cudaDeviceSynchronize();
 
-    clock_t start_t = clock();
+	for (int i = 0; i < 1; ++i) {
+		cudaDeviceSynchronize();
 
-    caffe::fast_gauss_forward<float>(filtered_images,
-                                     filter_offsets_x, filter_offsets_y, filter_offsets_float_x, filter_offsets_float_y,
-                                     filter_weights, output,
-                                     I, S, F, G,
-                                     img_width, img_height,
-                                     kernel_width, kernel_height,
-                                     use_interpolation,
-                                     prepared_filtered_images,0,
-                                     prepared_filter_weights,0,
-                                     prepared_filter_offsets,0,
-                                     prepared_filter_offsets_and_weights);
-    cudaDeviceSynchronize();
-    clock_t end_t = clock();
+		clock_t start_t = clock();
+		caffe::fast_gauss_forward<float>(filtered_images,
+										 filter_offsets_x, filter_offsets_y, filter_offsets_float_x, filter_offsets_float_y,
+										 filter_weights, output,
+										 I, S, F, G,
+										 img_width, img_height,
+										 kernel_width, kernel_height,
+										 use_interpolation,
+										 prepared_filtered_images,0,
+										 prepared_filter_weights,0,
+										 prepared_filter_offsets,0,
+										 prepared_filter_offsets_and_weights);
+		cudaDeviceSynchronize();
+		clock_t end_t = clock();
 
-    std::cout << "fast_gauss_forward in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
-
+		std::cout << "fast_gauss_forward in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
+	}
     cudaFree(prepared_filter_weights);
     cudaFree(prepared_filter_offsets);
     cudaFree(prepared_filter_offsets_and_weights);

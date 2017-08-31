@@ -1141,10 +1141,11 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussConvolution) {
                             printf("found invalid output (%f) at loc (%d) - should be %f\n", val, index, valid_value);
                         found_invalid++;
                     }
-                    /*if (i % W == 0)
-                        std::cout << std::endl;
-                    std::cout << val << " ";*/
+                    //if (i % W == 0)
+                    //    std::cout << std::endl;
+                    //std::cout << val << " ";
                 }
+                //std::cout << std::endl;
             }
         }
         std::cout << std::endl;

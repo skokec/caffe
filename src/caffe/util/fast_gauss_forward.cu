@@ -1706,13 +1706,44 @@ public:
 
 	}
 	size_t get_allocation_size() {
-		return sizeof(float) * (NEW_WIDTH + 2*BORDER_SIZE) * (NEW_WIDTH + 2*BORDER_SIZE) * S *  (N+1) * new_img_parts_width * new_img_parts_height;
+		return sizeof(float) * (NEW_WIDTH + 2*BORDER_SIZE) * (NEW_HEIGHT + 2*BORDER_SIZE) * S *  (N+1) * new_img_parts_width * new_img_parts_height;
 	}
 	float* create_input(float* interleaved_images_output, const float* filtered_images, cudaStream_t streamId = NULL) {
 
 
 		interleave_input_data_kernel<TILE_DIM_XY,TILE_DIM_S,TILE_DIM_IMAGE, BATCH_PIXELS_X, BATCH_IMAGES, NEW_WIDTH, NEW_HEIGHT, BORDER_SIZE><<<numBlocks,threadsPerBlock, 0, streamId>>>(filtered_images, interleaved_images_output, N,S, img_width, img_height, new_img_parts_width, new_img_parts_height);
 
+		/*if (1) {
+			float* filtered_images_cpu = new float[(NEW_WIDTH + 2*BORDER_SIZE)*( NEW_HEIGHT + 2*BORDER_SIZE)* N*S * new_img_parts_width*new_img_parts_height];
+
+			for (int i = 0; i < (NEW_WIDTH + 2*BORDER_SIZE)*( NEW_HEIGHT + 2*BORDER_SIZE)* N*S * new_img_parts_width*new_img_parts_height; ++i)
+				filtered_images_cpu[i] = -1;
+
+			cudaMemcpy(filtered_images_cpu, interleaved_images_output, sizeof(float)* (NEW_WIDTH + 2*BORDER_SIZE)*( NEW_HEIGHT + 2*BORDER_SIZE)* N*S*new_img_parts_width*new_img_parts_height, cudaMemcpyDeviceToHost);
+			cudaDeviceSynchronize();
+
+			//for (int i = 0; i < (img_width + 2*MAX_OFFSET)*( img_height + 2*MAX_OFFSET)* I*S; ++i) {
+			int index =0;
+			for (int i = 0; i < N/BATCH_IMAGES * new_img_parts_width*new_img_parts_height; ++i) {
+				for (int s = 0; s < S; ++s) {
+					for (int l =0; l < NEW_HEIGHT + 2*BORDER_SIZE; ++l){
+						for (int n = 0; n < NEW_WIDTH + 2*BORDER_SIZE; ++n) {
+							for (int i2 = 0; i2 < BATCH_IMAGES; ++i2)
+								std::cout << filtered_images_cpu[index++] << " ";
+						}
+						std::cout << std::endl;
+					}
+					std::cout << std:: endl << "end of s" << std::endl;
+				}
+				std::cout << std::endl;
+
+			}
+			std::cout << std::endl;
+			std::cout << std::endl;
+			std::cout << std::endl;
+			std::cout << std::endl;
+			//return;
+		}*/
 		return interleaved_images_output;
 	}
 };
@@ -2145,7 +2176,7 @@ public:
 };
 
 
-template<int _IMG_SIZE, int _MAX_OFFSET, int _BATCH_IMAGES, bool _USE_INTERPOLATION>
+template<int _IMG_SIZE_W, int _IMG_SIZE_H, int _MAX_OFFSET, int _BATCH_IMAGES, bool _USE_INTERPOLATION>
 class FastGaussForwardCUDA {
 	enum {
 		// Variable parameters
@@ -2163,9 +2194,8 @@ class FastGaussForwardCUDA {
 		// BATCH_FEATURES_SIZE * BLOCK_FEATURES:  	16 min allowed
 		// BLOCK_SUBFEATURES:  	2 min allowed
 		// BATCH_GAUSS_SIZE:	2 min allowed
-
-		IMG_WIDTH = MAX(32,_IMG_SIZE),
-		IMG_HEIGHT = MAX(8,_IMG_SIZE),
+		IMG_WIDTH = MAX(32,_IMG_SIZE_W), // NOTE: 32 <= BLOCK_X * BATCH_PIXELS_SIZE_X
+		IMG_HEIGHT = MAX(8,_IMG_SIZE_H), // NOTE:  8 <= BLOCK_Y * BATCH_PIXELS_SIZE_Y
 		MAX_OFFSET = _MAX_OFFSET,
 		//BATCH_IMAGES = _USE_INTERPOLATION ? _BATCH_IMAGES : 2,
 		BATCH_IMAGES=1,
@@ -2236,13 +2266,13 @@ public:
 			MAX_OFFSET,
 			//false, 5, 2> BlockIndexingPipelineT;
 			false, 4, 2> BlockIndexingPipelineT;
-	// false, 5, 2 == USE_SEPERATE_OFFSET_AND_WEIGHTS_BUFFER, LOAD_DATA_DELAY, LOAD_W_AND_OFF_DELAY
+	// false, 4, 2 == USE_SEPERATE_OFFSET_AND_WEIGHTS_BUFFER, LOAD_DATA_DELAY, LOAD_W_AND_OFF_DELAY
 
 	FastForwardInputImage<BlockIndexingPipelineT> image_cuda_prepare;
 	FastForwardInputWeightAndOffsets<BlockIndexingPipelineT> weight_and_offsets_cuda_prepare;
 
 	FastGaussForwardCUDA(const int img_width, const int img_height, const int I, const int S, const int F, const int G) :
-			img_width(img_height), img_height(img_height), I(I), S(S), F(F), G(G),
+			img_width(img_width), img_height(img_height), I(I), S(S), F(F), G(G),
 
 			// we will split image into patches of size [IMG_HEIGHT x IMG_WIDTH] so use that as image size, however,
 			// we need to increase the number of images that will be process as each patch is now considered as one image
@@ -2278,7 +2308,9 @@ public:
 					float* prepared_filter_weights,
 					int* prepared_filter_offsets, float* prepared_filter_offsets_and_weights,
 					cudaStream_t streamId) {
-		(cudaMemsetAsync(output, 0, sizeof(float) * I * F * img_width * img_height, streamId));
+
+		CUDA_CHECK(cudaMemsetAsync(output, 0, sizeof(float) * I * F * img_width * img_height, streamId));
+
 		{
 //#define PROFILE_CUDA
 #ifdef PROFILE_CUDA
@@ -2325,7 +2357,6 @@ public:
 		clock_t start_t = clock();
 #endif
 		fast_gauss_forward_pipeline_kernel<BlockIndexingPipelineT,-1,-1><<<numBlocks,threadsPerBlock,0, streamId>>>(prepared_filtered_images, prepared_filter_offsets, prepared_filter_weights, prepared_filter_offsets_and_weights, output, I, S, F, G, img_width, img_height, new_img_parts_width, new_img_parts_height);
-		//fast_gauss_forward_pipeline_kernel<BlockIndexingPipelineT><<<numBlocks,threadsPerBlock>>>(prepared_filtered_images, prepared_error_images, prepared_filter_offsets, prepared_filter_weights, output, I * new_img_parts_width * new_img_parts_height, S, F, G, img_width, img_height);
 #ifdef PROFILE_CUDA
 		cudaDeviceSynchronize();
 
@@ -2352,10 +2383,117 @@ void fast_gauss_forward<double>(const double* filtered_images, const int* filter
 
 }
 
-
-
-template <>
+template<>
 void fast_gauss_forward<float>(const float* filtered_images, const int* filter_offsets_x, const int* filter_offsets_y, const float* filter_offsets_float_x, const float* filter_offsets_float_y,
+//void fast_gauss_forward_new(const float* filtered_images, const int* filter_offsets_x, const int* filter_offsets_y, const float* filter_offsets_float_x, const float* filter_offsets_float_y,
+								   const float* filter_weights, float* output,
+								   const int I, const int S, const int F, const int G,
+								   const int img_width, const int img_height,
+								   const int kernel_width, const int kernel_height,const bool use_interpolation,
+								   float* prepared_filtered_images, size_t* prepared_filtered_images_size,
+								   float* prepared_filter_weights, size_t* prepared_filter_weights_size,
+								   int* prepared_filter_offsets, size_t* prepared_filter_offsets_size,
+								   float* prepared_filter_offsets_and_weights, cudaStream_t streamId) {
+
+
+	// calls either FastGaussForwardCUDA->run_kernel() or FastGaussForwardCUDA->get_allocation_sizes()
+	// if prepared_filtered_images_size, prepared_filter_weights_size OR prepared_filter_offsets_size are not NULL
+
+#define RUN_KERNEL_R0(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, ...) \
+    { \
+        CLASS_NAME<IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, BATCH_IMAGES, USE_INTERPOLATION> _kernel_class(IMG_WIDTH, IMG_HEIGHT, I, S, F, G); \
+		if (prepared_filtered_images_size != NULL || 	\
+			prepared_filter_weights_size != NULL ||	 	\
+			prepared_filter_offsets_size != NULL) { 	\
+			_kernel_class.get_allocation_sizes(prepared_filtered_images_size, prepared_filter_weights_size, prepared_filter_offsets_size); \
+		} else { \
+			_kernel_class.run_kernel(__VA_ARGS__);\
+		} \
+	}
+
+#define RUN_KERNEL_R1(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G,  ...) \
+	if (USE_INTERPOLATION) { \
+		RUN_KERNEL_R0(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, BATCH_IMAGES, true, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
+	} else { \
+		RUN_KERNEL_R0(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, BATCH_IMAGES, false, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
+	}
+
+
+
+#define RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, ...) \
+	if (IMG_PATCH_SIZE_W >= 32) { \
+		RUN_KERNEL_R1(CLASS_NAME, 32, IMG_PATCH_SIZE_H, MAX_OFFSET, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
+	} else if (IMG_PATCH_SIZE_W >= 16) { \
+        RUN_KERNEL_R1(CLASS_NAME, 16, IMG_PATCH_SIZE_H, MAX_OFFSET, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
+	} else { \
+        RUN_KERNEL_R1(CLASS_NAME, 8, IMG_PATCH_SIZE_H, MAX_OFFSET, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
+	}
+
+
+#define RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, ...) \
+	if (IMG_PATCH_SIZE_H >= 32) { \
+		RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE_W, 32, MAX_OFFSET, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
+	} else if (IMG_PATCH_SIZE_H >= 16) { \
+        RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE_W, 16, MAX_OFFSET, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
+	} else { \
+        RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE_W, 8, MAX_OFFSET, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
+	}
+
+
+#define RUN_KERNEL_R4(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, ...) \
+	if (MAX_OFFSET <= 9) { \
+		RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, 4, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
+	} else if (MAX_OFFSET <= 17) { \
+        RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, 8, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
+	} else { \
+        printf("Unsupported filter size: %d. Supported only max up to 9x9 and 17x17 at the moment\n", MAX_OFFSET); \
+        throw std::exception(); \
+    }
+
+	/*else if (MAX_OFFSET <= 33) { \
+        RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE, 16, BATCH_IMAGES, USE_INTERPOLATION, __VA_ARGS__) \
+    */
+
+#define RUN_KERNEL_R5(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, ...) \
+	if (BATCH_IMAGES >=  2) { \
+		RUN_KERNEL_R4(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, 2, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
+	} else { \
+        RUN_KERNEL_R4(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, 1, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
+	}
+
+	// NOTE:
+	//	we make sure img size is not smaller then what a single block of cuda threads will use (i.e. 32x8)
+
+	int img_size_w = max(32, img_width >= 32 ? 32 : (img_width >= 16 ? 16 : 8 ));
+	int img_size_h = max(8, img_height >= 32 ? 32 : (img_height >= 16 ? 16 : 8 ));
+	int max_offset = MAX(kernel_width, kernel_height);
+
+	// we will split image into patches of size [IMG_HEIGHT x IMG_WIDTH] so use that as image size, however,
+	// we need to increase the number of images that will be process as each patch is now considered as one image
+	// there is no need to recombine the output since we just sum over all patches to get gradients
+
+
+	int new_img_parts_width = (int)ceil((float)img_width / img_size_w);
+	int new_img_parts_height = (int)ceil((float)img_height / img_size_h);
+
+	//int num_images = I* new_img_parts_width * new_img_parts_height;
+	int num_images = 1;
+
+	// CALL RUN_KERNEL_R4 macro that will call run_kernel() function on supplied class where first 4 parameters are replaced with compile-time known variables
+	// replacing variables with compile-time known values allows CUDA compiler to generate kernels in advanced with pre-defined sizes
+
+	RUN_KERNEL_R5(FastGaussForwardCUDA, img_size_w, img_size_h, max_offset, num_images, use_interpolation,
+				  img_width, img_height, I, S, F, G,
+				  filtered_images, filter_offsets_x, filter_offsets_y, filter_offsets_float_x, filter_offsets_float_y, filter_weights, output,
+				  prepared_filtered_images, prepared_filter_weights, prepared_filter_offsets, prepared_filter_offsets_and_weights,
+				  streamId);
+
+}
+
+// EVALUATION/DEBUGGING code
+//template <>
+//void fast_gauss_forward<float>(const float* filtered_images, const int* filter_offsets_x, const int* filter_offsets_y, const float* filter_offsets_float_x, const float* filter_offsets_float_y,
+void fast_gauss_forward_old(const float* filtered_images, const int* filter_offsets_x, const int* filter_offsets_y, const float* filter_offsets_float_x, const float* filter_offsets_float_y,
 								const float* filter_weights, float* output,
 								const int I, const int S, const int F, const int G,
 								const int img_width, const int img_height,
@@ -2381,7 +2519,7 @@ void fast_gauss_forward<float>(const float* filtered_images, const int* filter_o
 
 		int num_images = I* new_img_parts_width * new_img_parts_height;
 
-		FastGaussForwardCUDA<32, 8, 2, true> _kernel_class(img_width, img_height, I, S, F, G);
+		FastGaussForwardCUDA<32,32, 8, 2, true> _kernel_class(img_width, img_height, I, S, F, G);
 
 		if (prepared_filtered_images_size != 0 || prepared_filter_weights_size != 0 || prepared_filter_offsets_size != 0) {
 			_kernel_class.get_allocation_sizes(prepared_filtered_images_size,
@@ -2422,7 +2560,7 @@ void fast_gauss_forward<float>(const float* filtered_images, const int* filter_o
 		cudaDeviceSynchronize();
 
 		std::cout << "started FastGaussForwardCUDA.run_kernel()" << std::endl;
-		for (int i = 0; i < 30; ++i) {
+		for (int i = 0; i < 1; ++i) {
 
 			clock_t start_t = clock();
 			_kernel_class.run_kernel(filtered_images,
