@@ -71,7 +71,7 @@ void CuDNNConvolutionLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
     bias_diff = this->blobs_[1]->mutable_gpu_diff();
   }
   //cudaDeviceSynchronize();
-  clock_t start_t = clock();
+  //clock_t start_t = clock();
   for (int i = 0; i < top.size(); ++i) {
     const Dtype* top_diff = top[i]->gpu_diff();
     // Backward through cuDNN in parallel over groups and gradients.
@@ -100,7 +100,6 @@ void CuDNNConvolutionLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
               filter_desc_, weight_diff + this->weight_offset_ * g));
 
       }
-
       // Gradient w.r.t. bottom data.
       if (propagate_down[i]) {
         if (weight == NULL) {
@@ -118,19 +117,20 @@ void CuDNNConvolutionLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
               cudnn::dataType<Dtype>::zero,
               bottom_descs_[i], bottom_diff + bottom_offset_ * g));
       }
+
     }
 
-    //cudaDeviceSynchronize();
     // Synchronize the work across groups, each of which went into its own
     // stream, by launching an empty kernel into the default (null) stream.
     // NOLINT_NEXT_LINE(whitespace/operators)
     sync_conv_groups<<<1, 1>>>();
-    clock_t end_t = clock();
-//    LOG(INFO) << "size of input " << bottom[0]->count() << " = " << bottom[0]->shape(0) << " x " << bottom[0]->shape(1) << " x " << bottom[0]->shape(2) << " x " << bottom[0]->shape(3);
-//    LOG(INFO) << "size of error " << top[0]->count() << " = " << top[0]->shape(0) << " x " << top[0]->shape(1) << " x " << top[0]->shape(2) << " x " << top[0]->shape(3);
+    //cudaDeviceSynchronize();
+    //clock_t end_t = clock();
+    //std::cout << "size of input " << bottom[0]->count() << " = " << bottom[0]->shape(0) << " x " << bottom[0]->shape(1) << " x " << bottom[0]->shape(2) << " x " << bottom[0]->shape(3) << std::endl;
+    //std::cout << "size of error " << top[0]->count() << " = " << top[0]->shape(0) << " x " << top[0]->shape(1) << " x " << top[0]->shape(2) << " x " << top[0]->shape(3) << std::endl;
 
-//    LOG(INFO) << "number of tops: " << top.size() << " number of groups: " << top.size();
-//    LOG(INFO) << "backward pass done in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC);
+    //std::cout << "number of tops: " << top.size() << " number of groups: " << top.size() << std::endl;
+    //std::cout << "backward pass done in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
   }
 }
 

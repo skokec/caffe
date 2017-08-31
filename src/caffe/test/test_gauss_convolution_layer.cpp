@@ -1039,6 +1039,7 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussConvolution) {
             for (int i = 0; i < H * W; ++i) {
                 //data[(n * S + s )* H * W + i] = s;
                 data[(n * S + s )* H * W + i] = n + (i % W + 1);
+                //data[(n * S + s )* H * W + i] = n + (i / W + 1);
                 //data[(n * S + s )* H * W + i] = (i % W);
 
             }
@@ -1094,6 +1095,7 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussConvolution) {
 
     shared_ptr<CuDNNConvolutionLayer<float> > cudnn_layer(new CuDNNConvolutionLayer<float>(cudnn_layer_param));
 
+
     std::vector<Blob<float>* > blob_bottom_vec;
     std::vector<Blob<float>* > blob_top_vec;
 
@@ -1102,7 +1104,7 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussConvolution) {
 
     cudnn_layer->SetUp(blob_bottom_vec, blob_top_vec);
 
-    for (int i = 0; i < 30; ++i) {
+    for (int i = 0; i < 1; ++i) {
         clock_t start_t = clock();
         cudnn_layer->Forward(blob_bottom_vec, blob_top_vec);
         cudaDeviceSynchronize();
@@ -1132,6 +1134,7 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussConvolution) {
                     int index = (n * F + f )* H * W + i;
                     float val = output_c[index];
                     float valid_value = (n + i % W +1 )*G*S;
+                    //float valid_value = (n + i / W +1 )*G*S;
                     //float valid_value = (i % W  ) *G*S;
                     if (val != valid_value) {
                         if (found_invalid < 10)
@@ -1366,7 +1369,7 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussBackward) {
 */
         // number of Guassian learning parameters we have (w,mu1,mu2,sigma)
         // for each parameter we need convolution of input data with specific kernel
-        const int K = 4;
+        const int K = 3;
         const bool use_interpolation = true;
 
         Blob<float> blob_input(N,S * K,H,W);
@@ -1445,9 +1448,9 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussBackward) {
         ConvolutionParameter* convolution_param =
                 cudnn_layer_param.mutable_convolution_param();
 
-        convolution_param->add_kernel_size(5);
+        convolution_param->add_kernel_size(3);
         convolution_param->add_stride(1);
-        convolution_param->add_pad(2);
+        convolution_param->add_pad(1);
 
         convolution_param->set_num_output(F);
 
@@ -1465,19 +1468,28 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussBackward) {
 
         std::vector<Blob<float>* > blob_bottom_vec;
         std::vector<Blob<float>* > blob_top_vec;
+        std::vector<bool > propagate_down;
+        propagate_down.push_back(true);
 
-        blob_bottom_vec.push_back(&blob_input);
-        blob_top_vec.push_back(&blob_output);
+        {
+            Blob<float> blob_input(N,S,H,W);
+            Blob<float> blob_error(N,F,H,W);
 
-        /*
-        cudnn_layer->SetUp(blob_bottom_vec, blob_top_vec);
+            blob_bottom_vec.push_back(&blob_input);
+            blob_top_vec.push_back(&blob_error);
 
-        clock_t start_t = clock();
-        cudnn_layer->Forward(blob_bottom_vec, blob_top_vec);
-        cudaDeviceSynchronize();
-        clock_t end_t = clock();
-        std::cout << "CuDNNConvolutionLayer forward pass in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl << std::endl;
-        */
+            cudnn_layer->SetUp(blob_bottom_vec, blob_top_vec);
+            cudaDeviceSynchronize();
+
+            for (int i = 0 ; i < 1; ++i) {
+                clock_t start_t = clock();
+                cudnn_layer->Backward(blob_top_vec, propagate_down, blob_bottom_vec);
+                cudaDeviceSynchronize();
+                clock_t end_t = clock();
+                std::cout << "CuDNNConvolutionLayer backward pass in " << (((float) (end_t - start_t)) / CLOCKS_PER_SEC) << std::endl;
+            }
+        }
+        std::cout << std::endl;
         for (int ii = 0; ii < 1; ++ii) {
 
             if (Caffe::mode() == Caffe::GPU)

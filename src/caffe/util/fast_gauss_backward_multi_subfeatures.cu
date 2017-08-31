@@ -2504,8 +2504,8 @@ class FastGaussBackwardMultiSubfeaturesCUDA {
 		//	- BATCH_GAUSS_SIZE == 1
 		//	- INTERPOLATION == false
 
-		IMG_WIDTH = _IMG_SIZE,
-		IMG_HEIGHT = _IMG_SIZE,
+		IMG_WIDTH = MAX(32,_IMG_SIZE), // NOTE: 32 <= BLOCK_X * BATCH_PIXELS_SIZE_X
+		IMG_HEIGHT = MAX(8,_IMG_SIZE), // NOTE:  8 <= BLOCK_Y * BATCH_PIXELS_SIZE_Y
 		MAX_OFFSET = _MAX_OFFSET,
 		BATCH_IMAGES = _BATCH_IMAGES,
 
@@ -2533,15 +2533,15 @@ class FastGaussBackwardMultiSubfeaturesCUDA {
 		NUM_SM = 1, // number of streaming multiprocessors
 
 		// we are processing with K subfeature types (w,mu1,mu2,sigma) that will all have the same offsets and use the same error data
-		NUM_K = 4,
+		NUM_K = 3,
 
 		// number of K elements to load at once (we use only LDS.64 since it only leads to two-way bank conflict which has minor penalty
-		BATCH_K_SIZE = 2,
+		BATCH_K_SIZE = 1,
 
 		BATCH_PIXELS_SIZE_X = 1,
 		BATCH_PIXELS_SIZE_Y = 8,
 
-		BLOCK_X = 16 / BATCH_PIXELS_SIZE_X,
+		BLOCK_X = 32 / BATCH_PIXELS_SIZE_X,
 		BLOCK_Y = 8 / BATCH_PIXELS_SIZE_Y,
 
 		BLOCK_FEATURES = 8,
@@ -2778,8 +2778,11 @@ void fast_gauss_backward_multi_subfeatures<float>(const float* filtered_images, 
 	// we will split image into patches of size [IMG_HEIGHT x IMG_WIDTH] so use that as image size, however,
 	// we need to increase the number of images that will be process as each patch is now considered as one image
 	// there is no need to recombine the output since we just sum over all patches to get gradients
-	int new_img_parts_width = (int)ceil((float)img_width / img_size);
-	int new_img_parts_height = (int)ceil((float)img_height / img_size);
+	// NOTE:
+	//	we make sure img size is not smaller then what a single block of cuda threads will use (i.e. 32x8)
+
+	int new_img_parts_width = (int)ceil((float)img_width / max(32,img_size));
+	int new_img_parts_height = (int)ceil((float)img_height / max(8,img_size));
 
 	int num_images = I* new_img_parts_width * new_img_parts_height;
 

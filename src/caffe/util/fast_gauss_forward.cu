@@ -206,6 +206,12 @@ public:
 							 (threadIdx_y * BATCH_PIXELS_SIZE_Y )  );
 
 		}
+		static __forceinline__ __device__ unsigned warp_lane_id()
+		{
+			unsigned ret;
+			asm volatile ("mov.u32 %0, %laneid;" : "=r"(ret));
+			return ret;
+		}
 	};
 };
 
@@ -585,6 +591,7 @@ public:
 	int g_index;
 
 	int image_index;
+	int warp_id;
 
 #define COPY_VECTOR4(Y,X) \
 { \
@@ -632,9 +639,9 @@ public:
 
 
 		NDIndexing<BATCH_IMAGES,
+				NDIndexing<PIXELS_INTERPOLATION_Dx,
 				NDIndexing<(BATCH_PIXELS_SIZE_X * BATCH_PIXELS_SIZE_Y)/BATCH_PIXELS_FLOAT4,
-						NDIndexing<PIXELS_INTERPOLATION_Dy,
-								NDIndexing<PIXELS_INTERPOLATION_Dx,
+								NDIndexing<PIXELS_INTERPOLATION_Dy,
 										NDIndexingZero<BATCH_COMPUTE_FEATURES_SIZE> > > > > indexing;
 
 		#pragma unroll
@@ -643,9 +650,9 @@ public:
 			// i goes over [BATCH_N][BATCH_FEATURES_SIZE][PIXELS_INTERPOLATION_SIZE][BATCH_PIXELS_SIZE_/4] array so get indexes for both manually
 			int n = indexing.getIndex<0>(i);
 			int f = indexing.getIndex<4>(i);
-			int interpolation_j = indexing.getIndex<2>(i);
-			int interpolation_i = indexing.getIndex<3>(i);
-			int px = indexing.getIndex<1>(i);
+			int interpolation_j = indexing.getIndex<3>(i);
+			int interpolation_i = indexing.getIndex<1>(i);
+			int px = indexing.getIndex<2>(i);
 
 			// since we store weight and offset into float4/int4 we need a proper index to access array of quad vectors
 			int f_quad_index = f/NUM_READ_FEATURES;
@@ -689,8 +696,19 @@ public:
 
 					if (n == 0) {
 						if (BATCH_IMAGES <= 1) {
-							float val = reinterpret_cast<float*>(addr_x)[0];
-							load_data.output[data_index].x = val;
+
+							if (interpolation_i == 0) {
+
+								float val = reinterpret_cast<float *>(addr_x)[0];
+								load_data.output[data_index].x = val;
+							} else {
+								int prev_data_index = OFFSET5(f, n, interpolation_j, interpolation_i-1, px,
+															  BATCH_COMPUTE_FEATURES_SIZE, BATCH_IMAGES, PIXELS_INTERPOLATION_Dy, PIXELS_INTERPOLATION_Dx, (BATCH_PIXELS_SIZE_X * BATCH_PIXELS_SIZE_Y) /BATCH_PIXELS_FLOAT4 );
+								// get the value from neigbooring pixels
+								//load_data.output[data_index].x = __shfl_up(load_data.output[prev_data_index].x, warp_id,1);
+								load_data.output[data_index].x = load_data.output[prev_data_index].x;
+
+							}
 						}  else if (BATCH_IMAGES <= 2) {
 							float2 val = reinterpret_cast<float2*>(addr_x)[0];
 
@@ -730,8 +748,8 @@ public:
 				int weights_index = (interpolation_j * PIXELS_INTERPOLATION_Dx + interpolation_i) * BATCH_COMPUTE_FEATURES_SIZE/NUM_READ_FEATURES +  f_quad_index;
 
 				// compute index must NOT include interpolation index since we sum all interpolation values into the same output
-				int compute_index = OFFSET(0, f, n, px,
-										   1,BATCH_FEATURES_SIZE, BATCH_IMAGES,(BATCH_PIXELS_SIZE_X * BATCH_PIXELS_SIZE_Y)/BATCH_PIXELS_FLOAT4);
+				int compute_index = OFFSET5(0, f, n, interpolation_i == 0 ? 0 : 1, px,
+										   1,BATCH_FEATURES_SIZE, BATCH_IMAGES,2,(BATCH_PIXELS_SIZE_X * BATCH_PIXELS_SIZE_Y)/BATCH_PIXELS_FLOAT4);
 
 				float w = 0;
 
@@ -763,9 +781,7 @@ public:
 						   sum_val, w, data_org, computeed_val, interpolation_j,interpolation_i, s_index, f_index + f, block_y, block_x, n);
 				}*/
 			}
-
 		}
-
 	}
 
 };
@@ -919,15 +935,18 @@ fast_gauss_forward_pipeline_kernel(const float* filtered_images,
 		weights_batch_sh = ((float *) offsets_and_weights_sh_class.getData(0)) + OFFSET_BLOCK_MEM_SIZE;
 	}
 
-	float4 out_val[BATCH_FEATURES_SIZE][BATCH_IMAGES][(BATCH_PIXELS_SIZE_X*BATCH_PIXELS_SIZE_Y)/BATCH_PIXELS_FLOAT4];
+	float4 out_val[BATCH_FEATURES_SIZE][BATCH_IMAGES][2][(BATCH_PIXELS_SIZE_X*BATCH_PIXELS_SIZE_Y)/BATCH_PIXELS_FLOAT4];
 
 	for (int f = 0; f < BATCH_FEATURES_SIZE; ++f) {
-		for (int px = 0; px < (BATCH_PIXELS_SIZE_X * BATCH_PIXELS_SIZE_Y) / BATCH_PIXELS_FLOAT4; ++px) {
-			for (int i = 0; i < BATCH_IMAGES; ++i) {
-				out_val[f][i][px].x = 0;
-				out_val[f][i][px].y = 0;
-				out_val[f][i][px].z = 0;
-				out_val[f][i][px].w = 0;
+		for (int i = 0; i < BATCH_IMAGES; ++i) {
+			for (int j = 0; j < 2; ++j) {
+				for (int px = 0; px < (BATCH_PIXELS_SIZE_X * BATCH_PIXELS_SIZE_Y) / BATCH_PIXELS_FLOAT4; ++px) {
+
+					out_val[f][i][j][px].x = 0;
+					out_val[f][i][j][px].y = 0;
+					out_val[f][i][j][px].z = 0;
+					out_val[f][i][j][px].w = 0;
+				}
 			}
 		}
 	}
@@ -947,11 +966,14 @@ fast_gauss_forward_pipeline_kernel(const float* filtered_images,
 				    BATCH_PIXELS_FLOAT4,
 		            SharedMem> pipeline(image_sh_class);
 
+	pipeline.warp_id = BlockIndexingT::Kernel::warp_lane_id();
+
 	// those are for debugging purpuse only
 	pipeline.block_x = block_x;
 	pipeline.block_y = block_y;
 	pipeline.thread_x = thread_x;
 	pipeline.thread_y = thread_y;
+
 
 	const int f_start_block = f_offset - f_block_idx;
 
@@ -1305,7 +1327,7 @@ fast_gauss_forward_pipeline_kernel(const float* filtered_images,
 				// compute
 				pipeline.compute.weights = (float4*)(use_reg_A ? w_A[compute_index.g][0] : w_B[compute_index.g][0]);
 				pipeline.compute.data = (float4*)(use_reg_A ? d_A[compute_index.g][compute_index.f] : d_B[compute_index.g][compute_index.f]);
-				pipeline.compute.output = out_val[compute_index.f][0];
+				pipeline.compute.output = out_val[compute_index.f][0][0];
 
 			}
 
@@ -1352,8 +1374,8 @@ fast_gauss_forward_pipeline_kernel(const float* filtered_images,
 			pipeline.f_index = f_offset + compute_index.f;
 
 			if (load_global_enabled) {
-				if (1)
-				//image_sh_class.template load_global<(IMG_WIDTH + 2 * MAX_OFFSET)*BATCH_N,NUM_REPLICATE_OFFSETED,true,1>(pipeline.load_global.reading_ptr,
+				if (0)
+				//image_sh_class.template load_global<(IMG_WIDTH + 2 * MAX_OFFSET)*BATCH_IMAGES,NUM_REPLICATE_OFFSETED,true,1>(pipeline.load_global.reading_ptr,
 				image_sh_class.template load_global<(IMG_WIDTH + 2 * MAX_OFFSET)*BATCH_IMAGES,NUM_REPLICATE_OFFSETED,false,1>(pipeline.load_global.reading_ptr,
 																											   pipeline.load_global.writing_ptr,
 																											   pipeline.load_global.img_read_width);
@@ -1371,7 +1393,7 @@ fast_gauss_forward_pipeline_kernel(const float* filtered_images,
 			//	asm("bar.arrive 15, 1536;"); // # of threads must be greater than 0
 #endif
 
-			if (0)
+			if (1)
 			if (load_global_enabled) {
 				image_sh_class.template store_shared<NUM_REPLICATE_OFFSETED>(ld_data[load_global.s], pipeline.load_global.writing_ptr);
 			}
@@ -1491,39 +1513,41 @@ fast_gauss_forward_pipeline_kernel(const float* filtered_images,
 	#pragma unroll
 	for (int f = 0; f < BATCH_FEATURES_SIZE; ++f) {
 		for (int i = 0; i < BATCH_IMAGES; ++i ){
-			if (BATCH_PIXELS_BY_WIDTH) {
-				// version for loading per 4 pixels by width and 1 pixel per height
-				/*#pragma unroll
-				for (int px_y = 0; px_y < BATCH_PIXELS_SIZE_Y; ++px_y) {
-					#pragma unroll
-					for (int px_x = 0; px_x < BATCH_PIXELS_SIZE_X; px_x+=BATCH_PIXELS_FLOAT4) {
-						//float4 tmp;
-						//tmp.x = 8; tmp.y = 8; tmp.z = 8; tmp.w = 8;
-						//reinterpret_cast<float4*>(output_batch)[OFFSET(n, f + f_offset, (block_y + thread_y + px_y), (block_x + thread_x + px_x), I, F, img_height, img_width + 2*MAX_OFFSET)/4] = tmp;
-						if (BATCH_PIXELS_FLOAT4 >= 4)
-							reinterpret_cast<float4*>(output_batch)[OFFSET(n, f + f_offset, (block_y + thread_y + px_y), (block_x + thread_x + px_x), I, F, img_height + 2*MAX_OFFSET, img_width + 2*MAX_OFFSET)/4] = out_val[f][(px_y * BATCH_PIXELS_SIZE_X + px_x)/4];
-						else if (BATCH_PIXELS_FLOAT4 >= 2) {
-							reinterpret_cast<float2*>(output_batch)[OFFSET(n, f + f_offset, (block_y + thread_y + px_y), (block_x + thread_x + px_x), I, F, img_height + 2*MAX_OFFSET, img_width + 2*MAX_OFFSET)/2].x = out_val[f][(px_y * BATCH_PIXELS_SIZE_X + px_x)/2].x;
-							reinterpret_cast<float2*>(output_batch)[OFFSET(n, f + f_offset, (block_y + thread_y + px_y), (block_x + thread_x + px_x), I, F, img_height + 2*MAX_OFFSET, img_width + 2*MAX_OFFSET)/2].y = out_val[f][(px_y * BATCH_PIXELS_SIZE_X + px_x)/2].y;
+			for (int j = 0; j < 2; ++j ){
+				if (BATCH_PIXELS_BY_WIDTH) {
+					// version for loading per 4 pixels by width and 1 pixel per height
+					/*#pragma unroll
+					for (int px_y = 0; px_y < BATCH_PIXELS_SIZE_Y; ++px_y) {
+						#pragma unroll
+						for (int px_x = 0; px_x < BATCH_PIXELS_SIZE_X; px_x+=BATCH_PIXELS_FLOAT4) {
+							//float4 tmp;
+							//tmp.x = 8; tmp.y = 8; tmp.z = 8; tmp.w = 8;
+							//reinterpret_cast<float4*>(output_batch)[OFFSET(n, f + f_offset, (block_y + thread_y + px_y), (block_x + thread_x + px_x), I, F, img_height, img_width + 2*MAX_OFFSET)/4] = tmp;
+							if (BATCH_PIXELS_FLOAT4 >= 4)
+								reinterpret_cast<float4*>(output_batch)[OFFSET(n, f + f_offset, (block_y + thread_y + px_y), (block_x + thread_x + px_x), I, F, img_height + 2*MAX_OFFSET, img_width + 2*MAX_OFFSET)/4] = out_val[f][(px_y * BATCH_PIXELS_SIZE_X + px_x)/4];
+							else if (BATCH_PIXELS_FLOAT4 >= 2) {
+								reinterpret_cast<float2*>(output_batch)[OFFSET(n, f + f_offset, (block_y + thread_y + px_y), (block_x + thread_x + px_x), I, F, img_height + 2*MAX_OFFSET, img_width + 2*MAX_OFFSET)/2].x = out_val[f][(px_y * BATCH_PIXELS_SIZE_X + px_x)/2].x;
+								reinterpret_cast<float2*>(output_batch)[OFFSET(n, f + f_offset, (block_y + thread_y + px_y), (block_x + thread_x + px_x), I, F, img_height + 2*MAX_OFFSET, img_width + 2*MAX_OFFSET)/2].y = out_val[f][(px_y * BATCH_PIXELS_SIZE_X + px_x)/2].y;
+							}
+							//else
+							//	reinterpret_cast<float*>(output_batch)[OFFSET(n, f + f_offset, (block_y + thread_y + px_y), (block_x + thread_x + px_x), I, F, img_height + 2*MAX_OFFSET, img_width + 2*MAX_OFFSET)/1] = out_val[f][(px_y * BATCH_PIXELS_SIZE_X + px_x)/1];
 						}
-						//else
-						//	reinterpret_cast<float*>(output_batch)[OFFSET(n, f + f_offset, (block_y + thread_y + px_y), (block_x + thread_x + px_x), I, F, img_height + 2*MAX_OFFSET, img_width + 2*MAX_OFFSET)/1] = out_val[f][(px_y * BATCH_PIXELS_SIZE_X + px_x)/1];
-					}
-				}*/
-			} else {
-				// version for loading per 1 pixels by width and 4 pixel per height
-				#pragma unroll
-				for (int px_y = 0; px_y < BATCH_PIXELS_SIZE_Y; px_y+=BATCH_PIXELS_FLOAT4) {
+					}*/
+				} else {
+					// version for loading per 1 pixels by width and 4 pixel per height
 					#pragma unroll
-					for (int px_x = 0; px_x < BATCH_PIXELS_SIZE_X; ++px_x) {
+					for (int px_y = 0; px_y < BATCH_PIXELS_SIZE_Y; px_y+=BATCH_PIXELS_FLOAT4) {
+						#pragma unroll
+						for (int px_x = 0; px_x < BATCH_PIXELS_SIZE_X; ++px_x) {
 
-						int out_px_y = patch_j * IMG_HEIGHT + (block_y + thread_y + 0 + px_y);
-						int out_px_x = patch_i * IMG_WIDTH + (block_x + thread_x + px_x);
+							int out_px_y = patch_j * IMG_HEIGHT + (block_y + thread_y + 0 + px_y);
+							int out_px_x = patch_i * IMG_WIDTH + (block_x + thread_x + px_x - j);
 
-						if (BATCH_PIXELS_FLOAT4 > 0 && out_px_x < img_width_ && out_px_y + 0 < img_height_) atomicAdd(&output_batch[OFFSET(nn+i, f + f_offset, patch_j * IMG_HEIGHT + (block_y + thread_y + px_y) + 0, patch_i * IMG_WIDTH + (block_x + thread_x + px_x), N, F, img_height_, img_width_)], out_val[f][i][px_y/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px_x].x);
-						if (BATCH_PIXELS_FLOAT4 > 1 && out_px_x < img_width_ && out_px_y + 1 < img_height_) atomicAdd(&output_batch[OFFSET(nn+i, f + f_offset, patch_j * IMG_HEIGHT + (block_y + thread_y + px_y) + 1, patch_i * IMG_WIDTH + (block_x + thread_x + px_x), N, F, img_height_, img_width_)], out_val[f][i][px_y/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px_x].y);
-						if (BATCH_PIXELS_FLOAT4 > 2 && out_px_x < img_width_ && out_px_y + 2 < img_height_) atomicAdd(&output_batch[OFFSET(nn+i, f + f_offset, patch_j * IMG_HEIGHT + (block_y + thread_y + px_y) + 2, patch_i * IMG_WIDTH + (block_x + thread_x + px_x), N, F, img_height_, img_width_)], out_val[f][i][px_y/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px_x].z);
-						if (BATCH_PIXELS_FLOAT4 > 3 && out_px_x < img_width_ && out_px_y + 3 < img_height_) atomicAdd(&output_batch[OFFSET(nn+i, f + f_offset, patch_j * IMG_HEIGHT + (block_y + thread_y + px_y) + 3, patch_i * IMG_WIDTH + (block_x + thread_x + px_x), N, F, img_height_, img_width_)], out_val[f][i][px_y/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px_x].w);
+							if (BATCH_PIXELS_FLOAT4 > 0 && out_px_x < img_width_ && out_px_y + 0 < img_height_) atomicAdd(&output_batch[OFFSET(nn+i, f + f_offset, out_px_y + 0, out_px_x, N, F, img_height_, img_width_)], out_val[f][i][j][px_y/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px_x].x);
+							if (BATCH_PIXELS_FLOAT4 > 1 && out_px_x < img_width_ && out_px_y + 1 < img_height_) atomicAdd(&output_batch[OFFSET(nn+i, f + f_offset, out_px_y + 1, out_px_x, N, F, img_height_, img_width_)], out_val[f][i][j][px_y/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px_x].y);
+							if (BATCH_PIXELS_FLOAT4 > 2 && out_px_x < img_width_ && out_px_y + 2 < img_height_) atomicAdd(&output_batch[OFFSET(nn+i, f + f_offset, out_px_y + 2, out_px_x, N, F, img_height_, img_width_)], out_val[f][i][j][px_y/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px_x].z);
+							if (BATCH_PIXELS_FLOAT4 > 3 && out_px_x < img_width_ && out_px_y + 3 < img_height_) atomicAdd(&output_batch[OFFSET(nn+i, f + f_offset, out_px_y + 3, out_px_x, N, F, img_height_, img_width_)], out_val[f][i][j][px_y/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px_x].w);
+						}
 					}
 				}
 			}
@@ -2057,7 +2081,6 @@ template <typename BlockIndexingT>
 class FastForwardInputWeightAndOffsets {
 	enum {
 		// values from main block indexing sizes
-		BATCH_FEATURES_SIZE = BlockIndexingT::BATCH_FEATURES_SIZE,
 		NUM_BATCH_FEATURES =  BlockIndexingT::BATCH_COMPUTE_FEATURES_SIZE >= 4 ? 4 :
 							  (BlockIndexingT::BATCH_COMPUTE_FEATURES_SIZE >= 2 ? 2 : 1),
 
@@ -2141,10 +2164,11 @@ class FastGaussForwardCUDA {
 		// BLOCK_SUBFEATURES:  	2 min allowed
 		// BATCH_GAUSS_SIZE:	2 min allowed
 
-		IMG_WIDTH = _IMG_SIZE,
-		IMG_HEIGHT = _IMG_SIZE,
+		IMG_WIDTH = MAX(32,_IMG_SIZE),
+		IMG_HEIGHT = MAX(8,_IMG_SIZE),
 		MAX_OFFSET = _MAX_OFFSET,
-		BATCH_IMAGES = _USE_INTERPOLATION ? _BATCH_IMAGES : 1,
+		//BATCH_IMAGES = _USE_INTERPOLATION ? _BATCH_IMAGES : 2,
+		BATCH_IMAGES=1,
 
 		// special cases for:
 		//	- BATCH_GAUSS_SIZE == 1
@@ -2177,7 +2201,7 @@ class FastGaussForwardCUDA {
 		BATCH_PIXELS_SIZE_X = 1,
 		BATCH_PIXELS_SIZE_Y = 8,
 
-		BLOCK_X = _USE_INTERPOLATION ? 16/BATCH_PIXELS_SIZE_X : 32/BATCH_PIXELS_SIZE_X,
+		BLOCK_X = 32/BATCH_PIXELS_SIZE_X,
 		BLOCK_Y = 8/BATCH_PIXELS_SIZE_Y,
 		BLOCK_FEATURES = 8,
 
@@ -2209,7 +2233,9 @@ public:
 			BATCH_GAUSS_SIZE,
 			BATCH_IMAGES,
 			IMG_WIDTH, IMG_HEIGHT,
-			MAX_OFFSET, false, 5, 2> BlockIndexingPipelineT;
+			MAX_OFFSET,
+			//false, 5, 2> BlockIndexingPipelineT;
+			false, 4, 2> BlockIndexingPipelineT;
 	// false, 5, 2 == USE_SEPERATE_OFFSET_AND_WEIGHTS_BUFFER, LOAD_DATA_DELAY, LOAD_W_AND_OFF_DELAY
 
 	FastForwardInputImage<BlockIndexingPipelineT> image_cuda_prepare;
@@ -2340,7 +2366,7 @@ void fast_gauss_forward<float>(const float* filtered_images, const int* filter_o
 							   float* prepared_filter_offsets_and_weights, cudaStream_t streamId) {
 
 
-	{
+	if (1) {
 
 		int img_size = MAX(img_width, img_height) >= 32 ? 32 : 16;
 		int max_offset = MAX(kernel_width, kernel_height);
@@ -2348,8 +2374,10 @@ void fast_gauss_forward<float>(const float* filtered_images, const int* filter_o
 		// we will split image into patches of size [IMG_HEIGHT x IMG_WIDTH] so use that as image size, however,
 		// we need to increase the number of images that will be process as each patch is now considered as one image
 		// there is no need to recombine the output since we just sum over all patches to get gradients
-		int new_img_parts_width = (int)ceil((float)img_width / img_size);
-		int new_img_parts_height = (int)ceil((float)img_height / img_size);
+		// NOTE:
+		//	we make sure img size is not smaller then what a single block of cuda threads will use (i.e. 32x8)
+		int new_img_parts_width = (int)ceil((float)img_width / max(32,img_size));
+		int new_img_parts_height = (int)ceil((float)img_height / max(8,img_size));
 
 		int num_images = I* new_img_parts_width * new_img_parts_height;
 
@@ -2411,8 +2439,14 @@ void fast_gauss_forward<float>(const float* filtered_images, const int* filter_o
 			std::cout << "FastGaussForwardCUDA.run_kernel() in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
 		}
 	}
-
 	return;
+    if (prepared_filtered_images_size != 0 || prepared_filter_weights_size != 0 || prepared_filter_offsets_size != 0) {
+        *prepared_filtered_images_size = 1;
+        *prepared_filter_weights_size = 1;
+        *prepared_filter_offsets_size = 1;
+		return;
+    }
+
 
 	static const int BATCH_PIXELS_SIZE_X = 1;
 	static const int BATCH_PIXELS_SIZE_Y = 8;
@@ -2420,7 +2454,7 @@ void fast_gauss_forward<float>(const float* filtered_images, const int* filter_o
 	static const int PIXELS_INTERPOLATION_Dx = 2;
 	static const int PIXELS_INTERPOLATION_Dy = 2;
 
-	static const int BLOCK_X = 16/BATCH_PIXELS_SIZE_X;
+	static const int BLOCK_X = 32/BATCH_PIXELS_SIZE_X;
 	static const int BLOCK_Y = 8/BATCH_PIXELS_SIZE_Y;
 	static const int BLOCK_FEATURES = 8;
 
@@ -2431,7 +2465,7 @@ void fast_gauss_forward<float>(const float* filtered_images, const int* filter_o
 	static const int BATCH_MEM_SUBFEATURES_SIZE = 2;
 	static const int BATCH_GAUSS_SIZE = 2;
 
-	static const int BATCH_N = 2;
+	static const int BATCH_N = 1;
 
 	static const int IMG_WIDTH = 32;
 	static const int IMG_HEIGHT = 32;
@@ -2450,7 +2484,10 @@ void fast_gauss_forward<float>(const float* filtered_images, const int* filter_o
 					BATCH_GAUSS_SIZE,
 					BATCH_N,
 					IMG_WIDTH, IMG_HEIGHT,
-					MAX_OFFSET, false, 5, 2> BlockIndexingPipelineT;
+					MAX_OFFSET,
+			//false, 5, 2> BlockIndexingPipelineT;
+			//false, 1, 6> BlockIndexingPipelineT;
+			false, 4, 2> BlockIndexingPipelineT;
 
 	int new_img_parts_width = (int)ceil((float)img_width / IMG_WIDTH);
 	int new_img_parts_height = (int)ceil((float)img_height / IMG_HEIGHT);
@@ -2572,6 +2609,9 @@ void fast_gauss_forward<float>(const float* filtered_images, const int* filter_o
 	std::cout << "threadsPerBlock " << threadsPerBlock.x << "," << threadsPerBlock.y << "," << threadsPerBlock.z << std::endl;
 	std::cout << "numBlocks " << numBlocks.x << "," << numBlocks.y << "," << numBlocks.z << std::endl;
 
+//#define FIND_BEST_MEM_LOAD_DELAY
+#ifndef FIND_BEST_MEM_LOAD_DELAY
+
 	for (int i = 0; i < 30; ++i) {
 
 		cudaMemset(output, 0, sizeof(float) * I * F * img_width * img_height);
@@ -2586,13 +2626,14 @@ void fast_gauss_forward<float>(const float* filtered_images, const int* filter_o
 		std::cout << "fast_gauss_forward_pipeline_kernel in for "<< (((float)(end_t-start_t))/CLOCKS_PER_SEC)<< std::endl;
 	}
 
-/*
+#else
+
 #define CALL_OP(TMP1, TMP2) \
 	{ \
 	float time_all = 0; \
 	for (int i = 0; i < 50; ++i) { \
 		clock_t start_t = clock(); \
-		fast_gauss_forward_pipeline_kernel<BlockIndexingPipelineT,TMP1,TMP2><<<numBlocks,threadsPerBlock>>>(filtered_images_with_border, prepared_filter_offsets, prepared_filter_weights, prepared_filter_offsets_and_weights, output, I, S, F, G, img_width, img_height, kernel_width, kernel_height, new_img_parts_width, new_img_parts_height); \
+		fast_gauss_forward_pipeline_kernel<BlockIndexingPipelineT,TMP1,TMP2><<<numBlocks,threadsPerBlock>>>(filtered_images_with_border, prepared_filter_offsets_, prepared_filter_weights_, prepared_filter_offsets_and_weights_, output, I, S, F, G, img_width, img_height, new_img_parts_width, new_img_parts_height); \
 		cudaDeviceSynchronize(); \
 		\
 		clock_t end_t = clock(); \
@@ -2664,7 +2705,7 @@ void fast_gauss_forward<float>(const float* filtered_images, const int* filter_o
 	CALL_OP(6,5);
 	CALL_OP(6,6);
 	CALL_OP(6,7);
-*/
+#endif
 	//std::cout << "fast_gauss_forward_pipeline_kernel in " <<  << std::endl;
 
 	cudaFree(prepared_filter_weights);
