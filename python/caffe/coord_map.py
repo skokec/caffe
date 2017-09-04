@@ -12,7 +12,7 @@ from caffe import layers as L
 PASS_THROUGH_LAYERS = ['AbsVal', 'BatchNorm', 'Bias', 'BNLL', 'Dropout',
                        'Eltwise', 'ELU', 'Log', 'LRN', 'Exp', 'MVN', 'Power',
                        'ReLU', 'PReLU', 'Scale', 'Sigmoid', 'Split', 'TanH',
-                       'Threshold']
+                       'Threshold','BatchNormScale']
 
 
 def conv_params(fn):
@@ -147,6 +147,7 @@ def coord_map_from_to(top_from, top_to):
                 from_maps[bottom] = compose(from_maps[top], coord_map(top.fn))
                 frontier.add(bottom)
         except UndefinedMapException:
+	    print "UndefinedMapException in from", bottom
             pass
 
     # now walk back from top_to until we hit a common blob
@@ -162,6 +163,7 @@ def coord_map_from_to(top_from, top_to):
                 to_maps[bottom] = compose(to_maps[top], coord_map(top.fn))
                 frontier.add(bottom)
         except UndefinedMapException:
+	    print "UndefinedMapException in to"
             continue
 
     # if we got here, we did not find a blob in common
