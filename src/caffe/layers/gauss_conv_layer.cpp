@@ -639,21 +639,114 @@ double caffe_sum(const int N, const double* X) {
 
 template <typename Dtype>
 void BaseGaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_pass) {
+    do_precompute_guassian_weights(*this->param_buffer_w_.get(),
+                                   *this->param_buffer_mu1_.get(),
+                                   *this->param_buffer_mu2_.get(),
+                                   *this->param_buffer_sigma_.get(),
+                                   this->conv_in_channels_, this->conv_out_channels_, this->NUM_GAUSS,
+                                   this->kernel_h_, this->kernel_w_,
+                                   is_backward_pass,
+                                   this->use_gmm_weight_normalization,
+                                   this->use_gmm_square_gauss_normalization,
+                                   this->gmm_sigma_lower_bound,
+                                   this->gmm_component_border_bound,
+                                   this->gmm_discretize_mean,
+                                   this->weight_buffer_.get(),
+                                   this->weight_vert_buffer_.get(),
+                                   this->weight_horiz_buffer_.get(),
+								   &this->is_weight_enabled_buffer_,
+                                   this->deriv_error_buffer_.get(),
+                                   this->deriv_weight_buffer_.get(),
+                                   this->deriv_mu1_buffer_.get(),
+                                   this->deriv_mu2_buffer_.get(),
+                                   this->deriv_sigma_buffer_.get());
+}
+
+template <typename Dtype>
+void BaseGaussianConvLayer<Dtype>::do_precompute_guassian_weights(Blob<Dtype>& gauss_param_buffer_w,
+                                                                  Blob<Dtype>& gauss_param_buffer_mu1,
+                                                                  Blob<Dtype>& gauss_param_buffer_mu2,
+                                                                  Blob<Dtype>& gauss_param_buffer_sigma,
+                                                                  int num_in_channels, int num_out_channels, int num_gauss,
+                                                                  int kernel_h, int kernel_w,
+                                                                  bool is_backward_pass,
+                                                                  bool use_gmm_weight_normalization,
+                                                                  bool use_gmm_square_gauss_normalization,
+                                                                  bool gmm_discretize_mean,
+                                                                  Dtype gmm_sigma_lower_bound,
+                                                                  Dtype gmm_component_border_bound,
+                                                                  // output buffers
+                                                                  Blob<Dtype>* weight_buffer,
+                                                                  Blob<Dtype>* weight_vert_buffer,
+                                                                  Blob<Dtype>* weight_horiz_buffer,
+
+																  Blob<int>* is_weight_enabled_buffer,
+                                                                  Blob<Dtype>* deriv_error_buffer,
+                                                                  Blob<Dtype>* deriv_weight_buffer,
+                                                                  Blob<Dtype>* deriv_mu1_buffer,
+                                                                  Blob<Dtype>* deriv_mu2_buffer,
+                                                                  Blob<Dtype>* deriv_sigma_buffer) {
+
+    /*
+
+    // input buffers
+
+    param_buffer_w_;
+	param_buffer_mu1_;
+	param_buffer_mu2_;
+	param_buffer_sigma_;
+
+    is_weight_enabled_buffer_
+
+    // input size values:
+
+    conv_out_channels_
+    conv_in_channels_
+    NUM_GAUSS
+
+    kernel_h_
+    kernel_w_
+
+
+    // switches/flags
+    is_backward_pass
+    use_gmm_weight_normalization
+    use_gmm_square_gauss_normalization
+
+    gmm_sigma_lower_bound
+    gmm_component_border_bound
+    gmm_discretize_mean
+
+    // output buffers
+    weight_buffer_
+    weight_vert_buffer_
+    weight_horiz_buffer_
+
+    deriv_error_buffer_
+    deriv_weight_buffer_
+    deriv_mu1_buffer_
+    deriv_mu2_buffer_
+    deriv_sigma_buffer_
+
+    */
+
+    // read number of channels, number of output_features and number of gaussians from parameters
+
 
 	clock_t start_t = clock();
 
 	// force head to CPU to avoid copying from GPU back to CPU which would be zeroed anyway
-	this->weight_buffer_->force_cpu_data();
+	weight_buffer->force_cpu_data();
 
-	this->weight_vert_buffer_->force_cpu_data();
-	this->weight_horiz_buffer_->force_cpu_data();
+	if (weight_vert_buffer != NULL) weight_vert_buffer->force_cpu_data();
+	if (weight_horiz_buffer != NULL) weight_horiz_buffer->force_cpu_data();
 
-	Dtype* weight = this->weight_buffer_->mutable_cpu_data();
+	Dtype* weight = weight_buffer->mutable_cpu_data();
 
-	Dtype* weight_vert = this->weight_vert_buffer_->mutable_cpu_data();
-	Dtype* weight_horiz = this->weight_horiz_buffer_->mutable_cpu_data();
+	Dtype* weight_vert = weight_vert_buffer != NULL ? weight_vert_buffer->mutable_cpu_data() : NULL;
+	Dtype* weight_horiz = weight_horiz_buffer != NULL ? weight_horiz_buffer->mutable_cpu_data() : NULL;
 
-	int* is_weight_enabled = this->is_weight_enabled_buffer_.mutable_cpu_data();
+	int* is_weight_enabled = is_weight_enabled_buffer != NULL ? is_weight_enabled_buffer->mutable_cpu_data() : NULL;
 
 	Dtype* deriv_error, *deriv_weight, *deriv_sigma, *deriv_mu1, *deriv_mu2, *tmp_deriv_weight;
 
@@ -661,61 +754,61 @@ void BaseGaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_
 	if (is_backward_pass) {
 
 		// force head to CPU to avoid copying from GPU back to CPU which would be zeroed anyway
-		this->deriv_error_buffer_->force_cpu_data();
-		this->deriv_weight_buffer_->force_cpu_data();
-		this->deriv_mu1_buffer_->force_cpu_data();
-		this->deriv_mu2_buffer_->force_cpu_data();
-		this->deriv_sigma_buffer_->force_cpu_data();
+		deriv_error_buffer->force_cpu_data();
+		deriv_weight_buffer->force_cpu_data();
+		deriv_mu1_buffer->force_cpu_data();
+		deriv_mu2_buffer->force_cpu_data();
+		deriv_sigma_buffer->force_cpu_data();
 
-		deriv_error = this->deriv_error_buffer_->mutable_cpu_data();
-		deriv_weight = this->deriv_weight_buffer_->mutable_cpu_data();
-		deriv_mu1 = this->deriv_mu1_buffer_->mutable_cpu_data();
-		deriv_mu2 = this->deriv_mu2_buffer_->mutable_cpu_data();
-		deriv_sigma = this->deriv_sigma_buffer_->mutable_cpu_data();
+		deriv_error = deriv_error_buffer->mutable_cpu_data();
+		deriv_weight = deriv_weight_buffer->mutable_cpu_data();
+		deriv_mu1 = deriv_mu1_buffer->mutable_cpu_data();
+		deriv_mu2 = deriv_mu2_buffer->mutable_cpu_data();
+		deriv_sigma = deriv_sigma_buffer->mutable_cpu_data();
 
 		//tmp_deriv_weight = this->tmp_deriv_weight_buffer_.mutable_cpu_data();
 		tmp_deriv_weight = deriv_weight;
 
-		memset(deriv_error, 0, sizeof(Dtype) * this->deriv_error_buffer_->count());
-		memset(deriv_weight, 0, sizeof(Dtype) * this->deriv_weight_buffer_->count());
-		memset(deriv_mu1, 0, sizeof(Dtype) * this->deriv_mu1_buffer_->count());
-		memset(deriv_mu2, 0, sizeof(Dtype) * this->deriv_mu2_buffer_->count());
-		memset(deriv_sigma, 0, sizeof(Dtype) * this->deriv_sigma_buffer_->count());
+		memset(deriv_error, 0, sizeof(Dtype) * deriv_error_buffer->count());
+		memset(deriv_weight, 0, sizeof(Dtype) * deriv_weight_buffer->count());
+		memset(deriv_mu1, 0, sizeof(Dtype) * deriv_mu1_buffer->count());
+		memset(deriv_mu2, 0, sizeof(Dtype) * deriv_mu2_buffer->count());
+		memset(deriv_sigma, 0, sizeof(Dtype) * deriv_sigma_buffer->count());
 
 		memset(tmp_deriv_weight, 0, sizeof(Dtype) * this->tmp_deriv_weight_buffer_.count());
 	}
 
-	memset(weight, 0, sizeof(Dtype) * this->weight_buffer_->count());
+	memset(weight, 0, sizeof(Dtype) * weight_buffer->count());
 
 	// pre-compute weights from guassian params
-	Blob<Dtype>& gauss_param_buffer_w = *this->param_buffer_w_;
-	Blob<Dtype>& gauss_param_buffer_mu1 = *this->param_buffer_mu1_;
-	Blob<Dtype>& gauss_param_buffer_mu2 = *this->param_buffer_mu2_;
-	Blob<Dtype>& gauss_param_buffer_sigma = *this->param_buffer_sigma_;
+	/*Blob<Dtype>& gauss_param_buffer_w = *param_buffer_w;
+	Blob<Dtype>& gauss_param_buffer_mu1 = *param_buffer_mu1;
+	Blob<Dtype>& gauss_param_buffer_mu2 = *param_buffer_mu2;
+	Blob<Dtype>& gauss_param_buffer_sigma = *param_buffer_sigma;*/
 
 	const Dtype* gauss_params_w = gauss_param_buffer_w.cpu_data();
 	Dtype* gauss_params_mu1 = gauss_param_buffer_mu1.mutable_cpu_data();
 	Dtype* gauss_params_mu2 = gauss_param_buffer_mu2.mutable_cpu_data();
 	Dtype* gauss_params_sigma = gauss_param_buffer_sigma.mutable_cpu_data();
 
-	//int kernel_center_w = this->kernel_w_ / 2;
-	//int kernel_center_h = this->kernel_h_ / 2;
+	//int kernel_center_w = kernel_w / 2;
+	//int kernel_center_h = kernel_h / 2;
 	int kernel_center_w = 0;
 	int kernel_center_h = 0;
 
-	int kernel_size = this->kernel_h_ * this->kernel_w_;
+    int kernel_size = kernel_h * kernel_w;
 
 	Dtype* weight_tmp = (Dtype*)malloc(sizeof(Dtype)*kernel_size);
 
-	for (int i = 0; i < this->conv_out_channels_; ++i) { // over each feature (i.e out feature)
+	for (int i = 0; i < num_out_channels; ++i) { // over each feature (i.e out feature)
 
 		// new weight normalization over all subfeatures
 		Dtype w_sum = 0;
-		if (this->use_gmm_weight_normalization) {
+		if (use_gmm_weight_normalization) {
 			CHECK_EQ(0,1) << "GMM weight normalization not implemented with new version!!";
 
-			for (int j = 0; j < this->conv_in_channels_; ++j) // sum weigths over all subfeature of feature f
-				w_sum += caffe_cpu_asum(NUM_GAUSS, gauss_params_w + gauss_param_buffer_w.offset(0,j,i)); // TODO: fix S and F indexes
+			for (int j = 0; j < num_in_channels; ++j) // sum weigths over all subfeature of feature f
+				w_sum += caffe_cpu_asum(num_gauss, gauss_params_w + gauss_param_buffer_w.offset(0,j,i)); // TODO: fix S and F indexes
 		} else {
 			// set sum to 1 if we do not do weight normalization
 			w_sum = 1;
@@ -723,15 +816,15 @@ void BaseGaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_
 
 		Dtype w_sum_2 = w_sum*w_sum;
 
-		for (int j = 0; j < this->conv_in_channels_; ++j) { // over each subfeature (i.e. in feature)
+		for (int j = 0; j < num_in_channels; ++j) { // over each subfeature (i.e. in feature)
 
-			int weights_offset = this->weight_buffer_->offset(i,j);
+			int weights_offset = weight_buffer->offset(i,j);
 
 			// original weight normalization within subfeature only
-			//Dtype w_sum = caffe_cpu_asum(NUM_GAUSS, gauss_params_w + gauss_param_buffer_w.offset(0,j,i));
+			//Dtype w_sum = caffe_cpu_asum(num_gauss, gauss_params_w + gauss_param_buffer_w.offset(0,j,i));
 			//Dtype w_sum_2 = w_sum*w_sum;
 
-			for (int k = 0; k < NUM_GAUSS; ++k) {
+			for (int k = 0; k < num_gauss; ++k) {
 				Dtype w = 	gauss_params_w[gauss_param_buffer_w.offset(0,j,k,i)];
 				//Dtype& mu1 = 	gauss_params_mu1[gauss_param_buffer_mu1.offset(0,j,k,i)] + kernel_center_w;
 				//Dtype& mu2 = 	gauss_params_mu2[gauss_param_buffer_mu2.offset(0,j,k,i)] + kernel_center_h;
@@ -740,20 +833,20 @@ void BaseGaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_
 				Dtype& sigma = 	gauss_params_sigma[gauss_param_buffer_sigma.offset(0,j,k,i)];
 
 				// do not allow sigma bellow 0.1 threshold !!
-				sigma = std::max(this->gmm_sigma_lower_bound,sigma);
+				sigma = std::max(gmm_sigma_lower_bound,sigma);
 
 				// do not allow mean outside of kernel bounds reduced by gmm_component_border_bound
-				mu1_org = std::max((Dtype)this->gmm_component_border_bound,mu1_org);
-				mu2_org = std::max((Dtype)this->gmm_component_border_bound,mu2_org);
+				mu1_org = std::max((Dtype)gmm_component_border_bound,mu1_org);
+				mu2_org = std::max((Dtype)gmm_component_border_bound,mu2_org);
 
-				mu1_org = std::min(this->kernel_w_-1 - (Dtype)this->gmm_component_border_bound,mu1_org);
-				mu2_org = std::min(this->kernel_h_-1 - (Dtype)this->gmm_component_border_bound,mu2_org);
+				mu1_org = std::min(kernel_w-1 - (Dtype)gmm_component_border_bound,mu1_org);
+				mu2_org = std::min(kernel_h-1 - (Dtype)gmm_component_border_bound,mu2_org);
 
 				Dtype mu1 = mu1_org;
 				Dtype mu2 = mu2_org;
 
 				// discretize mean
-				if (this->gmm_discretize_mean) {
+				if (gmm_discretize_mean) {
 					// round means to integer values, however this should not be saved back to blob
 					mu1 = round(mu1);
 					mu2 = round(mu2);
@@ -762,7 +855,8 @@ void BaseGaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_
 				// no need to compute kernel from this gaussian component if its weight is zero
 				int is_valid_kernel = std::abs<Dtype>(w) > 0 ? 1 : 0;
 
-				is_weight_enabled[this->is_weight_enabled_buffer_.offset(i,k,j)] = is_valid_kernel;
+				if (is_weight_enabled != NULL)
+					is_weight_enabled[is_weight_enabled_buffer->offset(i,k,j)] = is_valid_kernel;
 
 				if (is_valid_kernel == 0)
 					continue;
@@ -775,10 +869,10 @@ void BaseGaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_
 
 				if (is_backward_pass) {
 					// notice: deriv_error_buffer_ has first two dimensions switched to enable more efficent computation of derivates in backward process
-					deriv_weight_offset = this->deriv_weight_buffer_->offset(j, k, i);
-					deriv_sigma_offset = this->deriv_sigma_buffer_->offset(j, k, i);
-					deriv_mu1_offset = this->deriv_mu1_buffer_->offset(j, k, i);
-					deriv_mu2_offset = this->deriv_mu2_buffer_->offset(j, k, i);
+					deriv_weight_offset = deriv_weight_buffer->offset(j, k, i);
+					deriv_sigma_offset = deriv_sigma_buffer->offset(j, k, i);
+					deriv_mu1_offset = deriv_mu1_buffer->offset(j, k, i);
+					deriv_mu2_offset = deriv_mu2_buffer->offset(j, k, i);
 
 					//tmp_deriv_weight_offset = this->tmp_deriv_weight_buffer_.offset(0,k);
 					tmp_deriv_weight_offset = deriv_weight_offset;
@@ -797,8 +891,8 @@ void BaseGaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_
 				Dtype gauss_square_sum = 0;
 
 				int weights_index = 0;
-				for (int y = 0; y < this->kernel_h_; ++y) {
-					for (int x = 0; x < this->kernel_w_; ++x) {
+				for (int y = 0; y < kernel_h; ++y) {
+					for (int x = 0; x < kernel_w; ++x) {
 
 						Dtype dist_x = x - mu1;
 						Dtype dist_x_2 = dist_x*dist_x;
@@ -826,12 +920,12 @@ void BaseGaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_
 				}
 
 
-				if (this->use_gmm_gauss_normalization == false) {
+				if (use_gmm_gauss_normalization == false) {
 					gauss_sum = 1;
 					gauss_square_sum = 1;
 				}
 				Dtype norm_factor = gauss_sum;
-				if (this->use_gmm_square_gauss_normalization) {
+				if (use_gmm_square_gauss_normalization) {
 					norm_factor = gauss_square_sum;
 				}
 
@@ -846,7 +940,7 @@ void BaseGaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_
 					// by definition we could use 1/(2*pi*sigma^2) but due to discretization error
 					// we need to use actual sum
 					Dtype gauss_mu1_sum, gauss_mu2_sum, gauss_sigma_sum;
-					if (this->use_gmm_square_gauss_normalization == false) {
+					if (use_gmm_square_gauss_normalization == false) {
 						//gauss_sum = 1.0 / caffe_cpu_asum(kernel_size, deriv_weight + deriv_weight_offset);
 						//gauss_mu1_sum_abs = caffe_cpu_asum(kernel_size, deriv_mu1 + deriv_mu1_offset);
 						//gauss_mu2_sum_abs = caffe_cpu_asum(kernel_size, deriv_mu2 + deriv_mu2_offset);
@@ -889,23 +983,26 @@ void BaseGaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_
 				// add it only to one horizotnal or vertical one, but NOT BOTH since they will cancel each-other in final equation
 				Dtype w_sign = w*normalize_factor_inv < 0 ? -1 : 1;
 
-				weights_index = this->weight_horiz_buffer_->offset(i,k,j); //((j*this->conv_out_channels_ + i) * NUM_GAUSS + k) * this->kernel_w_;
-				for (int x = 0; x < this->kernel_w_; ++x) {
+				if (weight_horiz_buffer != NULL) {
+					weights_index = weight_horiz_buffer->offset(i,k,j); //((j*this->conv_out_channels_ + i) * NUM_GAUSS + k) * this->kernel_w_;
+					for (int x = 0; x < kernel_w; ++x) {
 
-					Dtype dist_x = x - mu1;
-					Dtype dist_x_2 = dist_x*dist_x;
+						Dtype dist_x = x - mu1;
+						Dtype dist_x_2 = dist_x*dist_x;
 
 
-					weight_horiz[weights_index++] = w_normed * w_sign * exp( -dist_x_2 * sigma2_inv_half);
+						weight_horiz[weights_index++] = w_normed * w_sign * exp( -dist_x_2 * sigma2_inv_half);
+					}
 				}
+				if (weight_vert_buffer != NULL) {
+					weights_index = weight_vert_buffer->offset(i,k,j); //((j*this->conv_in_channels_ + i)* NUM_GAUSS + k) * this->kernel_h_;
+					for (int y = 0; y < kernel_h; ++y) {
 
-				weights_index = this->weight_vert_buffer_->offset(i,k,j); //((j*this->conv_in_channels_ + i)* NUM_GAUSS + k) * this->kernel_h_;
-				for (int y = 0; y < this->kernel_h_; ++y) {
+						Dtype dist_y = y - mu2;
+						Dtype dist_y_2 = dist_y*dist_y;
 
-					Dtype dist_y = y - mu2;
-					Dtype dist_y_2 = dist_y*dist_y;
-
-					weight_vert[weights_index++] = w_normed * exp( -dist_y_2 * sigma2_inv_half);
+						weight_vert[weights_index++] = w_normed * exp( -dist_y_2 * sigma2_inv_half);
+					}
 				}
 
 			}
@@ -913,9 +1010,9 @@ void BaseGaussianConvLayer<Dtype>::precompute_guassian_weights(bool is_backward_
 
 
 				// notice: deriv_error_buffer_ has first two dimensions switched to enable more efficent computation of bottom error in backward process
-				int deriv_error_offset = this->deriv_error_buffer_->offset(j,i);
+				int deriv_error_offset = deriv_error_buffer->offset(j,i);
 
-				int kernel_size = this->kernel_h_ * this->kernel_w_;
+				int kernel_size = kernel_h * kernel_w;
 				for (int weights_index = 0; weights_index < kernel_size; ++weights_index) {
 					// copy weights (GMM) into derivate/error weights which are the same but in reverse order
 					deriv_error[deriv_error_offset + kernel_size - weights_index - 1] = weight[weights_offset + weights_index];

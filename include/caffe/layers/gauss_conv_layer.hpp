@@ -28,6 +28,55 @@ class BaseGaussianConvLayer : public BaseConvolutionLayer<Dtype> {
 	virtual void Backward_gpu(const vector<Blob<Dtype>*>& top,const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
 
 
+
+	void do_precompute_guassian_weights(Blob<Dtype>& gauss_param_buffer_w,
+										Blob<Dtype>& gauss_param_buffer_mu1,
+										Blob<Dtype>& gauss_param_buffer_mu2,
+										Blob<Dtype>& gauss_param_buffer_sigma,
+										int num_in_channels, int num_out_channels, int num_gauss,
+										int kernel_h, int kernel_w,
+										bool is_backward_pass,
+                                        bool use_gmm_weight_normalization,
+                                        bool use_gmm_square_gauss_normalization,
+                                        bool gmm_discretize_mean,
+                                        Dtype gmm_sigma_lower_bound,
+                                        Dtype gmm_component_border_bound,
+										// output buffers
+										Blob<Dtype>* weight_buffer,
+										Blob<Dtype>* weight_vert_buffer,
+										Blob<Dtype>* weight_horiz_buffer,
+										Blob<int>* is_weight_enabled_buffer,
+
+										Blob<Dtype>* deriv_error_buffer,
+										Blob<Dtype>* deriv_weight_buffer,
+										Blob<Dtype>* deriv_mu1_buffer,
+										Blob<Dtype>* deriv_mu2_buffer,
+										Blob<Dtype>* deriv_sigma_buffer);
+
+	void do_precompute_guassian_weights_gpu(Blob<Dtype>& gauss_param_buffer_w,
+											Blob<Dtype>& gauss_param_buffer_mu1,
+											Blob<Dtype>& gauss_param_buffer_mu2,
+											Blob<Dtype>& gauss_param_buffer_sigma,
+											int num_in_channels, int num_out_channels, int num_gauss,
+											int kernel_h, int kernel_w,
+											bool is_backward_pass,
+                                            bool use_gmm_weight_normalization,
+                                            bool use_gmm_square_gauss_normalization,
+                                            bool gmm_discretize_mean,
+                                            Dtype gmm_sigma_lower_bound,
+                                            Dtype gmm_component_border_bound,
+											// output buffers
+											Blob<Dtype>* weight_buffer,
+											Blob<Dtype>* weight_vert_buffer,
+											Blob<Dtype>* weight_horiz_buffer,
+											Blob<int>* is_weight_enabled_buffer,
+
+											Blob<Dtype>* deriv_error_buffer,
+											Blob<Dtype>* deriv_weight_buffer,
+											Blob<Dtype>* deriv_mu1_buffer,
+											Blob<Dtype>* deriv_mu2_buffer,
+											Blob<Dtype>* deriv_sigma_buffer);
+
 	void precompute_guassian_weights(bool precompute_derivs);
 	void precompute_guassian_weights_gpu(bool precompute_derivs);
 
@@ -202,12 +251,118 @@ class FastAproxGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
   virtual void Backward_cpu(const vector<Blob<Dtype>*>& top, const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
   virtual void Backward_gpu(const vector<Blob<Dtype>*>& top,const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
 
+
+  void update_prefiltering_kernels(cudaStream_t stream = 0);
+  Blob<Dtype>* get_gaussian_kernel(cudaStream_t stream = 0);
+
+  Blob<Dtype>* get_deriv_kernel_weight(cudaStream_t stream = 0);
+  Blob<Dtype>* get_deriv_kernel_mu1(cudaStream_t stream = 0);
+  Blob<Dtype>* get_deriv_kernel_mu2(cudaStream_t stream = 0);
+  Blob<Dtype>* get_deriv_kernel_sigma(cudaStream_t stream = 0);
+  Blob<Dtype>* get_deriv_kernel_error(cudaStream_t stream = 0);
+
   void test_kernel_cpu(const float* filtered_images, const int* filter_offsets_x, const int* filter_offsets_y, const float* filter_offsets_float_x, const float* filter_offsets_float_y, const float* filter_weights, float* output, const int I, const int S, const int F, const int G, const int img_width, const int img_height, const int kernel_width, const int kernel_height, const bool use_interpolation);
-  void test_kernel_gpu(const float* filtered_images, const int* filter_offsets_x, const int* filter_offsets_y, const float* filter_offsets_float_x, const float* filter_offsets_float_y, const float* filter_weights, float* output, const int I, const int S, const int F, const int G, const int img_width, const int img_height, const int kernel_width, const int kernel_height, const bool use_interpolation);
+  void test_kernel_gpu(const Dtype* filtered_images, const Dtype* filter_offsets_float_x, const Dtype* filter_offsets_float_y, const Dtype* filter_weights, Dtype* output, const int I, const int S, const int F, const int G, const int img_width, const int img_height, const int kernel_width, const int kernel_height, const bool use_interpolation);
   void test_backward_kernel_gpu(const float* filtered_images, const float* error_images, const int* filter_offsets_x, const int* filter_offsets_y, const float* filter_offsets_float_x, const float* filter_offsets_float_y, const float* filter_weights, float* output, const int I, const int S, const int F, const int G, const int img_width, const int img_height, const int kernel_width, const int kernel_height) ;
-  void test_backward_multi_subfeature_kernel_gpu(const float* filtered_images, const float* error_images, const int* filter_offsets_x, const int* filter_offsets_y, const float* filter_offsets_float_x, const float* filter_offsets_float_y, const float* filter_weights, float* output, const int K, const int I, const int S, const int F, const int G, const int img_width, const int img_height, const int kernel_width, const int kernel_height, const bool use_interpolation);
+  void test_backward_multi_subfeature_kernel_gpu(const float* filtered_images, const float* error_images, const float* filter_offsets_float_x, const float* filter_offsets_float_y, const float* filter_weights, float* output, const int K, const int I, const int S, const int F, const int G, const int img_width, const int img_height, const int kernel_width, const int kernel_height, const bool use_interpolation);
 
 
+	// TODO: add support for K=4 as well
+	const int NUM_K = 3;
+
+	bool use_interpolation_;
+
+	int gauss_kernel_h_;
+	int gauss_kernel_w_;
+
+    int gauss_kernel_pad_h_;
+    int gauss_kernel_pad_w_;
+
+    int gauss_kernel_stride_h_;
+    int gauss_kernel_stride_w_;
+
+
+    bool handles_setup_;
+	cudnnHandle_t* handle_;
+	cudaStream_t*  stream_;
+
+	cudaStream_t* paralel_streams; // parallel streams for custom back-propagation kernels
+
+	// algos and descriptors for forward convolution
+	cudnnConvolutionFwdAlgo_t *fwd_algo_;
+
+	vector<cudnnTensorDescriptor_t> bottom_descs_, top_descs_, top_bias_descs_, fwd_interm_descs_;
+	cudnnFilterDescriptor_t    fwd_g_kernel_desc_;
+	cudnnTensorDescriptor_t    bias_desc_;
+
+	vector<cudnnConvolutionDescriptor_t> fwd_conv_descs_;
+	int bottom_offset_, top_offset_, bias_offset_;
+
+	// algos and descriptors for backward convolution
+	cudnnConvolutionFwdAlgo_t *bwd_data_algo_, *bwd_error_algo_;
+
+	vector<cudnnTensorDescriptor_t> bwd_interm_data_descs_, bwd_interm_error_descs_;
+	cudnnFilterDescriptor_t    bwd_g_kernel_desc_;
+
+	vector<cudnnConvolutionDescriptor_t> bwd_conv_data_descs_;
+	vector<cudnnConvolutionDescriptor_t> bwd_conv_error_descs_;
+
+
+	size_t *workspace_fwd_sizes_;
+	size_t *workspace_bwd_data_sizes_;
+	size_t *workspace_bwd_error_sizes_;
+
+	size_t workspaceSizeInBytes;  // size of underlying storage
+	void *workspaceData;  // underlying storage
+	void **workspace;  // aliases into workspaceData
+
+
+	Blob<Dtype> interm_buffer_;
+
+	Dtype gaussian_kernel_variance;
+
+    // buffers for kernels used only by fast aproximation (those buffers contain only a single kernel)
+	Blob<Dtype> gaussian_kernel_;
+
+    Blob<Dtype> deriv_kernel_weight_;
+    Blob<Dtype> deriv_kernel_mu1_;
+    Blob<Dtype> deriv_kernel_mu2_;
+    Blob<Dtype> deriv_kernel_sigma_;
+    Blob<Dtype> deriv_kernel_error_;
+
+	// containes w,mu1,mu2,sigma kernels
+	Blob<Dtype> deriv_kernels_;
+
+    Blob<Dtype> gauss_param_prefilter_w_;
+    Blob<Dtype> gauss_param_prefilter_mu1_;
+    Blob<Dtype> gauss_param_prefilter_mu2_;
+    Blob<Dtype> gauss_param_prefilter_sigma_;
+
+	// accumulated gradients
+	Blob<Dtype> bwd_gradients;
+
+	struct {
+		Dtype* filtered_images;
+		Dtype* filter_weights;
+		int* filter_offsets;
+		Dtype* filter_offsets_and_weights;
+
+		size_t filtered_images_sizes_;
+		size_t filter_weights_sizes_;
+		size_t filter_offsets_sizes_;
+	} buffer_fwd_;
+
+	struct {
+		Dtype* error_images;
+		Dtype* filtered_images;
+		Dtype* filter_weights;
+		int* filter_offsets;
+
+		size_t error_image_sizes_;
+		size_t filtered_images_sizes_;
+		size_t filter_weights_sizes_;
+		size_t filter_offsets_sizes_;
+	} buffer_bwd_;
 
 };
 
