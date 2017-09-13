@@ -361,6 +361,38 @@ void caffe_gpu_sum_elementwise<double>(const int N, const double* x, double* y, 
 }
 
 
+#define OFFSET3(k,j,i, num_k, num_j, num_i) ((((k)) * (num_j) + (j))*(num_i) + (i) )
+#define OFFSET4(l,k,j,i, num_l, num_k, num_j, num_i) ((( (l)*(num_k) + (k)) * (num_j) + (j))*(num_i) + (i) )
+
+template <typename Dtype>
+__global__ void transposeKernel(Dtype *odata, const Dtype *idata, const int I, const int J, const int K, const int L)
+{
+	CUDA_KERNEL_LOOP(index, I*J*K) {
+		int idx1 = index;
+		int idx2 = idx1 / (I);
+		int idx3 = idx2 / (J);
+		int idx4 = idx2 / (K);
+
+		int i = idx1 % I;
+		int j = idx2 % J;
+		int k = idx2 % K;
+		int l = idx4 % 1;
+
+		// transpose from [L,"K,J",I] to [L,"J,K",I]
+		odata[OFFSET4(l, j, k, i, L, J, K, I)] = idata[OFFSET4(l, k, j, i, L, K, J, I)];
+	}
+}
+
+template <typename Dtype>
+void caffe_gpu_transpose(const int I, const int J, const int K, const int L, const Dtype* X, Dtype* Y, cudaStream_t streamId) {
+	// transpose middle dimensions of matrix i.e. from [L x (K x J) x I] to [L x (J x K) x I]
+    transposeKernel<Dtype><<<CAFFE_GET_BLOCKS(I*J*K), CAFFE_CUDA_NUM_THREADS, 0, streamId>>>(Y, X, I, J, K, L);
+}
+
+template void caffe_gpu_transpose<float>(const int I, const int J, const int K, const int L, const float* X, float* Y, cudaStream_t streamId);
+template void caffe_gpu_transpose<double>(const int I, const int J, const int K, const int L, const double* X, double* Y, cudaStream_t streamId);
+
+
 
 
 }  // namespace caffe
