@@ -16,6 +16,7 @@ namespace caffe {
 
 #define MAX(x,y) (x > y ? x : y)
 
+
 #define OFFSET(l,k,j,i, num_l, num_k, num_j, num_i) ((( (l)*(num_k) + (k)) * (num_j) + (j))*(num_i) + (i) )
 
 #define OFFSET6(n, m, l,k,j,i, num_n, num_m, num_l, num_k, num_j, num_i) ((( ((((n) * (num_m)) + (m))*(num_l) + (l))*(num_k) + (k)) * (num_j) + (j))*(num_i) + (i) )
@@ -773,12 +774,18 @@ public:
 				if (BATCH_PIXELS_FLOAT4 > 3) compute.output[compute_index].w += w * compute.data[data_index].w;
 
 				float sum_val = compute.output[compute_index].x;
-/*
-				if ((thread_x == 0 ) && thread_y == 0 && f_index == 0 && f == 0 && px_x == 0 && px_y == 0 && block_x == 0 && block_y == 0 && interpolation_j == 0 && interpolation_i == 0)
+
+				/*if ((thread_x == 0 ) && thread_y == 0 && f_index == 0 && f == 0 && px_x == 0 && px_y == 0 && block_x == 0 && block_y == 0 && interpolation_j == 0 && interpolation_i == 0)
 				{
 					//printf("thread j,i: %d,%d, with data read offset: %d and data value %f\n ", thread_y, thread_x, data_index, data_org);
-					printf("computed sum %f from current value from w %f * data %f = computed_value %f at interpolation index j,i=%d,%d, s=%d, f=%d, and block y,x=%d,%d, batched n=%d\n",
-						   sum_val, w, data_org, computeed_val, interpolation_j,interpolation_i, s_index, f_index + f, block_y, block_x, n);
+					//printf("computed sum %f from current value from w %f * data %f = computed_value %f at interpolation index j,i=%d,%d, s=%d, f=%d, and block y,x=%d,%d, batched n=%d\n",
+					//	   sum_val, w, data_org, computeed_val, interpolation_j,interpolation_i, s_index, f_index + f, block_y, block_x, n);
+
+					//printf("s_index=%d, with weight=%f\n ", s_index, w);
+				}*/
+				/*if ((thread_x == 31 ) && thread_y == 0 && f_index == 0 && f == 0 && block_x == 0 && block_y == 0 )
+				{
+					printf("s_index=%d, with weight=%f and px=%d,%d and interpol=%d,%d with data val=%f\n ", s_index, w, px_y, px_x, interpolation_j, interpolation_i, data_org);
 				}*/
 			}
 		}
@@ -935,6 +942,7 @@ fast_gauss_forward_pipeline_kernel(const float* filtered_images,
 		weights_batch_sh = ((float *) offsets_and_weights_sh_class.getData(0)) + OFFSET_BLOCK_MEM_SIZE;
 	}
 
+	// [2] ==> this is to calculate output for neigbooring pixels that use the same pixel but with different weight when using interpolation
 	float4 out_val[BATCH_FEATURES_SIZE][BATCH_IMAGES][2][(BATCH_PIXELS_SIZE_X*BATCH_PIXELS_SIZE_Y)/BATCH_PIXELS_FLOAT4];
 
 	for (int f = 0; f < BATCH_FEATURES_SIZE; ++f) {
@@ -1059,6 +1067,7 @@ fast_gauss_forward_pipeline_kernel(const float* filtered_images,
 		const int s_outer_index = s_offset_outer / (BATCH_COMPUTE_SUBFEATURES_SIZE * BATCH_MEM_SUBFEATURES_SIZE);
 
 		const int s_buffer_index = s_outer_index % DOUBLE_BUFFERING;
+		const int s_next_buffer_index = (s_outer_index +1) % DOUBLE_BUFFERING;
 
 		// when using seperabe buffers for weights and offsets
         const int* filter_offset_current  = _filter_offset_current + OFFSET(0, s_outer_index, 0, 0,
@@ -1066,15 +1075,15 @@ fast_gauss_forward_pipeline_kernel(const float* filtered_images,
 		const float* filter_weights_current  = _filter_weights_current + OFFSET(0, s_outer_index, 0, 0,
 																				F_MEM_SIZE, S_MEM_SIZE, G_MEM_SIZE, WEIGHT_BLOCK_MEM_SIZE);
 
-		const int* filter_offset_next  = _filter_offset_next + OFFSET(0, s_outer_index + BATCH_COMPUTE_SUBFEATURES_SIZE * BATCH_MEM_SUBFEATURES_SIZE , 0, 0,
+		const int* filter_offset_next  = _filter_offset_next + OFFSET(0, s_outer_index + 1 , 0, 0,
 																	  F_MEM_SIZE, S_MEM_SIZE, G_MEM_SIZE, OFFSET_BLOCK_MEM_SIZE);
-		const float* filter_weights_next = _filter_weights_next + OFFSET(0, s_outer_index + BATCH_COMPUTE_SUBFEATURES_SIZE * BATCH_MEM_SUBFEATURES_SIZE, 0, 0,
+		const float* filter_weights_next = _filter_weights_next + OFFSET(0, s_outer_index + 1, 0, 0,
 																		 F_MEM_SIZE, S_MEM_SIZE, G_MEM_SIZE, WEIGHT_BLOCK_MEM_SIZE);
 
 		// when using combined buffers for weights and offsets
         const float* filter_offset_and_weights_current  = _filter_offset_and_weights_current + OFFSET5(0, s_outer_index, 0, 0, 0,
 																									   F_MEM_SIZE, S_MEM_SIZE, G_MEM_SIZE, 1, WEIGHT_BLOCK_MEM_SIZE + WEIGHT_BLOCK_MEM_SIZE);
-		const float* filter_offset_and_weights_next  = _filter_offset_and_weights_next + OFFSET5(0, s_outer_index + BATCH_COMPUTE_SUBFEATURES_SIZE * BATCH_MEM_SUBFEATURES_SIZE , 0, 0, 0,
+		const float* filter_offset_and_weights_next  = _filter_offset_and_weights_next + OFFSET5(0, s_outer_index + 1, 0, 0, 0,
 																								 F_MEM_SIZE, S_MEM_SIZE, G_MEM_SIZE, 1, OFFSET_BLOCK_MEM_SIZE + WEIGHT_BLOCK_MEM_SIZE);
 
 
@@ -1237,10 +1246,10 @@ fast_gauss_forward_pipeline_kernel(const float* filtered_images,
 				int address_off = OFFSET5(load_offset_index.s, load_offset_index.g, load_offset_index.f/NUM_READ_FEATURES, f_block_idx/BATCH_FEATURES_SIZE, 0,
 										 BATCH_COMPUTE_SUBFEATURES_SIZE * BATCH_MEM_SUBFEATURES_SIZE, BATCH_GAUSS_SIZE, BATCH_FEATURES_SIZE/NUM_READ_FEATURES, BLOCK_FEATURES, NUM_READ_FEATURES);
 
-				static const int OFFSET_BUFFER_SIZE =  USE_SEPARATE_WEIGHTS_AND_OFFSETS ? OFFSET_BLOCK_MEM_SIZE : WEIGHT_BLOCK_MEM_SIZE + OFFSET_BLOCK_MEM_SIZE;
+				static const int OFFSET_BUFFER_SIZE =  USE_SEPARATE_WEIGHTS_AND_OFFSETS ? OFFSET_BLOCK_MEM_SIZE : (WEIGHT_BLOCK_MEM_SIZE + OFFSET_BLOCK_MEM_SIZE);
 
 				// load offset
-				pipeline.load_offset.offset_address = offset_batch_sh + address_off + (s_offset_outer % DOUBLE_BUFFERING) * (OFFSET_BUFFER_SIZE);
+				pipeline.load_offset.offset_address = offset_batch_sh + address_off + (s_buffer_index) * (OFFSET_BUFFER_SIZE);
 				//pipeline.load_offset.offset_address = &reinterpret_cast<int4*>((int*)filter_offset_current)[address_off];
 
 				//pipeline.load_offset.offset_address = use_reg_A ?
@@ -1279,11 +1288,11 @@ fast_gauss_forward_pipeline_kernel(const float* filtered_images,
 				//pipeline.load_weights.address = weights_batch_sh + address_off + (s_offset_outer % 2) * WEIGHT_BLOCK_MEM_SIZE/4;
 				//pipeline.load_weights.address = &reinterpret_cast<float4*>((float*)filter_weights_current)[address_off];
 
-				static const int WEIGHT_BUFFER_SIZE = USE_SEPARATE_WEIGHTS_AND_OFFSETS ? WEIGHT_BLOCK_MEM_SIZE : WEIGHT_BLOCK_MEM_SIZE + OFFSET_BLOCK_MEM_SIZE;
+				static const int WEIGHT_BUFFER_SIZE = USE_SEPARATE_WEIGHTS_AND_OFFSETS ? WEIGHT_BLOCK_MEM_SIZE : (WEIGHT_BLOCK_MEM_SIZE + OFFSET_BLOCK_MEM_SIZE);
 
 				// we can utilize texture/L1 cache and load every second one from global data
 				pipeline.load_weights.address = //(index - start_delay_w_load) % 4 == 1 ?
-													weights_batch_sh +  address_off + (s_offset_outer % 2) * (WEIGHT_BUFFER_SIZE);
+													weights_batch_sh +  address_off + (s_buffer_index) * (WEIGHT_BUFFER_SIZE);
 												//// TODO: offset_batch_sh and offset_address have been changed to int*	: &reinterpret_cast<float4*>((float*)filter_weights_current)[address_off];
                                                 //filter_weights_current + address_off;
 
@@ -1405,8 +1414,8 @@ fast_gauss_forward_pipeline_kernel(const float* filtered_images,
 				//if (s_outer_index + 1 < MAX_S_OUTER_INDEX && index == 0)
 				if (s_outer_index + 1 < MAX_S_OUTER_INDEX && index == LOAD_OFFSET_INDEX)
 				{
-					float* off_write_addr = offsets_sh_class.getDataThreadIndexingWrite((s_offset_outer + 1 ) % DOUBLE_BUFFERING);
-					float* w_write_addr = weights_sh_class.getDataThreadIndexingWrite((s_offset_outer + 1 ) % DOUBLE_BUFFERING);
+					float* off_write_addr = offsets_sh_class.getDataThreadIndexingWrite(s_next_buffer_index);
+					float* w_write_addr = weights_sh_class.getDataThreadIndexingWrite(s_next_buffer_index);
 
 					if (1){
 
@@ -1438,8 +1447,8 @@ fast_gauss_forward_pipeline_kernel(const float* filtered_images,
 #if __CUDA_ARCH__ >= 200
 					//asm("bar.arrive 15, 1536;"); // # of threads must be greater than 0
 #endif
-					float* off_write_addr = offsets_sh_class.getDataThreadIndexingWrite((s_offset_outer + 1 ) % DOUBLE_BUFFERING);
-					float* w_write_addr = weights_sh_class.getDataThreadIndexingWrite((s_offset_outer + 1 ) % DOUBLE_BUFFERING);
+					float* off_write_addr = offsets_sh_class.getDataThreadIndexingWrite(s_next_buffer_index);
+					float* w_write_addr = weights_sh_class.getDataThreadIndexingWrite(s_next_buffer_index);
 
 					offsets_sh_class.template store_shared<0>(ld_offsets,reinterpret_cast<int4*>(off_write_addr));
 					weights_sh_class.template store_shared<0>(ld_weights,reinterpret_cast<float4*>(w_write_addr));
@@ -1451,7 +1460,7 @@ fast_gauss_forward_pipeline_kernel(const float* filtered_images,
 				//if (s_outer_index + 1 < MAX_S_OUTER_INDEX && index == 0)
 				if (s_outer_index + 1 < MAX_S_OUTER_INDEX && index == LOAD_OFFSET_INDEX)
 				{
-					float* off_and_w_write_addr = offsets_and_weights_sh_class.getDataThreadIndexingWrite((s_offset_outer + 1 ) % DOUBLE_BUFFERING);
+					float* off_and_w_write_addr = offsets_and_weights_sh_class.getDataThreadIndexingWrite(s_next_buffer_index);
 
 
 					if (1){
@@ -1460,6 +1469,10 @@ fast_gauss_forward_pipeline_kernel(const float* filtered_images,
 						offsets_and_weights_sh_class.template load_global<OFFSET_BLOCK_MEM_SIZE+WEIGHT_BLOCK_MEM_SIZE,0,false,1>(
 								reinterpret_cast<const float4*>(filter_offset_and_weights_next),
 										reinterpret_cast<float4*>(off_and_w_write_addr));
+
+						/*if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0 && blockIdx.y == 0)
+							printf("loaded new offsets and weights from %p to %p where buffer index=%d:\n", filter_offset_and_weights_next, off_and_w_write_addr, s_next_buffer_index);
+						offsets_and_weights_sh_class.print();*/
 
 					} else {
 						offsets_and_weights_sh_class.template load_global<OFFSET_BLOCK_MEM_SIZE+WEIGHT_BLOCK_MEM_SIZE,0,false,1>(
@@ -1480,7 +1493,7 @@ fast_gauss_forward_pipeline_kernel(const float* filtered_images,
 #if __CUDA_ARCH__ >= 200
 						//asm("bar.arrive 15, 1536;"); // # of threads must be greater than 0
 #endif
-						float* off_and_w_write_addr = offsets_and_weights_sh_class.getDataThreadIndexingWrite((s_offset_outer + 1 ) % DOUBLE_BUFFERING);
+						float* off_and_w_write_addr = offsets_and_weights_sh_class.getDataThreadIndexingWrite(s_next_buffer_index);
 
 						offsets_and_weights_sh_class.template store_shared<0>(ld_offsets_and_weights,reinterpret_cast<float4*>(off_and_w_write_addr));
 					}
@@ -1543,10 +1556,16 @@ fast_gauss_forward_pipeline_kernel(const float* filtered_images,
 							int out_px_y = patch_j * IMG_HEIGHT + (block_y + thread_y + 0 + px_y);
 							int out_px_x = patch_i * IMG_WIDTH + (block_x + thread_x + px_x - j);
 
-							if (BATCH_PIXELS_FLOAT4 > 0 && out_px_x < img_width_ && out_px_y + 0 < img_height_) atomicAdd(&output_batch[OFFSET(nn+i, f + f_offset, out_px_y + 0, out_px_x, N, F, img_height_, img_width_)], out_val[f][i][j][px_y/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px_x].x);
-							if (BATCH_PIXELS_FLOAT4 > 1 && out_px_x < img_width_ && out_px_y + 1 < img_height_) atomicAdd(&output_batch[OFFSET(nn+i, f + f_offset, out_px_y + 1, out_px_x, N, F, img_height_, img_width_)], out_val[f][i][j][px_y/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px_x].y);
-							if (BATCH_PIXELS_FLOAT4 > 2 && out_px_x < img_width_ && out_px_y + 2 < img_height_) atomicAdd(&output_batch[OFFSET(nn+i, f + f_offset, out_px_y + 2, out_px_x, N, F, img_height_, img_width_)], out_val[f][i][j][px_y/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px_x].z);
-							if (BATCH_PIXELS_FLOAT4 > 3 && out_px_x < img_width_ && out_px_y + 3 < img_height_) atomicAdd(&output_batch[OFFSET(nn+i, f + f_offset, out_px_y + 3, out_px_x, N, F, img_height_, img_width_)], out_val[f][i][j][px_y/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px_x].w);
+							//int out_idx = OFFSET(nn+i, f + f_offset, out_px_y + 0, out_px_x, N, F, img_height_, img_width_);
+							//if (patch_i * IMG_WIDTH + (block_x + thread_x + px_x - j) == 31 && nn+i == 0 && f + f_offset == 0)
+							//if (out_idx == 31)
+							//	printf("adding val %f to  loc %d,%d with writing index =%d and existing val %f\n", out_val[f][i][j][px_y/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px_x].x, out_px_y, out_px_x, out_idx, output_batch[out_idx]);
+
+
+							if (BATCH_PIXELS_FLOAT4 > 0 && 0 <= out_px_x && out_px_x < img_width_ && out_px_y + 0 < img_height_) atomicAdd(&output_batch[OFFSET(nn+i, f + f_offset, out_px_y + 0, out_px_x, N, F, img_height_, img_width_)], out_val[f][i][j][px_y/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px_x].x);
+							if (BATCH_PIXELS_FLOAT4 > 1 && 0 <= out_px_x && out_px_x < img_width_ && out_px_y + 1 < img_height_) atomicAdd(&output_batch[OFFSET(nn+i, f + f_offset, out_px_y + 1, out_px_x, N, F, img_height_, img_width_)], out_val[f][i][j][px_y/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px_x].y);
+							if (BATCH_PIXELS_FLOAT4 > 2 && 0 <= out_px_x && out_px_x < img_width_ && out_px_y + 2 < img_height_) atomicAdd(&output_batch[OFFSET(nn+i, f + f_offset, out_px_y + 2, out_px_x, N, F, img_height_, img_width_)], out_val[f][i][j][px_y/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px_x].z);
+							if (BATCH_PIXELS_FLOAT4 > 3 && 0 <= out_px_x && out_px_x < img_width_ && out_px_y + 3 < img_height_) atomicAdd(&output_batch[OFFSET(nn+i, f + f_offset, out_px_y + 3, out_px_x, N, F, img_height_, img_width_)], out_val[f][i][j][px_y/BATCH_PIXELS_FLOAT4 * BATCH_PIXELS_SIZE_X + px_x].w);
 						}
 					}
 				}
@@ -1700,19 +1719,24 @@ public:
 
 		threadsPerBlock = dim3 (TILE_DIM_XY, 1, 1);
 
-		numBlocks = dim3( ((int)ceil(img_width*img_height) + threadsPerBlock.x - 1) / threadsPerBlock.x,	// over image width and height
+		if (N >= 4)
+			numBlocks = dim3( ((int)ceil(img_width*img_height) + threadsPerBlock.x - 1) / threadsPerBlock.x,	// over image width and height
 						  ((int)ceil(S/(float)TILE_DIM_S) + threadsPerBlock.z - 1) / threadsPerBlock.z, // over S
 						  ((int)ceil(N/(float)TILE_DIM_IMAGE) + threadsPerBlock.z - 1) / threadsPerBlock.z);					// over N
-
+		else
+			numBlocks = dim3( ((int)ceil(img_width*img_height) + threadsPerBlock.x - 1) / threadsPerBlock.x,	// over image width and height
+							  ((int)ceil(S/(float)TILE_DIM_S) + threadsPerBlock.z - 1) / threadsPerBlock.z, // over S
+							  ((int)ceil(N/(float)1) + threadsPerBlock.z - 1) / threadsPerBlock.z);					// over N
 	}
 	size_t get_allocation_size() {
 		return sizeof(float) * (NEW_WIDTH + 2*BORDER_SIZE) * (NEW_HEIGHT + 2*BORDER_SIZE) * S *  (N+1) * new_img_parts_width * new_img_parts_height;
 	}
 	float* create_input(float* interleaved_images_output, const float* filtered_images, cudaStream_t streamId = NULL) {
 
-
-		interleave_input_data_kernel<TILE_DIM_XY,TILE_DIM_S,TILE_DIM_IMAGE, BATCH_PIXELS_X, BATCH_IMAGES, NEW_WIDTH, NEW_HEIGHT, BORDER_SIZE><<<numBlocks,threadsPerBlock, 0, streamId>>>(filtered_images, interleaved_images_output, N,S, img_width, img_height, new_img_parts_width, new_img_parts_height);
-
+		if (N >= 4)
+			interleave_input_data_kernel<TILE_DIM_XY,TILE_DIM_S,TILE_DIM_IMAGE, BATCH_PIXELS_X, BATCH_IMAGES, NEW_WIDTH, NEW_HEIGHT, BORDER_SIZE><<<numBlocks,threadsPerBlock, 0, streamId>>>(filtered_images, interleaved_images_output, N,S, img_width, img_height, new_img_parts_width, new_img_parts_height);
+		else
+			interleave_input_data_kernel<TILE_DIM_XY,TILE_DIM_S,1, BATCH_PIXELS_X, BATCH_IMAGES, NEW_WIDTH, NEW_HEIGHT, BORDER_SIZE><<<numBlocks,threadsPerBlock, 0, streamId>>>(filtered_images, interleaved_images_output, N,S, img_width, img_height, new_img_parts_width, new_img_parts_height);
 		/*if (1) {
 			float* filtered_images_cpu = new float[(NEW_WIDTH + 2*BORDER_SIZE)*( NEW_HEIGHT + 2*BORDER_SIZE)* N*S * new_img_parts_width*new_img_parts_height];
 
@@ -1748,11 +1772,12 @@ public:
 	}
 };
 
+
 template <typename BlockIndexingT,
 			typename ELEMENT_FLOAT_TYPE,
 			typename ELEMENT_INT_TYPE>
 __global__  void
-perpare_weights_and_offsets(const float* filter_weights, const int* filter_offsets_x, const int* filter_offsets_y, float *prepared_filter_weights, int *prepared_filter_offsets, float* prepared_filter_offsets_and_weights, int S, int G, int F) {
+perpare_weights_and_offsets(const float* filter_weights, const float* filter_offsets_x, const float* filter_offsets_y, float *prepared_filter_weights, int *prepared_filter_offsets, float* prepared_filter_offsets_and_weights, int S, int G, int F, int PARAM_FORMAT) {
 
 	static const int NUM_SM = BlockIndexingT::NUM_SM;
 	static const int Bx = BlockIndexingT::Bx;
@@ -1780,22 +1805,27 @@ perpare_weights_and_offsets(const float* filter_weights, const int* filter_offse
 
 	// inputs in quad vectors
 	const ELEMENT_FLOAT_TYPE* filter_weights4 = reinterpret_cast<const ELEMENT_FLOAT_TYPE*>(filter_weights);
-	const ELEMENT_INT_TYPE* filter_offsets_x4 = reinterpret_cast<const ELEMENT_INT_TYPE*>(filter_offsets_x);
-	const ELEMENT_INT_TYPE* filter_offsets_y4 = reinterpret_cast<const ELEMENT_INT_TYPE*>(filter_offsets_y);
+	const ELEMENT_FLOAT_TYPE* filter_offsets_x4 = reinterpret_cast<const ELEMENT_FLOAT_TYPE*>(filter_offsets_x);
+	const ELEMENT_FLOAT_TYPE* filter_offsets_y4 = reinterpret_cast<const ELEMENT_FLOAT_TYPE*>(filter_offsets_y);
 
 	// outputs in quad vectors
 	ELEMENT_FLOAT_TYPE* prepared_filter_weights4 = reinterpret_cast<ELEMENT_FLOAT_TYPE*>(prepared_filter_weights);
 	ELEMENT_INT_TYPE* prepared_filter_offsets4 = reinterpret_cast<ELEMENT_INT_TYPE*>(prepared_filter_offsets);
 
 
-	int f_input_index = blockIdx.x * blockDim.x  + threadIdx.x;
+	int f_input_index = (blockIdx.x * blockDim.x  + threadIdx.x) * NUM_READ_FEATURES;
 	int g_input_index = blockIdx.y * blockDim.y  + threadIdx.y;
 	int s_input_index = blockIdx.z * blockDim.z  + threadIdx.z;
 
 	// input data is of the form
 	// float4 of size [S x G x F]
 
-	int input_index = (( s_input_index )*G + g_input_index ) * F + f_input_index;
+    int input_index = -1;
+    if (PARAM_FORMAT == FAST_GAUSS_PARAM_SGF)
+        input_index = OFFSET(0, s_input_index, g_input_index, f_input_index, 1, S, G, F);//(( s_input_index )*G + g_input_index ) * F + f_input_index ;
+    else if (PARAM_FORMAT == FAST_GAUSS_PARAM_FGS)
+        input_index = OFFSET(0, f_input_index, g_input_index, s_input_index, 1, F, G, S);
+
 
 	// output data is of the form:
 	// float4 of size [F / (BATCH_FEATURES_SIZE * BLOCK_FEATURES)] x [S / (BATCH_COMPUTE_SUBFEATURES_SIZE*BATCH_MEM_SUBFEATURES_SIZE)] x [G / BATCH_GAUSS_SIZE]
@@ -1809,11 +1839,11 @@ perpare_weights_and_offsets(const float* filter_weights, const int* filter_offse
 
 	int dim6_size = G / dim4_size;
 	int dim7_size = S / dim5_size;
-	int dim8_size = F / (dim1_size * dim2_size);
+	int dim8_size = F / (dim1_size * dim2_size * NUM_READ_FEATURES);
 
 
-	int main_f_index = f_input_index / (dim1_size * dim2_size);
-	int f_block_tid = f_input_index % (dim1_size * dim2_size);
+	int main_f_index = f_input_index / (dim1_size * dim2_size * NUM_READ_FEATURES);
+	int f_block_tid = f_input_index % (dim1_size * dim2_size * NUM_READ_FEATURES);
 
 	int main_s_index = s_input_index / dim5_size;
 	int s_block_tid = s_input_index % dim5_size;
@@ -1825,8 +1855,10 @@ perpare_weights_and_offsets(const float* filter_weights, const int* filter_offse
 	int g_index = g_block_tid;
 
 	// switch between block and batch indexes so that consecutive features and stored in [BATCH_FEATURES_SIZE/4]
-	int f_batch_index = f_block_tid % (dim2_size);
-	int f_block_index = f_block_tid / (dim2_size);
+	int f_batch_index = (f_block_tid / NUM_READ_FEATURES) % (dim2_size);
+	int f_block_index = (f_block_tid / NUM_READ_FEATURES) / (dim2_size);
+
+	//printf("f,s,g=(%d,%d,%d) with translate to f_block_tid=%d, f_batch_index=%d, f_block_index=%d\n", f_input_index, s_input_index, g_input_index, f_block_tid, f_batch_index, f_block_index);
 
 
 	int output_index = OFFSET8(main_f_index,
@@ -1839,29 +1871,31 @@ perpare_weights_and_offsets(const float* filter_weights, const int* filter_offse
 								f_block_index,
 								dim8_size, dim7_size, dim6_size, dim5_size, dim4_size, 1, dim2_size, dim1_size) * NUM_READ_FEATURES;
 
-	/*printf("input index %d goes to output index %d: input s: %d, g: %d, f: %d: output dims: %d, %d, %d, %d, %d, %d, %d\n", input_index, output_index, s_input_index, g_input_index, f_input_index,main_f_index,
+	/*printf("input index %d goes to output index %d: input s: %d, g: %d, f: %d: (out of S,G,F=%d,%d,%d) output dims: main_f_index=%d, main_s_index=%d, main_g_index=%d, s_mem_index=%d, g_index=%d, f_batch_index=%d, f_block_index=%d\n",
+		   input_index, output_index, s_input_index, g_input_index, f_input_index, S,G,F,
+		   main_f_index,
 			main_s_index,
 			main_g_index,
 			s_mem_index,
+		     g_index,
 			f_batch_index,
-			g_index,
-			f_block_index);
-*/
+			f_block_index);*/
+
 
 	// for offsets we need to combine X and Y coordinates and transform them directly to int values approproate for using specific BLOCK_ and BATCH_ sizes
 
-	int4 offset_x;
-	int4 offset_y;
+	float4 offset_x;
+	float4 offset_y;
 
-	if (NUM_READ_FEATURES > 0) offset_x.x = reinterpret_cast<const int*>(filter_offsets_x4)[input_index + 0];
-	if (NUM_READ_FEATURES > 1) offset_x.y = reinterpret_cast<const int*>(filter_offsets_x4)[input_index + 1];
-	if (NUM_READ_FEATURES > 2) offset_x.z = reinterpret_cast<const int*>(filter_offsets_x4)[input_index + 2];
-	if (NUM_READ_FEATURES > 3) offset_x.w = reinterpret_cast<const int*>(filter_offsets_x4)[input_index + 3];
+	if (NUM_READ_FEATURES > 0) offset_x.x = reinterpret_cast<const float*>(filter_offsets_x4)[input_index + 0];
+	if (NUM_READ_FEATURES > 1) offset_x.y = reinterpret_cast<const float*>(filter_offsets_x4)[input_index + 1];
+	if (NUM_READ_FEATURES > 2) offset_x.z = reinterpret_cast<const float*>(filter_offsets_x4)[input_index + 2];
+	if (NUM_READ_FEATURES > 3) offset_x.w = reinterpret_cast<const float*>(filter_offsets_x4)[input_index + 3];
 
-	if (NUM_READ_FEATURES > 0) offset_y.x = reinterpret_cast<const int*>(filter_offsets_y4)[input_index + 0];
-	if (NUM_READ_FEATURES > 1) offset_y.y = reinterpret_cast<const int*>(filter_offsets_y4)[input_index + 1];
-	if (NUM_READ_FEATURES > 2) offset_y.z = reinterpret_cast<const int*>(filter_offsets_y4)[input_index + 2];
-	if (NUM_READ_FEATURES > 3) offset_y.w = reinterpret_cast<const int*>(filter_offsets_y4)[input_index + 3];
+	if (NUM_READ_FEATURES > 0) offset_y.x = reinterpret_cast<const float*>(filter_offsets_y4)[input_index + 0];
+	if (NUM_READ_FEATURES > 1) offset_y.y = reinterpret_cast<const float*>(filter_offsets_y4)[input_index + 1];
+	if (NUM_READ_FEATURES > 2) offset_y.z = reinterpret_cast<const float*>(filter_offsets_y4)[input_index + 2];
+	if (NUM_READ_FEATURES > 3) offset_y.w = reinterpret_cast<const float*>(filter_offsets_y4)[input_index + 3];
 
 	// offset is relative to shared memory organization which is defined by  BlockSharedMemory parameters:
 	//		- SharedMem::ALLOC_WIDTH
@@ -1886,21 +1920,23 @@ perpare_weights_and_offsets(const float* filter_weights, const int* filter_offse
 	//printf("offset at index %d, s: %d, g: %d, f: %d, has been transform from %d,%d to %d\n", input_index, output_index, s_input_index, g_input_index, f_input_index, offset_y.x, offset_y.y, output_offset.x);
 
 	// offset should be in bytes !!! (not in 4 bytes as for float or 16 bytes as for float4)
-	if (NUM_READ_FEATURES > 0) output_offset.x = (offset_y.x * (SharedMem::PITCHED_WIDTH) + offset_x.x) * sizeof(float);
-	if (NUM_READ_FEATURES > 1) output_offset.y = (offset_y.x * (SharedMem::PITCHED_WIDTH) + offset_x.y) * sizeof(float);
-	if (NUM_READ_FEATURES > 2) output_offset.z = (offset_y.z * (SharedMem::PITCHED_WIDTH) + offset_x.z) * sizeof(float);
-	if (NUM_READ_FEATURES > 3) output_offset.w = (offset_y.w * (SharedMem::PITCHED_WIDTH) + offset_x.w) * sizeof(float);
+	if (NUM_READ_FEATURES > 0) output_offset.x = ((int)floorf(offset_y.x) * (SharedMem::PITCHED_WIDTH) + (int)floorf(offset_x.x)) * sizeof(float);
+	if (NUM_READ_FEATURES > 1) output_offset.y = ((int)floorf(offset_y.x) * (SharedMem::PITCHED_WIDTH) + (int)floorf(offset_x.y)) * sizeof(float);
+	if (NUM_READ_FEATURES > 2) output_offset.z = ((int)floorf(offset_y.z) * (SharedMem::PITCHED_WIDTH) + (int)floorf(offset_x.z)) * sizeof(float);
+	if (NUM_READ_FEATURES > 3) output_offset.w = ((int)floorf(offset_y.w) * (SharedMem::PITCHED_WIDTH) + (int)floorf(offset_x.w)) * sizeof(float);
 
 	// If offset is to odd number then access to shared memory will not be alligned (e.g. cannot use float2)
 	// so we replicate data in shared memory for accesses to odd offsets with addintional buffer.
 	// We now need to ensure that offset here will address that buffer instead - buffers are stored one after
 	// another so we just need to add the size of one buffer minus the alignment value in x dimension
 
-	if (NUM_READ_FEATURES > 0) if (output_offset.x % 2 == 1) output_offset.x += (SharedMem::PITCHED_WIDTH * SharedMem::ALLOC_HEIGHT) - 1;
-	if (NUM_READ_FEATURES > 1) if (output_offset.y % 2 == 1) output_offset.y += (SharedMem::PITCHED_WIDTH * SharedMem::ALLOC_HEIGHT) - 1;
-	if (NUM_READ_FEATURES > 2) if (output_offset.z % 2 == 1) output_offset.z += (SharedMem::PITCHED_WIDTH * SharedMem::ALLOC_HEIGHT) - 1;
-	if (NUM_READ_FEATURES > 3) if (output_offset.w % 2 == 1) output_offset.w += (SharedMem::PITCHED_WIDTH * SharedMem::ALLOC_HEIGHT) - 1;
-
+    // NOTE: we disabled this as it is not needed with the current version of the algorithm
+    if (0) {
+        if (NUM_READ_FEATURES > 0) if (output_offset.x % 2 == 1) output_offset.x += (SharedMem::PITCHED_WIDTH * SharedMem::ALLOC_HEIGHT) - 1;
+        if (NUM_READ_FEATURES > 1) if (output_offset.y % 2 == 1) output_offset.y += (SharedMem::PITCHED_WIDTH * SharedMem::ALLOC_HEIGHT) - 1;
+        if (NUM_READ_FEATURES > 2) if (output_offset.z % 2 == 1) output_offset.z += (SharedMem::PITCHED_WIDTH * SharedMem::ALLOC_HEIGHT) - 1;
+        if (NUM_READ_FEATURES > 3) if (output_offset.w % 2 == 1) output_offset.w += (SharedMem::PITCHED_WIDTH * SharedMem::ALLOC_HEIGHT) - 1;
+    }
     // outer index position for output with offset and weights combined
     // in this case we have the following structure
     //    [F / (BATCH_FEATURES_SIZE * BLOCK_FEATURES)] x [S / (BATCH_COMPUTE_SUBFEATURES_SIZE*BATCH_MEM_SUBFEATURES_SIZE)] x [G / BATCH_GAUSS_SIZE]
@@ -1922,13 +1958,25 @@ perpare_weights_and_offsets(const float* filter_weights, const int* filter_offse
 									  f_batch_index,
 									  f_block_index,
 									  dim5_size, dim4_size, 1, dim2_size, dim1_size)) * NUM_READ_FEATURES;
+	/*int output_index_offsets = (OFFSET8(main_f_index,
+										main_s_index,
+										main_g_index,
+										s_mem_index,
+										g_index,
+										0,
+										f_batch_index,
+										f_block_index,
+
+									   dim8_size, dim7_size, dim6_size, dim5_size , dim4_size , (dim3_size+1), dim2_size , dim1_size)) * NUM_READ_FEATURES;*/
 	int* out_off[2];
 	// default version
-	out_off[0] = reinterpret_cast<int*>(prepared_filter_offsets4) + output_index;
+	out_off[0] = prepared_filter_offsets4 != NULL ? reinterpret_cast<int*>(prepared_filter_offsets4) + output_index : NULL;
 	// for version where offsets and weights are in the same buffer
-	out_off[1] = reinterpret_cast<int*>(prepared_filter_offsets_and_weights) + output_index_offsets;
+	out_off[1] = prepared_filter_offsets_and_weights != NULL ? reinterpret_cast<int*>(prepared_filter_offsets_and_weights) + output_index_offsets : NULL;
 
 	for (int i = 0; i < 2; ++i) {
+		if (out_off[i] == NULL) continue;
+
 		if (NUM_READ_FEATURES > 0) out_off[i][0] = output_offset.x;
 		if (NUM_READ_FEATURES > 1) out_off[i][1] = output_offset.y;
 		if (NUM_READ_FEATURES > 2) out_off[i][2] = output_offset.z;
@@ -1961,6 +2009,16 @@ perpare_weights_and_offsets(const float* filter_weights, const int* filter_offse
 								  f_batch_index,
 								  f_block_index,
 								  dim5_size, dim4_size, dim3_size, dim2_size, dim1_size) )* NUM_READ_FEATURES;
+	/*output_index_0[1] = (OFFSET8(main_f_index,
+										main_s_index,
+										main_g_index,
+										s_mem_index,
+										g_index,
+										1,
+										f_batch_index,
+										f_block_index,
+
+										dim8_size, dim7_size, dim6_size, dim5_size , dim4_size , (dim3_size+1), dim2_size , dim1_size)) * NUM_READ_FEATURES;*/
 
 	ELEMENT_FLOAT_TYPE* out_prepared_filter_weights4[2];
 
@@ -1972,16 +2030,16 @@ perpare_weights_and_offsets(const float* filter_weights, const int* filter_offse
 	float4 interp_offset_y,interp_offset_x;
 
 	// get x-floor(x)
-	if (NUM_READ_FEATURES > 0) interp_offset_x.x = offset_x.x - (float)(int)(offset_x.x);
-	if (NUM_READ_FEATURES > 1) interp_offset_x.y = offset_x.y - (float)(int)(offset_x.y);
-	if (NUM_READ_FEATURES > 2) interp_offset_x.z = offset_x.z - (float)(int)(offset_x.z);
-	if (NUM_READ_FEATURES > 3) interp_offset_x.w = offset_x.w - (float)(int)(offset_x.w);
+	if (NUM_READ_FEATURES > 0) interp_offset_x.x = offset_x.x - floorf(offset_x.x);
+	if (NUM_READ_FEATURES > 1) interp_offset_x.y = offset_x.y - floorf(offset_x.y);
+	if (NUM_READ_FEATURES > 2) interp_offset_x.z = offset_x.z - floorf(offset_x.z);
+	if (NUM_READ_FEATURES > 3) interp_offset_x.w = offset_x.w - floorf(offset_x.w);
 
 	// get y-floor(y)
-	if (NUM_READ_FEATURES > 0) interp_offset_y.x = offset_y.x - (float)(int)(offset_y.x);
-	if (NUM_READ_FEATURES > 1) interp_offset_y.y = offset_y.y - (float)(int)(offset_y.y);
-	if (NUM_READ_FEATURES > 2) interp_offset_y.z = offset_y.z - (float)(int)(offset_y.z);
-	if (NUM_READ_FEATURES > 3) interp_offset_y.w = offset_y.w - (float)(int)(offset_y.w);
+	if (NUM_READ_FEATURES > 0) interp_offset_y.x = offset_y.x - floorf(offset_y.x);
+	if (NUM_READ_FEATURES > 1) interp_offset_y.y = offset_y.y - floorf(offset_y.y);
+	if (NUM_READ_FEATURES > 2) interp_offset_y.z = offset_y.z - floorf(offset_y.z);
+	if (NUM_READ_FEATURES > 3) interp_offset_y.w = offset_y.w - floorf(offset_y.w);
 
 
 	float4 factor_00, factor_01, factor_10, factor_11;
@@ -1994,15 +2052,15 @@ perpare_weights_and_offsets(const float* filter_weights, const int* filter_offse
 	if (NUM_READ_FEATURES > 2) factor_11.z = interp_offset_x.z * interp_offset_y.z;
 	if (NUM_READ_FEATURES > 3) factor_11.w = interp_offset_x.w * interp_offset_y.w;
 
-	if (NUM_READ_FEATURES > 0) factor_10.x = (interp_offset_x.x) * (1-interp_offset_y.x);
-	if (NUM_READ_FEATURES > 1) factor_10.y = (interp_offset_x.y) * (1-interp_offset_y.y);
-	if (NUM_READ_FEATURES > 2) factor_10.z = (interp_offset_x.z) * (1-interp_offset_y.z);
-	if (NUM_READ_FEATURES > 3) factor_10.w = (interp_offset_x.w) * (1-interp_offset_y.w);
+	if (NUM_READ_FEATURES > 0) factor_01.x = (interp_offset_x.x) * (1-interp_offset_y.x);
+	if (NUM_READ_FEATURES > 1) factor_01.y = (interp_offset_x.y) * (1-interp_offset_y.y);
+	if (NUM_READ_FEATURES > 2) factor_01.z = (interp_offset_x.z) * (1-interp_offset_y.z);
+	if (NUM_READ_FEATURES > 3) factor_01.w = (interp_offset_x.w) * (1-interp_offset_y.w);
 
-	if (NUM_READ_FEATURES > 0) factor_01.x = (1-interp_offset_x.x) * (interp_offset_y.x);
-	if (NUM_READ_FEATURES > 1) factor_01.y = (1-interp_offset_x.y) * (interp_offset_y.y);
-	if (NUM_READ_FEATURES > 2) factor_01.z = (1-interp_offset_x.z) * (interp_offset_y.z);
-	if (NUM_READ_FEATURES > 3) factor_01.w = (1-interp_offset_x.w) * (interp_offset_y.w);
+	if (NUM_READ_FEATURES > 0) factor_10.x = (1-interp_offset_x.x) * (interp_offset_y.x);
+	if (NUM_READ_FEATURES > 1) factor_10.y = (1-interp_offset_x.y) * (interp_offset_y.y);
+	if (NUM_READ_FEATURES > 2) factor_10.z = (1-interp_offset_x.z) * (interp_offset_y.z);
+	if (NUM_READ_FEATURES > 3) factor_10.w = (1-interp_offset_x.w) * (interp_offset_y.w);
 
 	if (NUM_READ_FEATURES > 0) factor_00.x = (1-interp_offset_x.x) * (1-interp_offset_y.x);
 	if (NUM_READ_FEATURES > 1) factor_00.y = (1-interp_offset_x.y) * (1-interp_offset_y.y);
@@ -2011,8 +2069,11 @@ perpare_weights_and_offsets(const float* filter_weights, const int* filter_offse
 
 	const float* w = reinterpret_cast<const float*>(filter_weights4) + input_index;
 
+
 	for (int i = 0 ; i< 2; ++i) {
 
+		if (out_prepared_filter_weights4[i] == NULL)
+			continue;
 
 		// create weights with interpolation factors
 		// dx=0,dy=0
@@ -2161,17 +2222,90 @@ public:
 	}
 
 	void create_input(float* prepared_filter_weights, int* prepared_filter_offsets, float* prepared_filter_offsets_and_weights, // OUTPUT
-					  const float* filter_weights, const int* filter_offsets_x, const int* filter_offsets_y, const float* filter_offsets_float_x, const float* filter_offsets_float_y, // INPUT
-					  cudaStream_t streamId = NULL) {
+					  const float* filter_weights, const float* filter_offsets_float_x, const float* filter_offsets_float_y, // INPUT
+                      int PARAM_FORMAT, cudaStream_t streamId = NULL) {
 
 		if (NUM_BATCH_FEATURES == 4)
-			perpare_weights_and_offsets<BlockIndexingT, float4, int4><<<numBlocks,threadsPerBlock, 0, streamId>>>(filter_weights, filter_offsets_x, filter_offsets_y, prepared_filter_weights, prepared_filter_offsets, prepared_filter_offsets_and_weights, S, G, F/NUM_BATCH_FEATURES);
+			perpare_weights_and_offsets<BlockIndexingT, float4, int4><<<numBlocks,threadsPerBlock, 0, streamId>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, prepared_filter_offsets_and_weights, S, G, F, PARAM_FORMAT);
 		else if (NUM_BATCH_FEATURES == 2)
-			perpare_weights_and_offsets<BlockIndexingT, float2, int2><<<numBlocks,threadsPerBlock, 0, streamId>>>(filter_weights, filter_offsets_x, filter_offsets_y, prepared_filter_weights, prepared_filter_offsets, prepared_filter_offsets_and_weights, S, G, F/NUM_BATCH_FEATURES);
+			perpare_weights_and_offsets<BlockIndexingT, float2, int2><<<numBlocks,threadsPerBlock, 0, streamId>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, prepared_filter_offsets_and_weights, S, G, F, PARAM_FORMAT);
 		else
-			perpare_weights_and_offsets<BlockIndexingT, float, int><<<numBlocks,threadsPerBlock, 0, streamId>>>(filter_weights, filter_offsets_x, filter_offsets_y, prepared_filter_weights, prepared_filter_offsets, prepared_filter_offsets_and_weights, S, G, F/NUM_BATCH_FEATURES);
+			perpare_weights_and_offsets<BlockIndexingT, float, int><<<numBlocks,threadsPerBlock, 0, streamId>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, prepared_filter_offsets_and_weights, S, G, F, PARAM_FORMAT);
+
+		if (0) {
+
+            static const int NUM_READ_FEATURES =  BlockIndexingT::BATCH_COMPUTE_FEATURES_SIZE >= 4 ? 4 :
+                                                  (BlockIndexingT::BATCH_COMPUTE_FEATURES_SIZE >= 2 ? 2 : 1);
 
 
+            static const int dim1_size = BlockIndexingT::BLOCK_FEATURES;
+			static const int dim2_size = BlockIndexingT::BATCH_FEATURES_SIZE/NUM_READ_FEATURES;
+			static const int dim3_size = BlockIndexingT::PIXELS_INTERPOLATION_Dx * BlockIndexingT::PIXELS_INTERPOLATION_Dy;
+			static const int dim4_size = BlockIndexingT::BATCH_GAUSS_SIZE;
+			static const int dim5_size = BlockIndexingT::BATCH_COMPUTE_SUBFEATURES_SIZE * BlockIndexingT::BATCH_MEM_SUBFEATURES_SIZE;
+
+			int dim6_size = G / dim4_size;
+			int dim7_size = S / dim5_size;
+			int dim8_size = F / (dim1_size * dim2_size * NUM_READ_FEATURES);
+
+			size_t num_el = this->get_allocation_size()/sizeof(float);
+			float* prepared_filter_offsets_and_weights_cpu = new float[num_el];
+			int* prepared_filter_offsets_and_weights_cpu_as_int = (int*)prepared_filter_offsets_and_weights_cpu;
+
+			for (int i = 0; i < num_el; ++i)
+				prepared_filter_offsets_and_weights_cpu[i] = -1;
+
+			cudaMemcpy(prepared_filter_offsets_and_weights_cpu, prepared_filter_offsets_and_weights, this->get_allocation_size(), cudaMemcpyDeviceToHost);
+			cudaDeviceSynchronize();
+
+			//for (int i = 0; i < (img_width + 2*MAX_OFFSET)*( img_height + 2*MAX_OFFSET)* I*S; ++i) {
+			int index =0;
+			for (int f_main_idx = 0; f_main_idx < dim8_size; ++f_main_idx) {
+				for (int s_main_idx = 0; s_main_idx < dim7_size; ++s_main_idx) {
+					for (int g_main_idx = 0; g_main_idx < dim6_size; ++g_main_idx) {
+                        printf("main_idx: f,s,g= %d,%d,%d \n", f_main_idx,s_main_idx,g_main_idx);
+						printf("offsets:\n");
+						for (int sh_mem_idx = 0; sh_mem_idx < dim5_size; ++sh_mem_idx) {
+							for (int g = 0; g < dim4_size; ++g) {
+								printf("sh=%d, g=%d: ", sh_mem_idx, g);
+								for (int f_batch = 0; f_batch < dim2_size; ++f_batch) {
+									for (int f_block = 0; f_block < dim1_size; ++f_block) {
+										for (int ff = 0; ff < NUM_READ_FEATURES; ++ff) {
+											std::cout << prepared_filter_offsets_and_weights_cpu_as_int[index] << " ";
+											index++;
+										}
+									}
+								}
+								printf("\n");
+							}
+						}
+						printf("weights:\n");
+						for (int sh_mem_idx = 0; sh_mem_idx < dim5_size; ++sh_mem_idx) {
+							for (int g = 0; g < dim4_size; ++g) {
+								printf("sh=%d, g=%d: \n", sh_mem_idx, g);
+								for (int px = 0; px < dim3_size; ++px) {
+									printf("px=%d:", px);
+									for (int f_batch = 0; f_batch < dim2_size; ++f_batch) {
+										for (int f_block = 0; f_block < dim1_size; ++f_block) {
+											for (int ff = 0; ff < NUM_READ_FEATURES; ++ff) {
+												std::cout << prepared_filter_offsets_and_weights_cpu[index] << " ";
+												index++;
+											}
+										}
+									}
+									printf("\n");
+								}
+							}
+						}
+						printf("\n");
+					}
+				}
+			}
+			std::cout << std::endl;
+			std::cout << std::endl;
+			std::cout << std::endl;
+			std::cout << std::endl;
+		}
 	}
 };
 
@@ -2301,16 +2435,17 @@ public:
 	}
 
 	void run_kernel(const float* filtered_images,
-					const int* filter_offsets_x, const int* filter_offsets_y,
-					const float* filter_offsets_float_x, const float* filter_offsets_float_y,
-					const float* filter_weights, float* output,
+					const float* filter_offsets_float_x, const float* filter_offsets_float_y, const float* filter_weights, int PARAM_FORMAT,
+                    float* output,
 					float* prepared_filtered_images,
 					float* prepared_filter_weights,
 					int* prepared_filter_offsets, float* prepared_filter_offsets_and_weights,
 					cudaStream_t streamId) {
 
 		CUDA_CHECK(cudaMemsetAsync(output, 0, sizeof(float) * I * F * img_width * img_height, streamId));
+		CUDA_CHECK(cudaMemsetAsync(prepared_filtered_images, 0, image_cuda_prepare.get_allocation_size(), streamId));
 
+		//CUDA_CHECK(cudaDeviceSynchronize());
 		{
 //#define PROFILE_CUDA
 #ifdef PROFILE_CUDA
@@ -2326,6 +2461,8 @@ public:
 		CUDA_POST_KERNEL_CHECK;
 		std::cout << "create_input_with_border in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
 #endif
+			CUDA_POST_KERNEL_CHECK;
+			//CUDA_CHECK(cudaDeviceSynchronize());
 		}
 
 		{
@@ -2334,7 +2471,7 @@ public:
 
 		clock_t start_t = clock();
 #endif
-			weight_and_offsets_cuda_prepare.create_input(prepared_filter_weights, prepared_filter_offsets, prepared_filter_offsets_and_weights, filter_weights, filter_offsets_x, filter_offsets_y, filter_offsets_float_x, filter_offsets_float_y, streamId);
+			weight_and_offsets_cuda_prepare.create_input(prepared_filter_weights, prepared_filter_offsets, prepared_filter_offsets_and_weights, filter_weights, filter_offsets_float_x, filter_offsets_float_y, PARAM_FORMAT, streamId);
 #ifdef PROFILE_CUDA
 			cudaDeviceSynchronize();
 
@@ -2343,6 +2480,8 @@ public:
 
 		std::cout << "copy_permute_weights in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
 #endif
+			CUDA_POST_KERNEL_CHECK;
+			//CUDA_CHECK(cudaDeviceSynchronize());
 		}
 #ifdef PROFILE_CUDA
 		std::cout << "started fast_gauss_forward_pipeline_kernel" << std::endl;
@@ -2366,34 +2505,40 @@ public:
 		std::cout << "fast_gauss_forward_pipeline_kernel in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
 	}
 #endif
+		CUDA_POST_KERNEL_CHECK;
+		//CUDA_CHECK(cudaDeviceSynchronize());
+
 	}
 };
 
 
 template <>
-void fast_gauss_forward<double>(const double* filtered_images, const int* filter_offsets_x, const int* filter_offsets_y, const float* filter_offsets_float_x, const float* filter_offsets_float_y,
-								const double* filter_weights, double* output,
+void fast_gauss_forward<double>(const double* filtered_images,
+								const double* filter_offsets_float_x, const double* filter_offsets_float_y, const double* filter_weights, int PARAM_FORMAT,
+								double* output,
 								const int I, const int S, const int F, const int G,
 								const int img_width, const int img_height,
 								const int kernel_width, const int kernel_height, const bool use_interpolation,
-								float* prepared_filtered_images, size_t* prepared_filtered_images_size,
-								float* prepared_filter_weights, size_t* prepared_filter_weights_size,
+								double* prepared_filtered_images, size_t* prepared_filtered_images_size,
+								double* prepared_filter_weights, size_t* prepared_filter_weights_size,
 								int* prepared_filter_offsets, size_t* prepared_filter_offsets_size,
-								float* prepared_filter_offsets_and_weights, cudaStream_t streamId) {
+								double* prepared_filter_offsets_and_weights, cudaStream_t streamId) {
 
 }
 
+
 template<>
-void fast_gauss_forward<float>(const float* filtered_images, const int* filter_offsets_x, const int* filter_offsets_y, const float* filter_offsets_float_x, const float* filter_offsets_float_y,
-//void fast_gauss_forward_new(const float* filtered_images, const int* filter_offsets_x, const int* filter_offsets_y, const float* filter_offsets_float_x, const float* filter_offsets_float_y,
-								   const float* filter_weights, float* output,
-								   const int I, const int S, const int F, const int G,
-								   const int img_width, const int img_height,
-								   const int kernel_width, const int kernel_height,const bool use_interpolation,
-								   float* prepared_filtered_images, size_t* prepared_filtered_images_size,
-								   float* prepared_filter_weights, size_t* prepared_filter_weights_size,
-								   int* prepared_filter_offsets, size_t* prepared_filter_offsets_size,
-								   float* prepared_filter_offsets_and_weights, cudaStream_t streamId) {
+void fast_gauss_forward<float>(const float* filtered_images,
+//void fast_gauss_forward_new(const float* filtered_images,
+							   const float* filter_offsets_float_x, const float* filter_offsets_float_y, const float* filter_weights, const int PARAM_FORMAT,
+							   float* output,
+							   const int I, const int S, const int F, const int G,
+							   const int img_width, const int img_height,
+							   const int kernel_width, const int kernel_height,const bool use_interpolation,
+							   float* prepared_filtered_images, size_t* prepared_filtered_images_size,
+							   float* prepared_filter_weights, size_t* prepared_filter_weights_size,
+							   int* prepared_filter_offsets, size_t* prepared_filter_offsets_size,
+							   float* prepared_filter_offsets_and_weights, cudaStream_t streamId) {
 
 
 	// calls either FastGaussForwardCUDA->run_kernel() or FastGaussForwardCUDA->get_allocation_sizes()
@@ -2421,7 +2566,7 @@ void fast_gauss_forward<float>(const float* filtered_images, const int* filter_o
 
 
 #define RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, ...) \
-	if (IMG_PATCH_SIZE_W >= 32) { \
+    if (IMG_PATCH_SIZE_W >= 32) { \
 		RUN_KERNEL_R1(CLASS_NAME, 32, IMG_PATCH_SIZE_H, MAX_OFFSET, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
 	} else if (IMG_PATCH_SIZE_W >= 16) { \
         RUN_KERNEL_R1(CLASS_NAME, 16, IMG_PATCH_SIZE_H, MAX_OFFSET, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
@@ -2461,6 +2606,7 @@ void fast_gauss_forward<float>(const float* filtered_images, const int* filter_o
         RUN_KERNEL_R4(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, 1, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
 	}
 
+
 	// NOTE:
 	//	we make sure img size is not smaller then what a single block of cuda threads will use (i.e. 32x8)
 
@@ -2484,7 +2630,7 @@ void fast_gauss_forward<float>(const float* filtered_images, const int* filter_o
 
 	RUN_KERNEL_R5(FastGaussForwardCUDA, img_size_w, img_size_h, max_offset, num_images, use_interpolation,
 				  img_width, img_height, I, S, F, G,
-				  filtered_images, filter_offsets_x, filter_offsets_y, filter_offsets_float_x, filter_offsets_float_y, filter_weights, output,
+				  filtered_images, filter_offsets_float_x, filter_offsets_float_y, filter_weights, PARAM_FORMAT, output,
 				  prepared_filtered_images, prepared_filter_weights, prepared_filter_offsets, prepared_filter_offsets_and_weights,
 				  streamId);
 
@@ -2493,8 +2639,9 @@ void fast_gauss_forward<float>(const float* filtered_images, const int* filter_o
 // EVALUATION/DEBUGGING code
 //template <>
 //void fast_gauss_forward<float>(const float* filtered_images, const int* filter_offsets_x, const int* filter_offsets_y, const float* filter_offsets_float_x, const float* filter_offsets_float_y,
-void fast_gauss_forward_old(const float* filtered_images, const int* filter_offsets_x, const int* filter_offsets_y, const float* filter_offsets_float_x, const float* filter_offsets_float_y,
-								const float* filter_weights, float* output,
+void fast_gauss_forward_old(const float* filtered_images,
+                            const float* filter_offsets_float_x, const float* filter_offsets_float_y,const float* filter_weights, const int PARAM_FORMAT,
+                            float* output,
 								const int I, const int S, const int F, const int G,
 								const int img_width, const int img_height,
 								const int kernel_width, const int kernel_height,const bool use_interpolation,
@@ -2564,9 +2711,8 @@ void fast_gauss_forward_old(const float* filtered_images, const int* filter_offs
 
 			clock_t start_t = clock();
 			_kernel_class.run_kernel(filtered_images,
-									 filter_offsets_x, filter_offsets_y,
 									 filter_offsets_float_x, filter_offsets_float_y,
-									 filter_weights, output,
+									 filter_weights, PARAM_FORMAT, output,
 									 prepared_filtered_images_,
 									 prepared_filter_weights_,
 									 prepared_filter_offsets_, prepared_filter_offsets_and_weights_, streamId);
@@ -2733,7 +2879,7 @@ void fast_gauss_forward_old(const float* filtered_images, const int* filter_offs
 		std::cout << "waiting for copy_permute_weights" << std::endl;
 
 		clock_t start_t = clock();
-		weight_and_offsets_cuda_prepare.create_input(prepared_filter_weights_, prepared_filter_offsets_, prepared_filter_offsets_and_weights_, filter_weights, filter_offsets_x, filter_offsets_y, filter_offsets_float_x, filter_offsets_float_y);
+		weight_and_offsets_cuda_prepare.create_input(prepared_filter_weights_, prepared_filter_offsets_, prepared_filter_offsets_and_weights_, filter_weights, filter_offsets_float_x, filter_offsets_float_y, PARAM_FORMAT);
 		cudaDeviceSynchronize();
 
 		clock_t end_t = clock();

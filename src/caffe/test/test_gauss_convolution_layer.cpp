@@ -973,7 +973,10 @@ TYPED_TEST(GaussConvolutionLayerTest, TestCuDNNComponentsMerging) {
   }
 }
 
-TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussConvolution) {
+#define OFFSET(l,k,j,i, num_l, num_k, num_j, num_i) ((( (l)*(num_k) + (k)) * (num_j) + (j))*(num_i) + (i) )
+
+
+    TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussConvolution) {
 
 
     Caffe::SetDevice(0);
@@ -1012,6 +1015,8 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussConvolution) {
     Blob<float> blob_offsets_float_y(1, S, G, F);
     Blob<float> blob_weights(1, S, G, F);
     Blob<float> blob_output(N,F,H,W);
+    Blob<float> blob_output_cpu(N,F,H,W);
+    Blob<float> blob_output_cudnn(N,F,H,W);
 
     FillerParameter const_one_filler_param;
     const_one_filler_param.set_value(1);
@@ -1033,12 +1038,14 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussConvolution) {
     const_one_filer.Fill(&blob_weights);
 
 
+    input_filler.Fill(&blob_input);
+
     float* data = blob_input.mutable_cpu_data();
     for (int n = 0; n < N; ++n){
         for (int s = 0; s < S; ++s) {
             for (int i = 0; i < H * W; ++i) {
                 //data[(n * S + s )* H * W + i] = s;
-                data[(n * S + s )* H * W + i] = n + (i % W + 1);
+                //data[(n * S + s )* H * W + i] = n + (i % W + 1);
                 //data[(n * S + s )* H * W + i] = n + (i / W + 1);
                 //data[(n * S + s )* H * W + i] = (i % W);
 
@@ -1068,9 +1075,43 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussConvolution) {
     const float* filter_weights = Caffe::mode() == Caffe::CPU ? blob_weights.cpu_data() : blob_weights.gpu_data();
     float* output = Caffe::mode() == Caffe::CPU ? blob_output.mutable_cpu_data() : blob_output.mutable_gpu_data();
 
-
     LayerParameter layer_param;
+
+    ConvolutionParameter* gauss_convolution_param = layer_param.mutable_convolution_param();
+
+    gauss_convolution_param->add_kernel_size(5);
+    gauss_convolution_param->add_stride(1);
+    gauss_convolution_param->add_pad(2);
+
+    gauss_convolution_param->add_number_gauss(G);
+    gauss_convolution_param->add_number_gauss(1);
+
+    gauss_convolution_param->set_num_output(F);
+
+    //gauss_convolution_param->mutable_weight_filler()->set_type("constant");
+    //gauss_convolution_param->mutable_weight_filler()->set_value(2);
+
+    gauss_convolution_param->mutable_weight_filler()->set_type("gaussian");
+    gauss_convolution_param->mutable_weight_filler()->set_std(0.01);
+
+    gauss_convolution_param->mutable_bias_filler()->set_type("constant");
+    gauss_convolution_param->mutable_bias_filler()->set_value(0);
+
+    gauss_convolution_param->mutable_mu_filler()->set_type("constant");
+    gauss_convolution_param->mutable_mu_filler()->set_value(0);
+
+    gauss_convolution_param->mutable_sigma_filler()->set_type("constant");
+    gauss_convolution_param->mutable_sigma_filler()->set_value(0.8);
+
+    gauss_convolution_param->set_gmm_component_border_bound(100);
+    gauss_convolution_param->set_gmm_sigma_lower_bound(0.5);
+
+    gauss_convolution_param->set_gmm_weight_normalization(false);
+    gauss_convolution_param->set_gmm_gauss_normalization(true);
+    gauss_convolution_param->set_gmm_square_gauss_normalization(false);
+
     FastAproxGaussianConvLayer<float> layer(layer_param);
+
 
     LayerParameter cudnn_layer_param;
 
@@ -1098,32 +1139,73 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussConvolution) {
 
     std::vector<Blob<float>* > blob_bottom_vec;
     std::vector<Blob<float>* > blob_top_vec;
+    std::vector<Blob<float>* > blob_top_vec_cudnn;
+    std::vector<Blob<float>* > blob_top_vec_cpu;
+
 
     blob_bottom_vec.push_back(&blob_input);
+
     blob_top_vec.push_back(&blob_output);
+    blob_top_vec_cudnn.push_back(&blob_output_cudnn);
+    blob_top_vec_cpu.push_back(&blob_output_cpu);
 
-    cudnn_layer->SetUp(blob_bottom_vec, blob_top_vec);
-
+    cudnn_layer->SetUp(blob_bottom_vec, blob_top_vec_cudnn);
+/*
     for (int i = 0; i < 1; ++i) {
         clock_t start_t = clock();
-        cudnn_layer->Forward(blob_bottom_vec, blob_top_vec);
+        cudnn_layer->Forward(blob_bottom_vec, blob_top_vec_cudnn);
         cudaDeviceSynchronize();
         clock_t end_t = clock();
         std::cout << "CuDNNConvolutionLayer forward pass in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
-    }
+    }*/
     std::cout << std::endl;
     for (int ii = 0; ii < 1; ++ii) {
 
-	    if (Caffe::mode() == Caffe::CPU)
+        layer.SetUp(blob_bottom_vec, blob_top_vec);
+
+        // override offset data with zeros
+        float* filter_offsets_float_mu1 = layer.param_buffer_mu1_->mutable_gpu_data();
+        float* filter_offsets_float_mu2 = layer.param_buffer_mu2_->mutable_gpu_data();
+
+        cudaMemset(filter_offsets_float_mu1, 0, layer.param_buffer_mu1_->count() * sizeof(float));
+        cudaMemset(filter_offsets_float_mu2, 0, layer.param_buffer_mu2_->count() * sizeof(float));
+
+        float* mu1_data = layer.param_buffer_mu1_->mutable_cpu_data();
+        float* mu2_data = layer.param_buffer_mu2_->mutable_cpu_data();
+        float* w_data = layer.param_buffer_w_->mutable_cpu_data();
+
+        for (int s = 0; s < S; s++) {
+            for (int g = 0; g < G; g++) {
+                for (int f = 0; f < F; f++) {
+                    //w_data[OFFSET(0,s,g,f, 1, S,G,F)] = s;
+                    //w_data[OFFSET(0,s,g,f, 1, S,G,F)] = ;
+                    //w_data[OFFSET(0,s,g,f, 1, S,G,F)] = 1;
+                    mu1_data[OFFSET(0,s,g,f, 1, S,G,F)] = -1.5;
+                    mu2_data[OFFSET(0,s,g,f, 1, S,G,F)] = 1.5;
+                }
+            }
+        }
+
+/*
+        if (Caffe::mode() == Caffe::CPU)
 		    layer.test_kernel_cpu(filtered_images, filter_offsets_x, filter_offsets_y, filter_offsets_float_x, filter_offsets_float_y, filter_weights, output, N, S, F, G, W, H, 5, 5, use_interpolation);
 	    else
-		    layer.test_kernel_gpu(filtered_images, filter_offsets_x, filter_offsets_y, filter_offsets_float_x, filter_offsets_float_y, filter_weights, output, N, S, F, G, W, H, 5, 5, use_interpolation);
+		    layer.test_kernel_gpu(filtered_images, filter_offsets_float_x, filter_offsets_float_y, filter_weights, output, N, S, F, G, W, H, 5, 5, use_interpolation);
 
+       float* output_c = blob_output.mutable_cpu_data();
+*/
 
-        float* output_c = blob_output.mutable_cpu_data();
+        layer.Forward_cpu(blob_bottom_vec, blob_top_vec_cpu);
+
+        layer.Forward_gpu(blob_bottom_vec, blob_top_vec);
+
+        float* output_cpu = blob_top_vec_cpu[0]->mutable_cpu_data();
+        float* output_c = blob_top_vec[0]->mutable_cpu_data();
+
 
         // verify data - since we use 1 for input and wights and 0 for offsets we should get S as output value for all
 
+        const bool compare_by_cpu = true;
         int found_invalid = 0;
         //double valid_value = S *G;
         double valid_value = (S-1) * (S)/2 * G;
@@ -1133,12 +1215,19 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussConvolution) {
                 for (int i = 0; i < H * W; ++i) {
                     int index = (n * F + f )* H * W + i;
                     float val = output_c[index];
-                    float valid_value = (n + i % W +1 )*G*S;
-                    //float valid_value = (n + i / W +1 )*G*S;
-                    //float valid_value = (i % W  ) *G*S;
-                    if (val != valid_value) {
+                    float valid_value = (n + i % W +1 )*G*S;  // for data[] = n + (i % W + 1)
+                    //float valid_value = (n + i / W +1 )*G*S;  // for data[] = n + (i  / W + 1)
+                    //float valid_value = (i % W  ) *G*S;       // for data[] = s
+                    //float valid_value = n + (i % W + 1);      // for just copy
+
+                    if (compare_by_cpu) {
+                        valid_value = output_cpu[index];
+                    }
+
+                    // interpolation at the right edge excludes one pixel so ignore those pixels
+                    if (abs(val - valid_value) > 1e-5 && i % W < (W -1)) {
                         if (found_invalid < 10)
-                            printf("found invalid output (%f) at loc (%d) - should be %f\n", val, index, valid_value);
+                            printf("found invalid output (%f) at loc (%d=%d,%d,%d,%d) - should be %f\n", val, index,  n, f, i / W, i % W, valid_value);
                         found_invalid++;
                     }
                     //if (i % W == 0)
@@ -1449,9 +1538,9 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussBackward) {
         ConvolutionParameter* convolution_param =
                 cudnn_layer_param.mutable_convolution_param();
 
-        convolution_param->add_kernel_size(3);
+        convolution_param->add_kernel_size(7);
         convolution_param->add_stride(1);
-        convolution_param->add_pad(1);
+        convolution_param->add_pad(2);
 
         convolution_param->set_num_output(F);
 
@@ -1494,7 +1583,7 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussBackward) {
         for (int ii = 0; ii < 1; ++ii) {
 
             if (Caffe::mode() == Caffe::GPU)
-                layer.test_backward_multi_subfeature_kernel_gpu(filtered_images, error_images, filter_offsets_x, filter_offsets_y, filter_offsets_float_x, filter_offsets_float_y, filter_weights, output, K, N, S, F, G, W, H, 5, 5, use_interpolation);
+                layer.test_backward_multi_subfeature_kernel_gpu(filtered_images, error_images, filter_offsets_float_x, filter_offsets_float_y, filter_weights, output, K, N, S, F, G, W, H, 5, 5, use_interpolation);
 
             float* output_c = blob_output.mutable_cpu_data();
 
