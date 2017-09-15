@@ -137,7 +137,6 @@ template <typename Dtype>
 void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
 													 const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom) {
 
-	// TODO:
 	//  - first convolve bottom input data with kernels for individual parameters (w, mu1, mu2, sigma)
 	//  - then compute and collect gradients by shifting convolved bottom input data and multiplying it with the top error data
 	//  - finally back-propagade the error by convolving top error with the rotated filters (we can use the same function as for forward-pass, but need to transpose mu1 and mu2 values)
@@ -146,7 +145,6 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 	const Dtype* filter_weights = this->param_buffer_w_->gpu_data();
 	const Dtype* filter_offsets_float_mu1 = this->param_buffer_mu1_->gpu_data();
 	const Dtype* filter_offsets_float_mu2 = this->param_buffer_mu2_->gpu_data();
-
 
 	Dtype* param_weights_diff = this->param_buffer_w_->mutable_gpu_diff();
 	Dtype* param_mu1_diff = this->param_buffer_mu1_->mutable_gpu_diff();
@@ -170,16 +168,19 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 
 	const int prefilter_size = this->gauss_kernel_h_ * this->gauss_kernel_w_ ;
 
-	caffe_gpu_memcpy(prefilter_size * sizeof(float), deriv_w_kernel, deriv_kernels_data + 0 * prefilter_size);
-	caffe_gpu_memcpy(prefilter_size * sizeof(float), deriv_mu1_kernel, deriv_kernels_data + 1 * prefilter_size);
-	caffe_gpu_memcpy(prefilter_size * sizeof(float), deriv_mu2_kernel, deriv_kernels_data + 2 * prefilter_size);
-	caffe_gpu_memcpy(prefilter_size * sizeof(float), deriv_sigma_kernel, deriv_kernels_data + 3 * prefilter_size);
+	if (NUM_K > 0) caffe_gpu_memcpy(prefilter_size * sizeof(float), deriv_w_kernel, deriv_kernels_data + 0 * prefilter_size);
+	if (NUM_K > 1) caffe_gpu_memcpy(prefilter_size * sizeof(float), deriv_mu1_kernel, deriv_kernels_data + 1 * prefilter_size);
+	if (NUM_K > 2) caffe_gpu_memcpy(prefilter_size * sizeof(float), deriv_mu2_kernel, deriv_kernels_data + 2 * prefilter_size);
+	if (NUM_K > 3) caffe_gpu_memcpy(prefilter_size * sizeof(float), deriv_sigma_kernel, deriv_kernels_data + 3 * prefilter_size);
 
 	// intermediate data for blurred input
 	Dtype* interm_data = interm_buffer_.mutable_gpu_data();
 
 	// transform all four accumulated gradients into seperabe buffers of size [S x G x F]
 	int param_size = this->NUM_GAUSS * this->conv_in_channels_ * this->conv_out_channels_;
+
+	// make sure gradient accumulation buffer is zeroed
+	caffe_gpu_memset(param_size * NUM_K * sizeof(Dtype), 0, bwd_gradients_data);
 
 	for (int i = 0; i < bottom.size(); ++i) {
 
@@ -215,6 +216,10 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 												cudnn::dataType<Dtype>::zero,
 												bwd_interm_data_descs_[i], interm_data));
 
+			// TODO: if it is faster we should add zeroing to input prepare functions !!
+			CUDA_CHECK(cudaMemsetAsync(this->buffer_bwd_.filtered_images,0,this->buffer_bwd_.filtered_images_sizes_, stream_[0]));
+			CUDA_CHECK(cudaMemsetAsync(this->buffer_bwd_.error_images,0,this->buffer_bwd_.error_image_sizes_, stream_[0]));
+
 			// TODO: update support for K=4 as well
 
 			// collect gradients by shifting convolved bottom input data and multiplying it with the top error data
@@ -224,28 +229,16 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 																this->num_, this->channels_, this->num_output_, this->NUM_GAUSS, NUM_K,
 																this->width_out_, this->height_out_,
 																this->kernel_w_, this->kernel_h_,
-																this->use_interpolation_,
+																this->use_interpolation_, this->ignore_edge_gradients_,
 																this->buffer_bwd_.filtered_images,0,
 																this->buffer_bwd_.error_images,0,
 																this->buffer_bwd_.filter_weights,0,
-																this->buffer_bwd_.filter_offsets,0);
+																this->buffer_bwd_.filter_offsets,0, stream_[0]);
 
 
-			// we need to multiply gradients with weights but only for mu1,mu2 and sigma
-			// NOTE: bwd_gradients_data has data [4 x G x S x F] so we first transpose them, also we need to store them
-			// in seperate buffers each one in [S x G x F]
-
-			caffe_gpu_transpose(1, this->NUM_GAUSS, this->conv_in_channels_, this->conv_out_channels_,  bwd_gradients_data + 0 * param_size, param_weights_diff);
-			caffe_gpu_transpose(1, this->NUM_GAUSS, this->conv_in_channels_, this->conv_out_channels_,  bwd_gradients_data + 1 * param_size, param_mu1_diff);
-			caffe_gpu_transpose(1, this->NUM_GAUSS, this->conv_in_channels_, this->conv_out_channels_,  bwd_gradients_data + 2 * param_size, param_mu2_diff);
-			if (NUM_K >= 4) caffe_gpu_transpose(1, this->NUM_GAUSS, this->conv_in_channels_, this->conv_out_channels_,  bwd_gradients_data + 3 * param_size, param_sigma_diff);
-
-			// multiply gradients with appropriate weights
-			caffe_gpu_mul(param_size, param_mu1_diff, filter_weights, param_mu1_diff);
-			caffe_gpu_mul(param_size, param_mu2_diff, filter_weights, param_mu2_diff);
-			if (NUM_K >= 4) caffe_gpu_mul(param_size, param_sigma_diff, filter_weights, param_sigma_diff);
 		}
 
+		if (0)
 		// finally perform back-propagation of the error values
 		if (propagate_down[i]) {
 			// we need to do pre-filtering of the error values
@@ -262,9 +255,9 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 			// then use our custom kernel for forwarding, however we need to transpose kernels, which in our case means
 			// that we need to rotate mu1,mu2 locations
 
-			// we can re-use bwd_gradients_data buffer for mu1 and mu2 that are rotated
-			Dtype *param_mu1_backprop = bwd_gradients_data + 0 * param_size;
-			Dtype *param_mu2_backprop = bwd_gradients_data + 1 * param_size;
+			// get param buffer for mu1 and mu2 that will be rotated
+			Dtype *param_mu1_backprop = this->tmp_param_buffer_.mutable_gpu_data() + 0 * param_size;
+			Dtype *param_mu2_backprop = this->tmp_param_buffer_.mutable_gpu_data() + 1 * param_size;
 
 			// rot(mu) = (kernel_w-1) - mu
 			{
@@ -293,8 +286,20 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 											 buffer_fwd_.filter_offsets_and_weights, stream_[0]);
 
 		}
+	}
+	// we need accumulate gradients them to the final buffer and add weights to some derivates
+	if (this->param_propagate_down_[0]) {
+		// multiply gradients with appropriate weights
+		/// add add weight multiplyer as specifed by derivative formula only for mu1,mu2 and sigma
+		if (NUM_K > 1) caffe_gpu_mul(param_size, bwd_gradients_data + 1 * param_size, filter_weights, bwd_gradients_data + 1 * param_size); // mu1
+		if (NUM_K > 2) caffe_gpu_mul(param_size, bwd_gradients_data + 2 * param_size, filter_weights, bwd_gradients_data + 2 * param_size); // mu2
+		if (NUM_K > 3) caffe_gpu_mul(param_size, bwd_gradients_data + 3 * param_size, filter_weights, bwd_gradients_data + 3 * param_size); // sigma
 
-
+		// for weight gradient we only accumulate to final buffer
+		if (NUM_K > 0) caffe_gpu_axpy(param_size, (Dtype)1, bwd_gradients_data + 0 * param_size, param_weights_diff); // w
+		if (NUM_K > 1) caffe_gpu_axpy(param_size, (Dtype)1, bwd_gradients_data + 1 * param_size, param_mu1_diff); // mu1
+		if (NUM_K > 2) caffe_gpu_axpy(param_size, (Dtype)1, bwd_gradients_data + 2 * param_size, param_mu2_diff); // mu2
+		if (NUM_K > 3) caffe_gpu_axpy(param_size, (Dtype)1, bwd_gradients_data + 3 * param_size, param_sigma_diff); // sigma
 	}
 }
 

@@ -264,13 +264,18 @@ class FastAproxGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
   void test_kernel_cpu(const float* filtered_images, const int* filter_offsets_x, const int* filter_offsets_y, const float* filter_offsets_float_x, const float* filter_offsets_float_y, const float* filter_weights, float* output, const int I, const int S, const int F, const int G, const int img_width, const int img_height, const int kernel_width, const int kernel_height, const bool use_interpolation);
   void test_kernel_gpu(const Dtype* filtered_images, const Dtype* filter_offsets_float_x, const Dtype* filter_offsets_float_y, const Dtype* filter_weights, Dtype* output, const int I, const int S, const int F, const int G, const int img_width, const int img_height, const int kernel_width, const int kernel_height, const bool use_interpolation);
   void test_backward_kernel_gpu(const float* filtered_images, const float* error_images, const int* filter_offsets_x, const int* filter_offsets_y, const float* filter_offsets_float_x, const float* filter_offsets_float_y, const float* filter_weights, float* output, const int I, const int S, const int F, const int G, const int img_width, const int img_height, const int kernel_width, const int kernel_height) ;
-  void test_backward_multi_subfeature_kernel_gpu(const float* filtered_images, const float* error_images, const float* filter_offsets_float_x, const float* filter_offsets_float_y, const float* filter_weights, float* output, const int K, const int I, const int S, const int F, const int G, const int img_width, const int img_height, const int kernel_width, const int kernel_height, const bool use_interpolation);
+  void test_backward_multi_subfeature_kernel_gpu(const float* filtered_images, const float* error_images, const float* filter_offsets_float_x, const float* filter_offsets_float_y, const float* filter_weights, float* output, const int K, const int I, const int S, const int F, const int G, const int img_width, const int img_height, const int kernel_width, const int kernel_height, const bool use_interpolation, const bool ignore_edge_gradients);
 
 
 	// TODO: add support for K=4 as well
 	const int NUM_K = 3;
 
 	bool use_interpolation_;
+
+
+	// since right/bottom edge values will not be computed properly we can ignore gradients at right/bottom image edge
+	// NOTE: since gradients are not avegred but summed this should not be an issue, so this is used only for unit-testing (to make it compatible with cpu version)
+	bool ignore_edge_gradients_ = false;
 
 	int gauss_kernel_h_;
 	int gauss_kernel_w_;
@@ -318,6 +323,7 @@ class FastAproxGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
 
 
 	Blob<Dtype> interm_buffer_;
+    Blob<Dtype> tmp_param_buffer_;
 
 	Dtype gaussian_kernel_variance;
 
