@@ -2113,67 +2113,6 @@ perpare_weights_and_offsets(const float* filter_weights, const float* filter_off
 			if (NUM_READ_FEATURES > 3) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_3 + 3] = w[3 * input_f_offset] * factor_11.w;
 		}
 	}
-/*
-	float4 interp_offset_y,interp_offset_x;
-
-    // get x-floor(y)
-	interp_offset_x.x = offset_x.x - (float)(int)(offset_x.x);
-	interp_offset_x.y = offset_x.y - (float)(int)(offset_x.y);
-	interp_offset_x.z = offset_x.z - (float)(int)(offset_x.z);
-	interp_offset_x.w = offset_x.w - (float)(int)(offset_x.w);
-
-    // get y-floor(y)
-    interp_offset_y.x = offset_y.x - (float)(int)(offset_y.x);
-    interp_offset_y.y = offset_y.y - (float)(int)(offset_y.y);
-    interp_offset_y.z = offset_y.z - (float)(int)(offset_y.z);
-    interp_offset_y.w = offset_y.w - (float)(int)(offset_y.w);
-
-	float4 factor_00, factor_01, factor_10, factor_11;
-
-	factor_11.x = interp_offset_x.x * interp_offset_y.x;
-	factor_11.y = interp_offset_x.y * interp_offset_y.y;
-	factor_11.z = interp_offset_x.z * interp_offset_y.z;
-	factor_11.w = interp_offset_x.w * interp_offset_y.w;
-
-	factor_10.x = (interp_offset_x.x) * (1-interp_offset_y.x);
-	factor_10.y = (interp_offset_x.y) * (1-interp_offset_y.y);
-	factor_10.z = (interp_offset_x.z) * (1-interp_offset_y.z);
-	factor_10.w = (interp_offset_x.w) * (1-interp_offset_y.w);
-
-	factor_01.x = (1-interp_offset_x.x) * (interp_offset_y.x);
-	factor_01.y = (1-interp_offset_x.y) * (interp_offset_y.y);
-	factor_01.z = (1-interp_offset_x.z) * (interp_offset_y.z);
-	factor_01.w = (1-interp_offset_x.w) * (interp_offset_y.w);
-
-	factor_00.x = (1-interp_offset_x.x) * (1-interp_offset_y.x);
-	factor_00.y = (1-interp_offset_x.y) * (1-interp_offset_y.y);
-	factor_00.z = (1-interp_offset_x.z) * (1-interp_offset_y.z);
-	factor_00.w = (1-interp_offset_x.w) * (1-interp_offset_y.w);
-
-	// create weights with interpolation factors
-	prepared_filter_weights4[output_index_0].x = filter_weights4[input_index].x * factor_00.x;
-	prepared_filter_weights4[output_index_0].y = filter_weights4[input_index].y * factor_00.y;
-	prepared_filter_weights4[output_index_0].z = filter_weights4[input_index].z * factor_00.z;
-	prepared_filter_weights4[output_index_0].w = filter_weights4[input_index].w * factor_00.w;
-
-	int output_index_1 = output_index_0 + 1 *  (dim1_size * dim2_size);
-	prepared_filter_weights4[output_index_1].x = filter_weights4[input_index].x * factor_01.x;
-	prepared_filter_weights4[output_index_1].y = filter_weights4[input_index].y * factor_01.y;
-	prepared_filter_weights4[output_index_1].z = filter_weights4[input_index].z * factor_01.z;
-	prepared_filter_weights4[output_index_1].w = filter_weights4[input_index].w * factor_01.w;
-
-	int output_index_2 = output_index_0 + 2 *  (dim1_size * dim2_size);
-	prepared_filter_weights4[output_index_2].x = filter_weights4[input_index].x * factor_10.x;
-	prepared_filter_weights4[output_index_2].y = filter_weights4[input_index].y * factor_10.y;
-	prepared_filter_weights4[output_index_2].z = filter_weights4[input_index].z * factor_10.z;
-	prepared_filter_weights4[output_index_2].w = filter_weights4[input_index].w * factor_10.w;
-
-	int output_index_3 = output_index_0 + 3 *  (dim1_size * dim2_size);
-	prepared_filter_weights4[output_index_3].x = filter_weights4[input_index].x * factor_11.x;
-	prepared_filter_weights4[output_index_3].y = filter_weights4[input_index].y * factor_11.y;
-	prepared_filter_weights4[output_index_3].z = filter_weights4[input_index].z * factor_11.z;
-	prepared_filter_weights4[output_index_3].w = filter_weights4[input_index].w * factor_11.w;*/
-
 }
 
 
@@ -2187,10 +2126,7 @@ class FastForwardInputWeightAndOffsets {
 		OFFSET_BLOCK_MEM_SIZE = BlockIndexingT::BATCH_COMPUTE_SUBFEATURES_SIZE * BlockIndexingT::BATCH_MEM_SUBFEATURES_SIZE * BlockIndexingT::BATCH_GAUSS_SIZE * BlockIndexingT::BATCH_FEATURES_SIZE * BlockIndexingT::BLOCK_FEATURES,
 		WEIGHT_BLOCK_MEM_SIZE = BlockIndexingT::BATCH_COMPUTE_SUBFEATURES_SIZE * BlockIndexingT::BATCH_MEM_SUBFEATURES_SIZE * BlockIndexingT::BATCH_GAUSS_SIZE * BlockIndexingT::PIXELS_INTERPOLATION_Dx*BlockIndexingT::PIXELS_INTERPOLATION_Dy * BlockIndexingT::BATCH_FEATURES_SIZE * BlockIndexingT::BLOCK_FEATURES,
 
-		// values specific for this kernel
-		CUDA_THREADS = 256,
-
-	};
+    };
 	const int img_width;
 	const int img_height;
 	const int N;
@@ -2325,6 +2261,10 @@ class FastGaussForwardCUDA {
 
 		// IMG_WIDTH and IMG_HEIGHT: 	32x32 .. N and M > 32
 		// 								16x16 .. otherwise
+
+        // current implementation allows min 32px in width, but this can be reduced by setting BATCH_IMAGES=2 or higher
+        // however, this has not been tested yet !!
+
 
 		// BATCH_IMAGES :	2	.. N >= 2
 		// 					1	.. N == 1

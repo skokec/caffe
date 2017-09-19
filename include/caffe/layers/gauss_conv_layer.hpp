@@ -232,6 +232,7 @@ class GaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
 
 };
 
+#ifdef USE_CUDNN
 template <typename Dtype>
 class FastAproxGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
  public:
@@ -366,7 +367,6 @@ class FastAproxGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
 };
 
 
-#ifdef USE_CUDNN
 template <typename Dtype>
 class CuDNNGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
  public:

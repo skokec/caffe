@@ -1,7 +1,6 @@
 #ifdef USE_CUDNN
 #include <vector>
 #include <memory>
-#include <caffe/layers/gauss_conv_layer.hpp>
 
 #include "caffe/layers/gauss_conv_layer.hpp"
 
@@ -135,6 +134,8 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 	//  - then compute and collect gradients by shifting convolved bottom input data and multiplying it with the top error data
 	//  - finally back-propagade the error by convolving top error with the rotated filters (we can use the same function as for forward-pass, but need to transpose mu1 and mu2 values)
 
+    this->current_iteration_index++;
+
 	// get buffers for all parameters that we learn
 	const Dtype* filter_weights = this->param_buffer_w_->gpu_data();
 	const Dtype* filter_offsets_float_mu1 = this->param_buffer_mu1_->gpu_data();
@@ -213,10 +214,10 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 			// TODO: if it is faster we should add zeroing to input prepare functions !!
 			CUDA_CHECK(cudaMemsetAsync(this->buffer_bwd_.filtered_images,0,this->buffer_bwd_.filtered_images_sizes_, stream_[0]));
 			CUDA_CHECK(cudaMemsetAsync(this->buffer_bwd_.error_images,0,this->buffer_bwd_.error_image_sizes_, stream_[0]));
-			cudaDeviceSynchronize();
+			/*cudaDeviceSynchronize();
 
 			// TODO: update support for K=4 as well
-            clock_t start_t = clock();
+            clock_t start_t = clock();*/
 			// collect gradients by shifting convolved bottom input data and multiplying it with the top error data
 			caffe::fast_gauss_backward_multi_subfeatures<Dtype>(interm_data, top_error,
 																filter_offsets_float_mu1, filter_offsets_float_mu2,
@@ -229,9 +230,9 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 																this->buffer_bwd_.error_images,0,
 																this->buffer_bwd_.filter_weights,0,
 																this->buffer_bwd_.filter_offsets,0, stream_[0]);
-			cudaDeviceSynchronize();
+			/*cudaDeviceSynchronize();
 			clock_t end_t = clock();
-            std::cout << "fast_gauss_backward_multi_subfeatures in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
+            std::cout << "fast_gauss_backward_multi_subfeatures in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;*/
 
 		}
 

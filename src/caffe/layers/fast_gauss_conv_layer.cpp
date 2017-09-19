@@ -1,10 +1,9 @@
 #ifdef USE_CUDNN
 #include <algorithm>
 #include <vector>
-#include <caffe/layers/gauss_conv_layer.hpp>
 
-//#include "caffe/vision_layers.hpp"
 #include "caffe/layers/gauss_conv_layer.hpp"
+
 #include "caffe/util/math_functions_extra.hpp"
 
 #include "caffe/util/fast_gauss_forward.hpp"

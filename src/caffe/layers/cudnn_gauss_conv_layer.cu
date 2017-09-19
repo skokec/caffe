@@ -10,11 +10,6 @@
 
 namespace caffe {
 
-template <typename Dtype>
-void FastAproxGaussianConvLayer<Dtype>::Forward_gpu(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top) {
-	//caffe::fast_gauss_forward<float>(NULL, NULL, NULL, NULL, NULL, NULL, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-}
-
 __global__ void sync_gauss_conv_groups() { }
 
 template <typename Dtype>
@@ -118,10 +113,12 @@ void CuDNNGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top
 	Dtype* param_sigma_diff = this->param_buffer_sigma_->mutable_gpu_diff();
 
 	if (this->param_propagate_down_[0]) {
-		caffe_gpu_set_async(this->param_buffer_w_->count(), (Dtype)0, param_w_diff, paralel_streams[0]);
+		// WARNING: we should NOT zero gradient buffer since this will prevent accumulation over multiple iterations !!!
+		// zeroing should be done by solver
+		/*caffe_gpu_set_async(this->param_buffer_w_->count(), (Dtype)0, param_w_diff, paralel_streams[0]);
 		caffe_gpu_set_async(this->param_buffer_mu1_->count(), (Dtype)0, param_mu1_diff, paralel_streams[1]);
 		caffe_gpu_set_async(this->param_buffer_mu2_->count(), (Dtype)0, param_mu2_diff, paralel_streams[2]);
-		caffe_gpu_set_async(this->param_buffer_sigma_->count(), (Dtype)0, param_sigma_diff, paralel_streams[3]);
+		caffe_gpu_set_async(this->param_buffer_sigma_->count(), (Dtype)0, param_sigma_diff, paralel_streams[3]);*/
 	}
 
 	// ensure all work from previous kernel and from caffe_gpu_set_async is done
