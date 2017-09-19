@@ -871,7 +871,11 @@ void offset_and_dot_opencv(const Dtype* input_data, const Dtype* error_data,
         //printf("n=%d\n",n);
 
         cv::Mat interm_mat(conv_in_channels_ * height_,width_, CV_32F, (Dtype*)input_data + n * conv_in_channels_ * width_ * height_);
-        cv::Mat top_mat(conv_out_channels_ * height_out_, width_out_, CV_32F, (Dtype*)error_data + n * conv_out_channels_ * width_out_  * height_out_);
+        cv::Mat top_mat_org(conv_out_channels_ * height_out_, width_out_, CV_32F, (Dtype*)error_data + n * conv_out_channels_ * width_out_  * height_out_);
+
+        // copy top matrix to another buffer so that we do not modify original data
+        cv::Mat top_mat;
+        top_mat_org.copyTo(top_mat);
 
         // set right/bottom edges to zero if we should ignore them (for GPU compatability)
         if (ignore_edge_gradients) {
@@ -1103,7 +1107,7 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>&
 
             // then collect gradients by shifting convolved bottom input data and multiplying it with the top error data
             for (int k = 0; k < this->NUM_K; ++k) {
-                printf("k=%d\n",k);
+                //printf("k=%d\n",k);
 
                 offset_and_dot_opencv(interm_data + k * size_batch_k,
                                       top_error,
