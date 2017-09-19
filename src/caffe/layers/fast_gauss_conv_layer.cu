@@ -59,9 +59,12 @@ void FastAproxGaussianConvLayer<Dtype>::Forward_gpu(
 		// actual output data
 		Dtype* top_data = top[i]->mutable_gpu_data();
 
+
 		// Forward through cuDNN and our custom kernel
+		/*
 		cudaDeviceSynchronize();
 		clock_t start_t = clock();
+		*/
 
 		// first perform convolutions with gaussian filter (i.e. gaussian blur)
 		// we use cudnn forward implementation by casting
@@ -72,31 +75,20 @@ void FastAproxGaussianConvLayer<Dtype>::Forward_gpu(
 		CUDNN_CHECK(cudnnConvolutionForward(handle_[0],
 											cudnn::dataType<Dtype>::one,
 											bottom_descs_[i], bottom_data,
-											fwd_g_kernel_desc_, gauss_kernel,
+											fwd_prefilter_kernel_desc_, gauss_kernel,
 											fwd_conv_descs_[i],
 											fwd_algo_[i], workspace[0], workspace_fwd_sizes_[i],
 											cudnn::dataType<Dtype>::zero,
 											fwd_interm_descs_[i], interm_data));
-
-/*
-	cv::gpu::GpuMat input_data = cv::gpu::createContinuous(this->height_ * this->num_ * this->channels_, this->width_, CV_32F );
-	cv::gpu::GpuMat kernel_data = cv::gpu::createContinuous(this->gauss_kernel_h_, this->gauss_kernel_w_, CV_32F );
-	cv::Mat kernel_data_ = cv::Mat::zeros(this->gauss_kernel_h_, this->gauss_kernel_w_, CV_32F );
-
-	cv::gpu::GpuMat output_data = cv::gpu::createContinuous(this->height_ * this->num_ * this->channels_, this->width_, CV_32F );
-
-	for (int j = 0; j < this->num_ * this->channels_; ++j) {
-		cv::gpu::GpuMat dst = output_data.rowRange(j * this->height_* this->width_,(j+1) * this->height_* this->width_  );
-
-		cv::gpu::filter2D(input_data.rowRange(j * this->height_* this->width_,(j+1) * this->height_* this->width_  ), dst, -1, kernel_data_);
-	}*/
+		//interm_data = (Dtype*)bottom_data;
+		/*
         //cudaMemset(buffer_fwd_.filter_offsets_and_weights, 0, buffer_fwd_.filter_weights_sizes_ + buffer_fwd_.filter_offsets_sizes_);
 		cudaDeviceSynchronize();
 		clock_t end_t = clock();
 		std::cout << "gaussian pre-filtering in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
 		// now we take the blured input data and perform sum over shifted input data with our custom kernel
-
-        start_t = clock();
+		*/
+        /*start_t = clock();*/
 		caffe::fast_gauss_forward<Dtype>(interm_data,
 										 filter_offsets_float_mu1, filter_offsets_float_mu2, filter_weights, FAST_GAUSS_PARAM_SGF,
 										 top_data,
@@ -108,9 +100,11 @@ void FastAproxGaussianConvLayer<Dtype>::Forward_gpu(
 										 NULL,0,
 										 NULL,0,
 										 buffer_fwd_.filter_offsets_and_weights, stream_[0]);
+        /*
         cudaDeviceSynchronize();
         end_t = clock();
         std::cout << "fast_gauss_forward in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
+         */
 
 		// add bias if needed
 		if (this->bias_term_) {
@@ -164,9 +158,9 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 	const Dtype* deriv_error_kernel = this->get_deriv_kernel_error(stream_[0])->gpu_data();
 
 	// copy all four kernels into a single blob
-	Dtype* deriv_kernels_data  = deriv_kernels_.mutable_gpu_data();
+	Dtype* deriv_kernels_data  = prefilter_deriv_kernels_.mutable_gpu_data();
 
-	const int prefilter_size = this->gauss_kernel_h_ * this->gauss_kernel_w_ ;
+	const int prefilter_size = this->prefilter_h_ * this->prefilter_w_ ;
 
 	if (NUM_K > 0) caffe_gpu_memcpy(prefilter_size * sizeof(float), deriv_w_kernel, deriv_kernels_data + 0 * prefilter_size);
 	if (NUM_K > 1) caffe_gpu_memcpy(prefilter_size * sizeof(float), deriv_mu1_kernel, deriv_kernels_data + 1 * prefilter_size);
@@ -210,7 +204,7 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 			CUDNN_CHECK(cudnnConvolutionForward(handle_[0],
 												cudnn::dataType<Dtype>::one,
 												bottom_descs_[i], bottom_data,
-												bwd_g_kernel_desc_, deriv_kernels_data,
+												bwd_prefilter_kernel_desc_, deriv_kernels_data,
 												bwd_conv_data_descs_[i],
 												bwd_data_algo_[i], workspace[0], workspace_bwd_data_sizes_[i],
 												cudnn::dataType<Dtype>::zero,
@@ -219,9 +213,10 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 			// TODO: if it is faster we should add zeroing to input prepare functions !!
 			CUDA_CHECK(cudaMemsetAsync(this->buffer_bwd_.filtered_images,0,this->buffer_bwd_.filtered_images_sizes_, stream_[0]));
 			CUDA_CHECK(cudaMemsetAsync(this->buffer_bwd_.error_images,0,this->buffer_bwd_.error_image_sizes_, stream_[0]));
+			cudaDeviceSynchronize();
 
 			// TODO: update support for K=4 as well
-
+            clock_t start_t = clock();
 			// collect gradients by shifting convolved bottom input data and multiplying it with the top error data
 			caffe::fast_gauss_backward_multi_subfeatures<Dtype>(interm_data, top_error,
 																filter_offsets_float_mu1, filter_offsets_float_mu2,
@@ -234,19 +229,20 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 																this->buffer_bwd_.error_images,0,
 																this->buffer_bwd_.filter_weights,0,
 																this->buffer_bwd_.filter_offsets,0, stream_[0]);
-
+			cudaDeviceSynchronize();
+			clock_t end_t = clock();
+            std::cout << "fast_gauss_backward_multi_subfeatures in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
 
 		}
 
-		if (0)
 		// finally perform back-propagation of the error values
 		if (propagate_down[i]) {
-			// we need to do pre-filtering of the error values
 
+			// we need to do pre-filtering of the error values
 			CUDNN_CHECK(cudnnConvolutionForward(handle_[0],
 												cudnn::dataType<Dtype>::one,
-												top_descs_[i], top_data,
-												bwd_g_kernel_desc_, deriv_error_kernel,
+												top_descs_[i], top_error,
+												fwd_prefilter_kernel_desc_, deriv_error_kernel,
 												bwd_conv_error_descs_[i],
 												bwd_error_algo_[i], workspace[0], workspace_bwd_error_sizes_[i],
 												cudnn::dataType<Dtype>::zero,
@@ -261,14 +257,14 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 
 			// rot(mu) = (kernel_w-1) - mu
 			{
-				caffe_gpu_memcpy(param_size, filter_offsets_float_mu1, param_mu1_backprop);
-				caffe_gpu_memcpy(param_size, filter_offsets_float_mu2, param_mu2_backprop);
+				caffe_gpu_memcpy(param_size * sizeof(float), filter_offsets_float_mu1, param_mu1_backprop);
+				caffe_gpu_memcpy(param_size * sizeof(float), filter_offsets_float_mu2, param_mu2_backprop);
 
 				caffe_gpu_scal(param_size, (Dtype)-1, param_mu1_backprop);
 				caffe_gpu_scal(param_size, (Dtype)-1, param_mu2_backprop);
 
-				caffe_gpu_add_scalar(param_size, (Dtype)(this->gauss_kernel_w_ - 1), param_mu1_backprop);
-				caffe_gpu_add_scalar(param_size, (Dtype)(this->gauss_kernel_h_ - 1), param_mu2_backprop);
+				caffe_gpu_add_scalar(param_size, (Dtype)(this->kernel_w_ - 1), param_mu1_backprop);
+				caffe_gpu_add_scalar(param_size, (Dtype)(this->kernel_h_ - 1), param_mu2_backprop);
 			}
 
 
@@ -287,7 +283,7 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 
 		}
 	}
-	// we need accumulate gradients them to the final buffer and add weights to some derivates
+	// we need to accumulate gradients to the final buffer and add weights to some derivates
 	if (this->param_propagate_down_[0]) {
 		// multiply gradients with appropriate weights
 		/// add add weight multiplyer as specifed by derivative formula only for mu1,mu2 and sigma

@@ -1776,7 +1776,9 @@ template <typename BlockIndexingT,
         typename ELEMENT_FLOAT_TYPE,
 		typename ELEMENT_INT_TYPE>
 __global__  void
-perpare_weights_and_offsets_bw_multi(const float* filter_weights, const float* filter_offsets_x, const float* filter_offsets_y, float *prepared_filter_weights, int *prepared_filter_offsets, int S, int G, int F) {
+perpare_weights_and_offsets_bw_multi(const float* filter_weights, const float* filter_offsets_x, const float* filter_offsets_y,
+									 float *prepared_filter_weights, int *prepared_filter_offsets,
+									 int S, int G, int F, int kernel_w, int kernel_h) {
 
 	static const int NUM_SM = BlockIndexingT::NUM_SM;
 	static const int Bx = BlockIndexingT::Bx;
@@ -1880,15 +1882,16 @@ perpare_weights_and_offsets_bw_multi(const float* filter_weights, const float* f
 	float4 offset_x;
 	float4 offset_y;
 
-	if (NUM_READ_FEATURES > 0) offset_x.x = reinterpret_cast<const float*>(filter_offsets_x4)[input_index + 0];
-	if (NUM_READ_FEATURES > 1) offset_x.y = reinterpret_cast<const float*>(filter_offsets_x4)[input_index + 1];
-	if (NUM_READ_FEATURES > 2) offset_x.z = reinterpret_cast<const float*>(filter_offsets_x4)[input_index + 2];
-	if (NUM_READ_FEATURES > 3) offset_x.w = reinterpret_cast<const float*>(filter_offsets_x4)[input_index + 3];
+	// read offset and convert them from [0..k_w] into [-k_w/2 ... k_w/2 ] i.e. convert to offsets with coord at center of kernel
+	if (NUM_READ_FEATURES > 0) offset_x.x = reinterpret_cast<const float*>(filter_offsets_x4)[input_index + 0] - kernel_w/2;
+	if (NUM_READ_FEATURES > 1) offset_x.y = reinterpret_cast<const float*>(filter_offsets_x4)[input_index + 1] - kernel_w/2;
+	if (NUM_READ_FEATURES > 2) offset_x.z = reinterpret_cast<const float*>(filter_offsets_x4)[input_index + 2] - kernel_w/2;
+	if (NUM_READ_FEATURES > 3) offset_x.w = reinterpret_cast<const float*>(filter_offsets_x4)[input_index + 3] - kernel_w/2;
 
-	if (NUM_READ_FEATURES > 0) offset_y.x = reinterpret_cast<const float*>(filter_offsets_y4)[input_index + 0];
-	if (NUM_READ_FEATURES > 1) offset_y.y = reinterpret_cast<const float*>(filter_offsets_y4)[input_index + 1];
-	if (NUM_READ_FEATURES > 2) offset_y.z = reinterpret_cast<const float*>(filter_offsets_y4)[input_index + 2];
-	if (NUM_READ_FEATURES > 3) offset_y.w = reinterpret_cast<const float*>(filter_offsets_y4)[input_index + 3];
+	if (NUM_READ_FEATURES > 0) offset_y.x = reinterpret_cast<const float*>(filter_offsets_y4)[input_index + 0] - kernel_h/2;
+	if (NUM_READ_FEATURES > 1) offset_y.y = reinterpret_cast<const float*>(filter_offsets_y4)[input_index + 1] - kernel_h/2;
+	if (NUM_READ_FEATURES > 2) offset_y.z = reinterpret_cast<const float*>(filter_offsets_y4)[input_index + 2] - kernel_h/2;
+	if (NUM_READ_FEATURES > 3) offset_y.w = reinterpret_cast<const float*>(filter_offsets_y4)[input_index + 3] - kernel_h/2;
 
 	/*
 	// DEBUG ONLY !!!
@@ -2542,14 +2545,14 @@ public:
 
 	void create_input(float* prepared_filter_weights, int* prepared_filter_offsets, // OUTPUT
 					  const float* filter_weights, const float* filter_offsets_float_x, const float* filter_offsets_float_y, // INPUT
-					  cudaStream_t streamId = NULL) {
+					  const int kernel_w, const int kernel_h, cudaStream_t streamId = NULL) {
 
 		if (NUM_BATCH_FEATURES == 4)
-			perpare_weights_and_offsets_bw_multi<BlockIndexingT, float4, int4><<<numBlocks,threadsPerBlock>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, S, G, F);
+			perpare_weights_and_offsets_bw_multi<BlockIndexingT, float4, int4><<<numBlocks,threadsPerBlock>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, S, G, F, kernel_w, kernel_h);
 		else if (NUM_BATCH_FEATURES == 2)
-			perpare_weights_and_offsets_bw_multi<BlockIndexingT, float2, int2><<<numBlocks,threadsPerBlock>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, S, G, F);
+			perpare_weights_and_offsets_bw_multi<BlockIndexingT, float2, int2><<<numBlocks,threadsPerBlock>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, S, G, F, kernel_w, kernel_h);
 		else
-			perpare_weights_and_offsets_bw_multi<BlockIndexingT, float, int><<<numBlocks,threadsPerBlock>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, S, G, F);
+			perpare_weights_and_offsets_bw_multi<BlockIndexingT, float, int><<<numBlocks,threadsPerBlock>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, S, G, F, kernel_w, kernel_h);
 
 		if (0) {
 			// DEBUG ONLY
@@ -2777,7 +2780,8 @@ public:
 
 	void run_kernel(const float* filtered_images, const float* error_images,
 					  const float* filter_offsets_float_x, const float* filter_offsets_float_y,
-					  const float* filter_weights, float* output,
+					  const float* filter_weights, const int kernel_w, const int kernel_h,
+					  float* output,
 					  float* prepared_filtered_images,
 					  float* prepared_error_images,
 					  float* prepared_filter_weights,
@@ -2824,7 +2828,7 @@ public:
 
 			clock_t start_t = clock();
 #endif
-			weight_and_offsets_cuda_prepare.create_input(prepared_filter_weights, prepared_filter_offsets, filter_weights, filter_offsets_float_x, filter_offsets_float_y);
+			weight_and_offsets_cuda_prepare.create_input(prepared_filter_weights, prepared_filter_offsets, filter_weights, filter_offsets_float_x, filter_offsets_float_y, kernel_w, kernel_h);
 #ifdef PROFILE_CUDA
 			cudaDeviceSynchronize();
 
@@ -2971,7 +2975,7 @@ void fast_gauss_backward_multi_subfeatures<float>(const float* filtered_images, 
 
 	RUN_KERNEL_R5(FastGaussBackwardMultiSubfeaturesCUDA, img_size_w, img_size_h, max_offset, num_images, use_interpolation,
 				  img_width, img_height, I, S, F, G, K,
-				  filtered_images, error_images, filter_offsets_float_x, filter_offsets_float_y, filter_weights, output,
+				  filtered_images, error_images, filter_offsets_float_x, filter_offsets_float_y, filter_weights, kernel_width, kernel_height, output,
 				  prepared_filtered_images, prepared_error_images, prepared_filter_weights, prepared_filter_offsets, ignore_edge_gradients,
 				  streamId);
 

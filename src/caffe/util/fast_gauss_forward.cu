@@ -1777,7 +1777,10 @@ template <typename BlockIndexingT,
 			typename ELEMENT_FLOAT_TYPE,
 			typename ELEMENT_INT_TYPE>
 __global__  void
-perpare_weights_and_offsets(const float* filter_weights, const float* filter_offsets_x, const float* filter_offsets_y, float *prepared_filter_weights, int *prepared_filter_offsets, float* prepared_filter_offsets_and_weights, int S, int G, int F, int PARAM_FORMAT) {
+perpare_weights_and_offsets(const float* filter_weights, const float* filter_offsets_x, const float* filter_offsets_y,
+							float *prepared_filter_weights, int *prepared_filter_offsets, float* prepared_filter_offsets_and_weights,
+							int S, int G, int F, int kernel_w, int kernel_h,
+							int PARAM_FORMAT) {
 
 	static const int NUM_SM = BlockIndexingT::NUM_SM;
 	static const int Bx = BlockIndexingT::Bx;
@@ -1820,12 +1823,16 @@ perpare_weights_and_offsets(const float* filter_weights, const float* filter_off
 	// input data is of the form
 	// float4 of size [S x G x F]
 
-    int input_index = -1;
-    if (PARAM_FORMAT == FAST_GAUSS_PARAM_SGF)
-        input_index = OFFSET(0, s_input_index, g_input_index, f_input_index, 1, S, G, F);//(( s_input_index )*G + g_input_index ) * F + f_input_index ;
-    else if (PARAM_FORMAT == FAST_GAUSS_PARAM_FGS)
-        input_index = OFFSET(0, f_input_index, g_input_index, s_input_index, 1, F, G, S);
+	int input_f_offset = -1;
 
+    int input_index = -1;
+    if (PARAM_FORMAT == FAST_GAUSS_PARAM_SGF) {
+        input_index = OFFSET(0, s_input_index, g_input_index, f_input_index, 1, S, G, F);//(( s_input_index )*G + g_input_index ) * F + f_input_index ;
+		input_f_offset = 1;
+	} else if (PARAM_FORMAT == FAST_GAUSS_PARAM_FGS) {
+        input_index = OFFSET(0, f_input_index, g_input_index, s_input_index, 1, F, G, S);
+		input_f_offset = G * S;
+	}
 
 	// output data is of the form:
 	// float4 of size [F / (BATCH_FEATURES_SIZE * BLOCK_FEATURES)] x [S / (BATCH_COMPUTE_SUBFEATURES_SIZE*BATCH_MEM_SUBFEATURES_SIZE)] x [G / BATCH_GAUSS_SIZE]
@@ -1887,15 +1894,16 @@ perpare_weights_and_offsets(const float* filter_weights, const float* filter_off
 	float4 offset_x;
 	float4 offset_y;
 
-	if (NUM_READ_FEATURES > 0) offset_x.x = reinterpret_cast<const float*>(filter_offsets_x4)[input_index + 0];
-	if (NUM_READ_FEATURES > 1) offset_x.y = reinterpret_cast<const float*>(filter_offsets_x4)[input_index + 1];
-	if (NUM_READ_FEATURES > 2) offset_x.z = reinterpret_cast<const float*>(filter_offsets_x4)[input_index + 2];
-	if (NUM_READ_FEATURES > 3) offset_x.w = reinterpret_cast<const float*>(filter_offsets_x4)[input_index + 3];
+	// read offset and convert them from [0..k_w] into [-k_w/2 ... k_w/2 ] i.e. convert to offsets with coord at center of kernel
+	if (NUM_READ_FEATURES > 0) offset_x.x = reinterpret_cast<const float*>(filter_offsets_x4)[input_index + 0 * input_f_offset] - kernel_w/2;
+	if (NUM_READ_FEATURES > 1) offset_x.y = reinterpret_cast<const float*>(filter_offsets_x4)[input_index + 1 * input_f_offset] - kernel_w/2;
+	if (NUM_READ_FEATURES > 2) offset_x.z = reinterpret_cast<const float*>(filter_offsets_x4)[input_index + 2 * input_f_offset] - kernel_w/2;
+	if (NUM_READ_FEATURES > 3) offset_x.w = reinterpret_cast<const float*>(filter_offsets_x4)[input_index + 3 * input_f_offset] - kernel_w/2;
 
-	if (NUM_READ_FEATURES > 0) offset_y.x = reinterpret_cast<const float*>(filter_offsets_y4)[input_index + 0];
-	if (NUM_READ_FEATURES > 1) offset_y.y = reinterpret_cast<const float*>(filter_offsets_y4)[input_index + 1];
-	if (NUM_READ_FEATURES > 2) offset_y.z = reinterpret_cast<const float*>(filter_offsets_y4)[input_index + 2];
-	if (NUM_READ_FEATURES > 3) offset_y.w = reinterpret_cast<const float*>(filter_offsets_y4)[input_index + 3];
+	if (NUM_READ_FEATURES > 0) offset_y.x = reinterpret_cast<const float*>(filter_offsets_y4)[input_index + 0 * input_f_offset] - kernel_h/2;
+	if (NUM_READ_FEATURES > 1) offset_y.y = reinterpret_cast<const float*>(filter_offsets_y4)[input_index + 1 * input_f_offset] - kernel_h/2;
+	if (NUM_READ_FEATURES > 2) offset_y.z = reinterpret_cast<const float*>(filter_offsets_y4)[input_index + 2 * input_f_offset] - kernel_h/2;
+	if (NUM_READ_FEATURES > 3) offset_y.w = reinterpret_cast<const float*>(filter_offsets_y4)[input_index + 3 * input_f_offset] - kernel_h/2;
 
 	// offset is relative to shared memory organization which is defined by  BlockSharedMemory parameters:
 	//		- SharedMem::ALLOC_WIDTH
@@ -1921,7 +1929,7 @@ perpare_weights_and_offsets(const float* filter_weights, const float* filter_off
 
 	// offset should be in bytes !!! (not in 4 bytes as for float or 16 bytes as for float4)
 	if (NUM_READ_FEATURES > 0) output_offset.x = ((int)floorf(offset_y.x) * (SharedMem::PITCHED_WIDTH) + (int)floorf(offset_x.x)) * sizeof(float);
-	if (NUM_READ_FEATURES > 1) output_offset.y = ((int)floorf(offset_y.x) * (SharedMem::PITCHED_WIDTH) + (int)floorf(offset_x.y)) * sizeof(float);
+	if (NUM_READ_FEATURES > 1) output_offset.y = ((int)floorf(offset_y.y) * (SharedMem::PITCHED_WIDTH) + (int)floorf(offset_x.y)) * sizeof(float);
 	if (NUM_READ_FEATURES > 2) output_offset.z = ((int)floorf(offset_y.z) * (SharedMem::PITCHED_WIDTH) + (int)floorf(offset_x.z)) * sizeof(float);
 	if (NUM_READ_FEATURES > 3) output_offset.w = ((int)floorf(offset_y.w) * (SharedMem::PITCHED_WIDTH) + (int)floorf(offset_x.w)) * sizeof(float);
 
@@ -2077,32 +2085,32 @@ perpare_weights_and_offsets(const float* filter_weights, const float* filter_off
 
 		// create weights with interpolation factors
 		// dx=0,dy=0
-		if (NUM_READ_FEATURES > 0) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_0[i] + 0] = w[0] * factor_00.x;
-		if (NUM_READ_FEATURES > 1) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_0[i] + 1] = w[1] * factor_00.y;
-		if (NUM_READ_FEATURES > 2) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_0[i] + 2] = w[2] * factor_00.z;
-		if (NUM_READ_FEATURES > 3) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_0[i] + 3] = w[3] * factor_00.w;
+		if (NUM_READ_FEATURES > 0) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_0[i] + 0] = w[0 * input_f_offset] * factor_00.x;
+		if (NUM_READ_FEATURES > 1) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_0[i] + 1] = w[1 * input_f_offset] * factor_00.y;
+		if (NUM_READ_FEATURES > 2) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_0[i] + 2] = w[2 * input_f_offset] * factor_00.z;
+		if (NUM_READ_FEATURES > 3) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_0[i] + 3] = w[3 * input_f_offset] * factor_00.w;
 
 		if (PIXELS_INTERPOLATION_SIZE == 4) {
 			// dx=1,dy=0
 			int output_index_1 = output_index_0[i] + 1 *  (dim1_size * dim2_size) * NUM_READ_FEATURES;
-			if (NUM_READ_FEATURES > 0) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_1 + 0] = w[0] * factor_01.x;
-			if (NUM_READ_FEATURES > 1) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_1 + 1] = w[1] * factor_01.y;
-			if (NUM_READ_FEATURES > 2) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_1 + 2] = w[2] * factor_01.z;
-			if (NUM_READ_FEATURES > 3) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_1 + 3] = w[3] * factor_01.w;
+			if (NUM_READ_FEATURES > 0) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_1 + 0] = w[0 * input_f_offset] * factor_01.x;
+			if (NUM_READ_FEATURES > 1) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_1 + 1] = w[1 * input_f_offset] * factor_01.y;
+			if (NUM_READ_FEATURES > 2) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_1 + 2] = w[2 * input_f_offset] * factor_01.z;
+			if (NUM_READ_FEATURES > 3) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_1 + 3] = w[3 * input_f_offset] * factor_01.w;
 
 			// dx=0,dy=1
 			int output_index_2 = output_index_0[i] + 2 *  (dim1_size * dim2_size) * NUM_READ_FEATURES;
-			if (NUM_READ_FEATURES > 0) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_2 + 0] = w[0] * factor_10.x;
-			if (NUM_READ_FEATURES > 1) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_2 + 1] = w[1] * factor_10.y;
-			if (NUM_READ_FEATURES > 2) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_2 + 2] = w[2] * factor_10.z;
-			if (NUM_READ_FEATURES > 3) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_2 + 3] = w[3] * factor_10.w;
+			if (NUM_READ_FEATURES > 0) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_2 + 0] = w[0 * input_f_offset] * factor_10.x;
+			if (NUM_READ_FEATURES > 1) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_2 + 1] = w[1 * input_f_offset] * factor_10.y;
+			if (NUM_READ_FEATURES > 2) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_2 + 2] = w[2 * input_f_offset] * factor_10.z;
+			if (NUM_READ_FEATURES > 3) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_2 + 3] = w[3 * input_f_offset] * factor_10.w;
 
 			// dx=1,dy=1
 			int output_index_3 = output_index_0[i] + 3 *  (dim1_size * dim2_size) * NUM_READ_FEATURES;
-			if (NUM_READ_FEATURES > 0) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_3 + 0] = w[0] * factor_11.x;
-			if (NUM_READ_FEATURES > 1) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_3 + 1] = w[1] * factor_11.y;
-			if (NUM_READ_FEATURES > 2) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_3 + 2] = w[2] * factor_11.z;
-			if (NUM_READ_FEATURES > 3) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_3 + 3] = w[3] * factor_11.w;
+			if (NUM_READ_FEATURES > 0) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_3 + 0] = w[0 * input_f_offset] * factor_11.x;
+			if (NUM_READ_FEATURES > 1) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_3 + 1] = w[1 * input_f_offset] * factor_11.y;
+			if (NUM_READ_FEATURES > 2) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_3 + 2] = w[2 * input_f_offset] * factor_11.z;
+			if (NUM_READ_FEATURES > 3) reinterpret_cast<float*>(out_prepared_filter_weights4[i])[output_index_3 + 3] = w[3 * input_f_offset] * factor_11.w;
 		}
 	}
 /*
@@ -2223,14 +2231,14 @@ public:
 
 	void create_input(float* prepared_filter_weights, int* prepared_filter_offsets, float* prepared_filter_offsets_and_weights, // OUTPUT
 					  const float* filter_weights, const float* filter_offsets_float_x, const float* filter_offsets_float_y, // INPUT
-                      int PARAM_FORMAT, cudaStream_t streamId = NULL) {
+					  const int kernel_w, const int kernel_h, const int PARAM_FORMAT, cudaStream_t streamId = NULL) {
 
 		if (NUM_BATCH_FEATURES == 4)
-			perpare_weights_and_offsets<BlockIndexingT, float4, int4><<<numBlocks,threadsPerBlock, 0, streamId>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, prepared_filter_offsets_and_weights, S, G, F, PARAM_FORMAT);
+			perpare_weights_and_offsets<BlockIndexingT, float4, int4><<<numBlocks,threadsPerBlock, 0, streamId>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, prepared_filter_offsets_and_weights, S, G, F, kernel_w, kernel_h, PARAM_FORMAT);
 		else if (NUM_BATCH_FEATURES == 2)
-			perpare_weights_and_offsets<BlockIndexingT, float2, int2><<<numBlocks,threadsPerBlock, 0, streamId>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, prepared_filter_offsets_and_weights, S, G, F, PARAM_FORMAT);
+			perpare_weights_and_offsets<BlockIndexingT, float2, int2><<<numBlocks,threadsPerBlock, 0, streamId>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, prepared_filter_offsets_and_weights, S, G, F, kernel_w, kernel_h, PARAM_FORMAT);
 		else
-			perpare_weights_and_offsets<BlockIndexingT, float, int><<<numBlocks,threadsPerBlock, 0, streamId>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, prepared_filter_offsets_and_weights, S, G, F, PARAM_FORMAT);
+			perpare_weights_and_offsets<BlockIndexingT, float, int><<<numBlocks,threadsPerBlock, 0, streamId>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, prepared_filter_offsets_and_weights, S, G, F, kernel_w, kernel_h, PARAM_FORMAT);
 
 		if (0) {
 
@@ -2435,7 +2443,8 @@ public:
 	}
 
 	void run_kernel(const float* filtered_images,
-					const float* filter_offsets_float_x, const float* filter_offsets_float_y, const float* filter_weights, int PARAM_FORMAT,
+					const float* filter_offsets_float_x, const float* filter_offsets_float_y, const float* filter_weights,
+					const int kernel_w, const int kernel_h, const int PARAM_FORMAT,
                     float* output,
 					float* prepared_filtered_images,
 					float* prepared_filter_weights,
@@ -2471,7 +2480,7 @@ public:
 
 		clock_t start_t = clock();
 #endif
-			weight_and_offsets_cuda_prepare.create_input(prepared_filter_weights, prepared_filter_offsets, prepared_filter_offsets_and_weights, filter_weights, filter_offsets_float_x, filter_offsets_float_y, PARAM_FORMAT, streamId);
+			weight_and_offsets_cuda_prepare.create_input(prepared_filter_weights, prepared_filter_offsets, prepared_filter_offsets_and_weights, filter_weights, filter_offsets_float_x, filter_offsets_float_y, kernel_w, kernel_h, PARAM_FORMAT, streamId);
 #ifdef PROFILE_CUDA
 			cudaDeviceSynchronize();
 
@@ -2586,9 +2595,9 @@ void fast_gauss_forward<float>(const float* filtered_images,
 
 
 #define RUN_KERNEL_R4(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, ...) \
-	if (MAX_OFFSET <= 9) { \
+	if (MAX_OFFSET <= 4) { \
 		RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, 4, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
-	} else if (MAX_OFFSET <= 17) { \
+	} else if (MAX_OFFSET <= 8) { \
         RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, 8, BATCH_IMAGES, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
 	} else { \
         printf("Unsupported filter size: %d. Supported only max up to 9x9 and 17x17 at the moment\n", MAX_OFFSET); \
@@ -2612,7 +2621,7 @@ void fast_gauss_forward<float>(const float* filtered_images,
 
 	int img_size_w = max(32, img_width >= 32 ? 32 : (img_width >= 16 ? 16 : 8 ));
 	int img_size_h = max(8, img_height >= 32 ? 32 : (img_height >= 16 ? 16 : 8 ));
-	int max_offset = MAX(kernel_width, kernel_height);
+	int max_offset = MAX(kernel_width, kernel_height)/2;
 
 	// we will split image into patches of size [IMG_HEIGHT x IMG_WIDTH] so use that as image size, however,
 	// we need to increase the number of images that will be process as each patch is now considered as one image
@@ -2630,7 +2639,7 @@ void fast_gauss_forward<float>(const float* filtered_images,
 
 	RUN_KERNEL_R5(FastGaussForwardCUDA, img_size_w, img_size_h, max_offset, num_images, use_interpolation,
 				  img_width, img_height, I, S, F, G,
-				  filtered_images, filter_offsets_float_x, filter_offsets_float_y, filter_weights, PARAM_FORMAT, output,
+				  filtered_images, filter_offsets_float_x, filter_offsets_float_y, filter_weights, kernel_width, kernel_height, PARAM_FORMAT, output,
 				  prepared_filtered_images, prepared_filter_weights, prepared_filter_offsets, prepared_filter_offsets_and_weights,
 				  streamId);
 
@@ -2712,7 +2721,7 @@ void fast_gauss_forward_old(const float* filtered_images,
 			clock_t start_t = clock();
 			_kernel_class.run_kernel(filtered_images,
 									 filter_offsets_float_x, filter_offsets_float_y,
-									 filter_weights, PARAM_FORMAT, output,
+									 filter_weights, kernel_width, kernel_height, PARAM_FORMAT, output,
 									 prepared_filtered_images_,
 									 prepared_filter_weights_,
 									 prepared_filter_offsets_, prepared_filter_offsets_and_weights_, streamId);
@@ -2879,7 +2888,7 @@ void fast_gauss_forward_old(const float* filtered_images,
 		std::cout << "waiting for copy_permute_weights" << std::endl;
 
 		clock_t start_t = clock();
-		weight_and_offsets_cuda_prepare.create_input(prepared_filter_weights_, prepared_filter_offsets_, prepared_filter_offsets_and_weights_, filter_weights, filter_offsets_float_x, filter_offsets_float_y, PARAM_FORMAT);
+		weight_and_offsets_cuda_prepare.create_input(prepared_filter_weights_, prepared_filter_offsets_, prepared_filter_offsets_and_weights_, filter_weights, filter_offsets_float_x, filter_offsets_float_y, kernel_width, kernel_height, PARAM_FORMAT);
 		cudaDeviceSynchronize();
 
 		clock_t end_t = clock();

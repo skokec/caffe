@@ -251,7 +251,6 @@ class FastAproxGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
   virtual void Backward_cpu(const vector<Blob<Dtype>*>& top, const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
   virtual void Backward_gpu(const vector<Blob<Dtype>*>& top,const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
 
-
   void update_prefiltering_kernels(cudaStream_t stream = 0);
   Blob<Dtype>* get_gaussian_kernel(cudaStream_t stream = 0);
 
@@ -260,12 +259,6 @@ class FastAproxGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
   Blob<Dtype>* get_deriv_kernel_mu2(cudaStream_t stream = 0);
   Blob<Dtype>* get_deriv_kernel_sigma(cudaStream_t stream = 0);
   Blob<Dtype>* get_deriv_kernel_error(cudaStream_t stream = 0);
-
-  void test_kernel_cpu(const float* filtered_images, const int* filter_offsets_x, const int* filter_offsets_y, const float* filter_offsets_float_x, const float* filter_offsets_float_y, const float* filter_weights, float* output, const int I, const int S, const int F, const int G, const int img_width, const int img_height, const int kernel_width, const int kernel_height, const bool use_interpolation);
-  void test_kernel_gpu(const Dtype* filtered_images, const Dtype* filter_offsets_float_x, const Dtype* filter_offsets_float_y, const Dtype* filter_weights, Dtype* output, const int I, const int S, const int F, const int G, const int img_width, const int img_height, const int kernel_width, const int kernel_height, const bool use_interpolation);
-  void test_backward_kernel_gpu(const float* filtered_images, const float* error_images, const int* filter_offsets_x, const int* filter_offsets_y, const float* filter_offsets_float_x, const float* filter_offsets_float_y, const float* filter_weights, float* output, const int I, const int S, const int F, const int G, const int img_width, const int img_height, const int kernel_width, const int kernel_height) ;
-  void test_backward_multi_subfeature_kernel_gpu(const float* filtered_images, const float* error_images, const float* filter_offsets_float_x, const float* filter_offsets_float_y, const float* filter_weights, float* output, const int K, const int I, const int S, const int F, const int G, const int img_width, const int img_height, const int kernel_width, const int kernel_height, const bool use_interpolation, const bool ignore_edge_gradients);
-
 
 	// TODO: add support for K=4 as well
 	const int NUM_K = 3;
@@ -277,14 +270,14 @@ class FastAproxGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
 	// NOTE: since gradients are not avegred but summed this should not be an issue, so this is used only for unit-testing (to make it compatible with cpu version)
 	bool ignore_edge_gradients_ = false;
 
-	int gauss_kernel_h_;
-	int gauss_kernel_w_;
+	int prefilter_h_;
+	int prefilter_w_;
 
-    int gauss_kernel_pad_h_;
-    int gauss_kernel_pad_w_;
+    int prefilter_pad_h_;
+    int prefilter_pad_w_;
 
-    int gauss_kernel_stride_h_;
-    int gauss_kernel_stride_w_;
+    int prefilter_stride_h_;
+    int prefilter_stride_w_;
 
 
     bool handles_setup_;
@@ -297,7 +290,7 @@ class FastAproxGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
 	cudnnConvolutionFwdAlgo_t *fwd_algo_;
 
 	vector<cudnnTensorDescriptor_t> bottom_descs_, top_descs_, top_bias_descs_, fwd_interm_descs_;
-	cudnnFilterDescriptor_t    fwd_g_kernel_desc_;
+	cudnnFilterDescriptor_t    fwd_prefilter_kernel_desc_;
 	cudnnTensorDescriptor_t    bias_desc_;
 
 	vector<cudnnConvolutionDescriptor_t> fwd_conv_descs_;
@@ -307,7 +300,7 @@ class FastAproxGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
 	cudnnConvolutionFwdAlgo_t *bwd_data_algo_, *bwd_error_algo_;
 
 	vector<cudnnTensorDescriptor_t> bwd_interm_data_descs_, bwd_interm_error_descs_;
-	cudnnFilterDescriptor_t    bwd_g_kernel_desc_;
+	cudnnFilterDescriptor_t    bwd_prefilter_kernel_desc_;
 
 	vector<cudnnConvolutionDescriptor_t> bwd_conv_data_descs_;
 	vector<cudnnConvolutionDescriptor_t> bwd_conv_error_descs_;
@@ -325,24 +318,24 @@ class FastAproxGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
 	Blob<Dtype> interm_buffer_;
     Blob<Dtype> tmp_param_buffer_;
 
-	Dtype gaussian_kernel_variance;
+	Dtype current_prefilter_sigma;
 
-    // buffers for kernels used only by fast aproximation (those buffers contain only a single kernel)
-	Blob<Dtype> gaussian_kernel_;
+    // buffers for kernels used only during pre-filtering for fast aproximation (those buffers contain only a single kernel)
+	Blob<Dtype> prefilter_kernel_;
 
-    Blob<Dtype> deriv_kernel_weight_;
-    Blob<Dtype> deriv_kernel_mu1_;
-    Blob<Dtype> deriv_kernel_mu2_;
-    Blob<Dtype> deriv_kernel_sigma_;
-    Blob<Dtype> deriv_kernel_error_;
+    Blob<Dtype> prefilter_deriv_kernel_weight_;
+    Blob<Dtype> prefilter_deriv_kernel_mu1_;
+    Blob<Dtype> prefilter_deriv_kernel_mu2_;
+    Blob<Dtype> prefilter_deriv_kernel_sigma_;
+    Blob<Dtype> prefilter_deriv_kernel_error_;
 
-	// containes w,mu1,mu2,sigma kernels
-	Blob<Dtype> deriv_kernels_;
+	// containes w,mu1,mu2,sigma kernels in single blob
+	Blob<Dtype> prefilter_deriv_kernels_;
 
-    Blob<Dtype> gauss_param_prefilter_w_;
-    Blob<Dtype> gauss_param_prefilter_mu1_;
-    Blob<Dtype> gauss_param_prefilter_mu2_;
-    Blob<Dtype> gauss_param_prefilter_sigma_;
+    Blob<Dtype> prefilter_param_w_;
+    Blob<Dtype> prefilter_param_mu1_;
+    Blob<Dtype> prefilter_param_mu2_;
+    Blob<Dtype> prefilter_param_sigma_;
 
 	// accumulated gradients
 	Blob<Dtype> bwd_gradients;
