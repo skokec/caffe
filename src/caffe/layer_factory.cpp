@@ -261,6 +261,7 @@ template <typename Dtype>
 shared_ptr<Layer<Dtype> > GetGaussianConvLayer(
     const LayerParameter& param) {
   bool use_old_cudnn = param.convolution_param().gmm_use_old_cudnn();
+  bool use_fast_approximation = param.convolution_param().gmm_use_fast_aproximation();
   ConvolutionParameter_Engine engine = param.convolution_param().engine();
   if (engine == ConvolutionParameter_Engine_DEFAULT) {
     engine = ConvolutionParameter_Engine_CAFFE;
@@ -272,7 +273,9 @@ shared_ptr<Layer<Dtype> > GetGaussianConvLayer(
     return shared_ptr<Layer<Dtype> >(new GaussianConvLayer<Dtype>(param));
 #ifdef USE_CUDNN
   } else if (engine == ConvolutionParameter_Engine_CUDNN) {
-    if (use_old_cudnn == false)
+    if (use_fast_approximation == true)
+      return shared_ptr<Layer<Dtype> >(new FastAproxGaussianConvLayer<Dtype>(param));
+    else if (use_old_cudnn == false)
       return shared_ptr<Layer<Dtype> >(new CuDNNGaussianConvLayer<Dtype>(param));    
     else 
       return shared_ptr<Layer<Dtype> >(new CuDNNOldGaussianConvLayer<Dtype>(param));    

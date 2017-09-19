@@ -576,7 +576,7 @@ message ConvolutionParameter {
   repeated uint32 stride = 6; // The stride; defaults to 1
   // Factor used to dilate the kernel, (implicitly) zero-filling the resulting
   // holes. (Kernel dilation is sometimes referred to by its use in the
-  // algorithme à trous from Holschneider et al. 1987.)
+  // algorithme ? trous from Holschneider et al. 1987.)
   repeated uint32 dilation = 18; // The dilation; defaults to 1
 
   // For 2D convolution only, the *_h and *_w versions may also be used to
@@ -608,6 +608,7 @@ message ConvolutionParameter {
   optional float gmm_merge_threshold = 133 [default = 0]; // threshold for mering components
   optional bool gmm_legacy_merge_blobs = 134 [default = false]; // ignore blobs for random means during component merging - to allow loading older snapshots
   optional bool gmm_discretize_mean = 135 [default = false]; // force discretization of means to closest integer value
+  optional bool gmm_use_fast_aproximation = 136 [default = false]; // use faster implementation with aproximation by discretizing the offsets
   enum Engine {
     DEFAULT = 0;
     CAFFE = 1;
