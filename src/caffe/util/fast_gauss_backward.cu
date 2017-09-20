@@ -1309,7 +1309,7 @@ fast_gauss_backward_multi_pipeline_kernel(const float* filtered_images, const fl
         #pragma unroll
         for (int s_outer_index = 0; s_outer_index <  BLOCK_SUBFEATURES; s_outer_index+=BATCH_MEM_SUBFEATURES_SIZE) {
 
-            const int s_buffer_index = (s_outer_index/BATCH_MEM_SUBFEATURES_SIZE) % DOUBLE_BUFFERING;
+            const int s_buffer_index = (nn*BLOCK_SUBFEATURES + s_outer_index/BATCH_MEM_SUBFEATURES_SIZE) % DOUBLE_BUFFERING;
 
             const float* image_global_current = _image_global_current + OFFSET8(0, 0, s_outer_index, 0, 0, 0, 0, 0, 1,
 																				I, S, img_height + 2*MAX_OFFSET, BATCH_PIXELS_SIZE_X , NUM_K / BATCH_K_SIZE, img_width / BATCH_PIXELS_SIZE_X + 2*MAX_OFFSET, BATCH_K_SIZE);
@@ -2712,7 +2712,7 @@ class FastGaussBackwardMultiSubfeaturesCUDA {
 		BLOCK_Y = 8 / BATCH_PIXELS_SIZE_Y,
 
 		BLOCK_FEATURES = 8,
-		BLOCK_SUBFEATURES = 2, // MUST NOT be bellow 2 due to double buffering of input (subfeature) loading
+		BLOCK_SUBFEATURES = 2,
 
 		BATCH_FEATURES_SIZE = 2,
 		BATCH_COMPUTE_FEATURES_SIZE = 2,

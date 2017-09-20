@@ -1132,12 +1132,12 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussForwardWithGroundtruth) {
         return;
 
     // evaluate size settings
-    const int N = 1;
+    const int N = 128;
     const int F = 32;
-    const int S = 8;
+    const int S = 16;
     const int G = 2;
     const int W = 32;
-    const int H = 8;
+    const int H = 32;
 
     const bool use_interpolation = true;
 
@@ -1832,11 +1832,11 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussConvolution) {
         return;
 
     // evaluate size settings
-    const int N = 1;
+    const int N = 128;
     const int F = 32;
     const int S = 16;
     const int G = 2;
-    const int W = 32;
+    const int W = 48;
     const int H = 16;
 
     const bool use_interpolation = true;
@@ -1879,7 +1879,7 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussConvolution) {
     for (int n = 0; n < N; ++n){
         for (int s = 0; s < S; ++s) {
             for (int i = 0; i < H * W; ++i) {
-                data[(n * S + s )* H * W + i] = 1;
+                //data[(n * S + s )* H * W + i] = 1;
                 //data[(n * S + s )* H * W + i] = s;
                 //data[(n * S + s )* H * W + i] = n + (i % W + 1);
                 //data[(n * S + s )* H * W + i] = n + (i / W + 1);
@@ -1890,8 +1890,8 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussConvolution) {
     }
 
     FillerParameter offset_filler_param;
-    offset_filler_param.set_min(4);
-    offset_filler_param.set_max(kernel_size-4);
+    offset_filler_param.set_min(2);
+    offset_filler_param.set_max(kernel_size-2);
     UniformFiller<float> offset_filler(offset_filler_param);
 
     //offset_filler.Fill(&blob_offsets);
@@ -2006,11 +2006,11 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussConvolution) {
                 for (int f = 0; f < F; f++) {
                     //w_data[OFFSET(0,s,g,f, 1, S,G,F)] = floor(w_data[OFFSET(0,s,g,f, 1, S,G,F)] * 100) / 100.0f ;
                     //w_data[OFFSET(0,s,g,f, 1, S,G,F)] = s;
-                    w_data[OFFSET(0,s,g,f, 1, S,G,F)] = 1;
+                    //w_data[OFFSET(0,s,g,f, 1, S,G,F)] = 1;
                     //mu1_data[OFFSET(0,s,g,f, 1, S,G,F)] = -2.2 + ((f+1)*(1+s)*(g+1)) % 5 ;
                     //mu2_data[OFFSET(0,s,g,f, 1, S,G,F)] = 3.1 - ((f+1)*(1+s)*(g+1)) % 5 ;
-                    mu1_data[OFFSET(0,s,g,f, 1, S,G,F)] = kernel_size/2;
-                    mu2_data[OFFSET(0,s,g,f, 1, S,G,F)] = kernel_size/2;
+                    //mu1_data[OFFSET(0,s,g,f, 1, S,G,F)] = kernel_size/2+1;
+                    //mu2_data[OFFSET(0,s,g,f, 1, S,G,F)] = kernel_size/2;
                 }
             }
         }
@@ -2060,12 +2060,12 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussConvolution) {
 
                         max_diff = std::max(max_diff, current_diff);
                     }
-                    if (i % W == 0)
-                        std::cout << std::endl;
-                    std::cout << val << " ";
+                    //if (i % W == 0)
+                    //    std::cout << std::endl;
+                    //std::cout << val << " ";
                     //std::cout << GT_VALUE << " ";
                 }
-                std::cout << std::endl;
+                //std::cout << std::endl;
             }
         }
         //std::cout << std::endl;
@@ -2316,6 +2316,7 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussBackwardMultiSubfeatures) {
                     //mu1_data[OFFSET(0, s, g, f, 1, S, G, F)] = -2.2 + ((f+1)*(1+s)*(g+1)) % 5 ;
                     //mu1_data[OFFSET(0, s, g, f, 1, S, G, F)] = kernel_size/2;
                     //mu2_data[OFFSET(0, s, g, f, 1, S, G, F)] = kernel_size/2;
+                    /*
                     // discretize the weights
                     mu1_data[OFFSET(0, s, g, f, 1, S, G, F)] = floor(mu1_data[OFFSET(0, s, g, f, 1, S, G, F)]);
                     mu2_data[OFFSET(0, s, g, f, 1, S, G, F)] = floor(mu2_data[OFFSET(0, s, g, f, 1, S, G, F)]);
@@ -2328,12 +2329,12 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussBackwardMultiSubfeatures) {
                     //mu2_data_gt[OFFSET(0, s, g, f, 1, S, G, F)] = kernel_size/2;
 
                     // set fixed sigma for all components in groundtruth layer
-                    sigma_data_gt[OFFSET(0, s, g, f, 1, S, G, F)] = sigma_data[OFFSET(0, s, g, f, 1, S, G, F)];
+                    sigma_data_gt[OFFSET(0, s, g, f, 1, S, G, F)] = sigma_data[OFFSET(0, s, g, f, 1, S, G, F)];*/
                 }
             }
         }
 
-        layer_gt.Backward_gpu(blob_top_vec_gt, propagate_down, blob_bottom_vec);
+        /*layer_gt.Backward_gpu(blob_top_vec_gt, propagate_down, blob_bottom_vec);
 
         // save backproped error values
         float *backprop_error_gt = blob_output_error_gt.mutable_cpu_data();
@@ -2350,13 +2351,13 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussBackwardMultiSubfeatures) {
             if (K > 2) caffe_copy(num_params, layer_gt.param_buffer_mu2_->cpu_diff(), gradients_gt + 2 * num_params );
             if (K > 3) caffe_copy(num_params, layer_gt.param_buffer_sigma_->cpu_diff(), gradients_gt + 3 * num_params);
         }
-
+*/
         caffe_gpu_set(layer.param_buffer_w_->count(), (Dtype)0, (Dtype*)layer.param_buffer_w_->mutable_gpu_diff());
         caffe_gpu_set(layer.param_buffer_mu1_->count(), (Dtype)0, (Dtype*)layer.param_buffer_mu1_->mutable_gpu_diff());
         caffe_gpu_set(layer.param_buffer_mu2_->count(), (Dtype)0, (Dtype*)layer.param_buffer_mu2_->mutable_gpu_diff());
         caffe_gpu_set(layer.param_buffer_sigma_->count(), (Dtype)0, (Dtype*)layer.param_buffer_sigma_->mutable_gpu_diff());
 
-        //layer.Backward_cpu(blob_top_vec, propagate_down, blob_bottom_vec);
+        layer.Backward_cpu(blob_top_vec, propagate_down, blob_bottom_vec);
 
         // save backproped error values
         float *backprop_error_cpu = blob_output_error_cpu.mutable_cpu_data();
@@ -2420,8 +2421,8 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussBackwardMultiSubfeatures) {
                         for (int f = 0; f < F; ++f) {
                             int idx = OFFSET(k,s,g,f, K, S,  G, F);
                             float val = gradients_gpu[idx];
-                            //float GT_VALUE = gradients_cpu[idx];
-                            float GT_VALUE = gradients_gt[idx];
+                            float GT_VALUE = gradients_cpu[idx];
+                            //float GT_VALUE = gradients_gt[idx];
 
                             if (std::abs(val - GT_VALUE) / GT_VALUE > 1e-4 && std::abs(val - GT_VALUE) > 1e-7) {
                                 if (found_invalid < 10)
@@ -2459,8 +2460,8 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussBackwardMultiSubfeatures) {
                     for (int i = 0; i < H * W; ++i) {
                         int index = (n * S + s )* H * W + i;
                         float val = backprop_error_gpu[index];
-                        //float GT_VALUE = backprop_error_cpu[index];
-                        float GT_VALUE = backprop_error_gt[index];
+                        float GT_VALUE = backprop_error_cpu[index];
+                        //float GT_VALUE = backprop_error_gt[index];
 
                         if (std::abs(val - GT_VALUE) / GT_VALUE > 1e-4 && std::abs(val - GT_VALUE) > 1e-7 && i % W < (W -1)) {
                             if (found_invalid < 10)
