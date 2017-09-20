@@ -1834,7 +1834,7 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussConvolution) {
     // evaluate size settings
     const int N = 128;
     const int F = 32;
-    const int S = 16;
+    const int S = 3;
     const int G = 2;
     const int W = 48;
     const int H = 16;
@@ -2092,7 +2092,7 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussBackwardMultiSubfeatures) {
 
     const int N = 128;
     const int F = 32;
-    const int S = 32;
+    const int S = 1;
     const int G = 2;
     const int W = 64;
     const int H = 32;

@@ -237,7 +237,7 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
     size_t workspace_limit_bytes = 8*1024*1024;
 
     // use inter buffer for both fwd and bwd passes so allocate buffer with suitable size for both
-    interm_buffer_.Reshape(this->num_, this->channels_* 4, height, width);
+    interm_buffer_.Reshape(this->num_, std::max(this->channels_ * 4, this->num_output_), height, width);
 
     this->prefilter_kernel_.Reshape(1,1,this->prefilter_h_, this->prefilter_w_);
 
@@ -685,7 +685,7 @@ void offset_and_sum_opencv(const Dtype* input_data,
     const int INTERPOlATION_Dy = 2;
 
     const int F_BATCH = 8;
-    const int S_BATCH = 2;
+    const int S_BATCH = 1;
 
     for (int n = 0; n < num_; ++n) {
         //printf("n=%d\n",n);
@@ -864,7 +864,7 @@ void offset_and_dot_opencv(const Dtype* input_data, const Dtype* error_data,
     const int INTERPOlATION_Dy = 2;
 
     const int F_BATCH = 8;
-    const int S_BATCH = 2;
+    const int S_BATCH = 1;
 
     for (int n = 0; n < num_; ++n) {
         //printf("n=%d\n",n);
