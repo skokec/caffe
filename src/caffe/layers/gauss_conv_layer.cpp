@@ -255,14 +255,14 @@ void BaseGaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom
 		Dtype* offset_y = new Dtype[NUM_GAUSS_PER_AXIS_Y];
 
 		// use gmm_component_border_bound as start and stop position of where components are allowed to be within the kernel
-		Dtype gmm_kernel_h_ = (Dtype)this->kernel_h_ - 2*(this->gmm_component_border_bound+5);
-		Dtype gmm_kernel_w_ = (Dtype)this->kernel_w_ - 2*(this->gmm_component_border_bound+5);
+		Dtype gmm_kernel_h_ = (Dtype)this->kernel_h_ - 2*this->gmm_component_border_bound;
+		Dtype gmm_kernel_w_ = (Dtype)this->kernel_w_ - 2*this->gmm_component_border_bound;
 
 		for (int i = 0; i < NUM_GAUSS_PER_AXIS_X; i++) {
-			offset_x[i] = this->gmm_component_border_bound+5 + (i)*gmm_kernel_w_ /(Dtype)(NUM_GAUSS_PER_AXIS_X) + (- 0.5+(gmm_kernel_w_)/(Dtype)(2*NUM_GAUSS_PER_AXIS_X));
+			offset_x[i] = this->gmm_component_border_bound + (i)*gmm_kernel_w_ /(Dtype)(NUM_GAUSS_PER_AXIS_X) + (- 0.5+(gmm_kernel_w_)/(Dtype)(2*NUM_GAUSS_PER_AXIS_X));
 		}
 		for (int i = 0; i < NUM_GAUSS_PER_AXIS_Y; i++) {
-			offset_y[i] = this->gmm_component_border_bound+5 + (i)*gmm_kernel_h_ /(Dtype)(NUM_GAUSS_PER_AXIS_Y) + (- 0.5+(gmm_kernel_h_)/(Dtype)(2*NUM_GAUSS_PER_AXIS_Y));
+			offset_y[i] = this->gmm_component_border_bound + (i)*gmm_kernel_h_ /(Dtype)(NUM_GAUSS_PER_AXIS_Y) + (- 0.5+(gmm_kernel_h_)/(Dtype)(2*NUM_GAUSS_PER_AXIS_Y));
 		}
 
 		// add offset to mean so that (0,0) is at center
