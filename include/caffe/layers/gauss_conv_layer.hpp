@@ -28,6 +28,7 @@ class BaseGaussianConvLayer : public BaseConvolutionLayer<Dtype> {
 	virtual void Backward_gpu(const vector<Blob<Dtype>*>& top,const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
 
 
+	void create_precompute_index(Blob<int>& precomp_index, const int index_size, const int kernel_size);
 
 	void do_precompute_guassian_weights(Blob<Dtype>& gauss_param_buffer_w,
 										Blob<Dtype>& gauss_param_buffer_mu1,
@@ -65,6 +66,7 @@ class BaseGaussianConvLayer : public BaseConvolutionLayer<Dtype> {
                                             bool gmm_discretize_mean,
                                             Dtype gmm_sigma_lower_bound,
                                             Dtype gmm_component_border_bound,
+											Blob<int>& tmp_precomp_index,
 											// output buffers
 											Blob<Dtype>* weight_buffer,
 											Blob<Dtype>* weight_vert_buffer,
@@ -139,7 +141,6 @@ class BaseGaussianConvLayer : public BaseConvolutionLayer<Dtype> {
 	Blob<int> is_weight_enabled_buffer_;
 
 	Blob<int> tmp_precomp_index_; // pre-computed indexes for caffe_gpu_sum in precompute_guassian_weights_gpu
-	int* tmp_precomp_index_gpu;
 
 	Blob<Dtype> tmp_deriv_weight_buffer_; // temporary buffer for holding kernel weights when calling precompute_guassian_weights
 
@@ -350,6 +351,12 @@ class FastAproxGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
 		size_t filtered_images_sizes_;
 		size_t filter_weights_sizes_;
 		size_t filter_offsets_sizes_;
+
+        // this is used durinc backward pass for error backpropagation, but since we use forward pass for that we share
+        // the same buffer, however, size of buffer must accomodate both
+        size_t filtered_error_sizes_;
+        size_t filter_error_weights_sizes_;
+        size_t filter_error_offsets_sizes_;
 	} buffer_fwd_;
 
 	struct {

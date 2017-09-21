@@ -172,6 +172,7 @@ void BaseGaussianConvLayer<Dtype>::precompute_guassian_weights_gpu(bool is_backw
                                        this->gmm_sigma_lower_bound,
                                        this->gmm_component_border_bound,
                                        this->gmm_discretize_mean,
+									   this->tmp_precomp_index_,
 									   this->weight_buffer_.get(),
 									   this->weight_vert_buffer_.get(),
 									   this->weight_horiz_buffer_.get(),
@@ -196,6 +197,7 @@ void BaseGaussianConvLayer<Dtype>::do_precompute_guassian_weights_gpu(Blob<Dtype
                                                                     bool gmm_discretize_mean,
                                                                     Dtype gmm_sigma_lower_bound,
                                                                     Dtype gmm_component_border_bound,
+																    Blob<int>& tmp_precomp_index,
 																	// output buffers
 																	Blob<Dtype>* weight_buffer,
 																	Blob<Dtype>* weight_vert_buffer,
@@ -208,6 +210,8 @@ void BaseGaussianConvLayer<Dtype>::do_precompute_guassian_weights_gpu(Blob<Dtype
 																	Blob<Dtype>* deriv_mu2_buffer,
 																	Blob<Dtype>* deriv_sigma_buffer) {
 
+	// we get mutable ptr but we do not modify it, this is just poor code in part of the CUB code
+	int* tmp_precomp_index_gpu = tmp_precomp_index.mutable_gpu_data();
 
 	clock_t start_t = clock();
 
@@ -326,18 +330,18 @@ void BaseGaussianConvLayer<Dtype>::do_precompute_guassian_weights_gpu(Blob<Dtype
 			const Dtype* deriv_sigma_times_gauss_dist = this->deriv_sigma_times_gauss_dist_buffer_.cpu_data();
 		}*/
 
-		caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_mu1_times_gauss_dist, deriv_mu1_sums, S*F*G, this->tmp_precomp_index_gpu);
-		caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_mu2_times_gauss_dist, deriv_mu2_sums, S*F*G, this->tmp_precomp_index_gpu);
-		caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_sigma_times_gauss_dist, deriv_sigma_sums, S*F*G, this->tmp_precomp_index_gpu);
+		caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_mu1_times_gauss_dist, deriv_mu1_sums, S*F*G, tmp_precomp_index_gpu);
+		caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_mu2_times_gauss_dist, deriv_mu2_sums, S*F*G, tmp_precomp_index_gpu);
+		caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_sigma_times_gauss_dist, deriv_sigma_sums, S*F*G, tmp_precomp_index_gpu);
 
 		caffe_gpu_scal((S*F*G), (Dtype)2, deriv_mu1_sums);
 		caffe_gpu_scal((S*F*G), (Dtype)2, deriv_mu2_sums);
 		caffe_gpu_scal((S*F*G), (Dtype)2, deriv_sigma_sums);
 	} else {
 
-		caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_mu1, deriv_mu1_sums, S*F*G, this->tmp_precomp_index_gpu);
-		caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_mu2, deriv_mu2_sums, S*F*G, this->tmp_precomp_index_gpu);
-		caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_sigma, deriv_sigma_sums, S*F*G, this->tmp_precomp_index_gpu);
+		caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_mu1, deriv_mu1_sums, S*F*G, tmp_precomp_index_gpu);
+		caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_mu2, deriv_mu2_sums, S*F*G, tmp_precomp_index_gpu);
+		caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_sigma, deriv_sigma_sums, S*F*G, tmp_precomp_index_gpu);
 	}
 
 	/*{
@@ -355,10 +359,10 @@ void BaseGaussianConvLayer<Dtype>::do_precompute_guassian_weights_gpu(Blob<Dtype
 		Dtype* gauss_dist_square = this->gauss_dist_square_buffer_.mutable_gpu_data();
 
 		caffe_gpu_mul((S*F*G) * (K_w*K_h), gauss_dist, gauss_dist, gauss_dist_square); // gauss_dist_square = gauss_dist * gauss_dist;
-		caffe_gpu_sum((S*F*G) * (K_w*K_h), gauss_dist_square, guass_norm, S*F*G, this->tmp_precomp_index_gpu);
+		caffe_gpu_sum((S*F*G) * (K_w*K_h), gauss_dist_square, guass_norm, S*F*G, tmp_precomp_index_gpu);
 	} else {
 		// we need to normalize to sum of 1
-		caffe_gpu_sum((S*F*G) * (K_w*K_h), gauss_dist, guass_norm, S*F*G, this->tmp_precomp_index_gpu);
+		caffe_gpu_sum((S*F*G) * (K_w*K_h), gauss_dist, guass_norm, S*F*G, tmp_precomp_index_gpu);
 	}
 
 	/*{

@@ -249,6 +249,22 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
 
     this->prefilter_deriv_kernels_.Reshape(1,NUM_K,this->prefilter_h_, this->prefilter_w_);
 
+    // we will be using precompute_guassian_weights_gpu() so setup sizes of all temporary buffers that will be used
+    this->guass_dist_buffer_.ReshapeLike(this->prefilter_deriv_kernel_weight_);
+    this->gauss_dist_square_buffer_.ReshapeLike(this->prefilter_deriv_kernel_weight_);
+    this->deriv_mu1_times_gauss_dist_buffer_.ReshapeLike(this->prefilter_deriv_kernel_weight_);
+    this->deriv_mu2_times_gauss_dist_buffer_.ReshapeLike(this->prefilter_deriv_kernel_weight_);
+    this->deriv_sigma_times_gauss_dist_buffer_.ReshapeLike(this->prefilter_deriv_kernel_weight_);
+
+    this->guass_norm_buffer_.Reshape(1, 1, 1, 1);
+    this->deriv_mu1_sums_buffer_.ReshapeLike(this->guass_norm_buffer_);
+    this->deriv_mu2_sums_buffer_.ReshapeLike(this->guass_norm_buffer_);
+    this->deriv_sigma_sums_buffer_.ReshapeLike(this->guass_norm_buffer_);
+
+    // pre-computed offset indexes for batched sums since we are using precompute_guassian_weights_gpu() to create filters
+    // we can reuse this->tmp_precomp_index_ but need set it up with different kernel size
+    this->create_precompute_index(this->tmp_precomp_index_, 1, this->prefilter_h_ * this->prefilter_w_);
+
 
     this->bwd_gradients.Reshape(4, this->conv_in_channels_, this->NUM_GAUSS, this->conv_out_channels_);
 
@@ -375,6 +391,7 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
                                      NULL,&buffer_fwd_.filter_offsets_sizes_,
                                      NULL);
 
+    // for gradient accumulation
     caffe::fast_gauss_backward_multi_subfeatures<Dtype>(NULL, NULL, NULL, NULL, NULL, NULL,
                                                         this->num_, this->channels_, this->num_output_, this->NUM_GAUSS, NUM_K,
                                                         this->width_out_, this->height_out_,
@@ -384,6 +401,25 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
                                                         NULL,&buffer_bwd_.error_image_sizes_,
                                                         NULL,&buffer_bwd_.filter_weights_sizes_,
                                                         NULL,&buffer_bwd_.filter_offsets_sizes_);
+
+    // for error back-propagation
+    // we use the same buffer as for forward pass but can be shared, just ensure buffer can accomodate both sizes
+    size_t filtered_error_sizes_, filter_error_weights_sizes_, filter_error_offsets_sizes_;
+
+    caffe::fast_gauss_forward<Dtype>(NULL, NULL, NULL, NULL, FAST_GAUSS_PARAM_FGS, NULL,
+                                     this->num_, this->num_output_, this->channels_, this->NUM_GAUSS,
+                                     this->width_out_, this->height_out_,
+                                     this->kernel_w_, this->kernel_h_,
+                                     this->use_interpolation_,
+                                     NULL,&filtered_error_sizes_,
+                                     NULL,&filter_error_weights_sizes_,
+                                     NULL,&filter_error_offsets_sizes_,
+                                     NULL);
+
+    // this ensures that buffers will accomodate both fast_gauss_forward functions one used for forward pass and the second one used of error back-propagation
+    buffer_fwd_.filtered_images_sizes_ = std::max(buffer_fwd_.filtered_images_sizes_, filtered_error_sizes_);
+    buffer_fwd_.filter_weights_sizes_ = std::max(buffer_fwd_.filter_weights_sizes_, filter_error_weights_sizes_);
+    buffer_fwd_.filter_offsets_sizes_ = std::max(buffer_fwd_.filter_offsets_sizes_, filter_error_offsets_sizes_);
 
     // reduce over all workspace sizes to get a maximum to allocate / reallocate
     size_t total_workspace_fwd = 0;
@@ -572,6 +608,7 @@ void FastAproxGaussianConvLayer<Dtype>::update_prefiltering_kernels(cudaStream_t
                                                  gmm_discretize_mean,
                                                  this->gmm_sigma_lower_bound,
                                                  gmm_component_border_bound,
+                                                 this->tmp_precomp_index_,
                                                  &this->prefilter_kernel_,
                                                  NULL, NULL, NULL,
                                                  &this->prefilter_deriv_kernel_error_,

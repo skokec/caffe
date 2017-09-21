@@ -255,14 +255,14 @@ void BaseGaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom
 		Dtype* offset_y = new Dtype[NUM_GAUSS_PER_AXIS_Y];
 
 		// use gmm_component_border_bound as start and stop position of where components are allowed to be within the kernel
-		Dtype gmm_kernel_h_ = (Dtype)this->kernel_h_ - 2*this->gmm_component_border_bound;
-		Dtype gmm_kernel_w_ = (Dtype)this->kernel_w_ - 2*this->gmm_component_border_bound;
+		Dtype gmm_kernel_h_ = (Dtype)this->kernel_h_ - 2*(this->gmm_component_border_bound+5);
+		Dtype gmm_kernel_w_ = (Dtype)this->kernel_w_ - 2*(this->gmm_component_border_bound+5);
 
 		for (int i = 0; i < NUM_GAUSS_PER_AXIS_X; i++) {
-			offset_x[i] = this->gmm_component_border_bound + (i)*gmm_kernel_w_ /(Dtype)(NUM_GAUSS_PER_AXIS_X) + (- 0.5+(gmm_kernel_w_)/(Dtype)(2*NUM_GAUSS_PER_AXIS_X));
+			offset_x[i] = this->gmm_component_border_bound+5 + (i)*gmm_kernel_w_ /(Dtype)(NUM_GAUSS_PER_AXIS_X) + (- 0.5+(gmm_kernel_w_)/(Dtype)(2*NUM_GAUSS_PER_AXIS_X));
 		}
 		for (int i = 0; i < NUM_GAUSS_PER_AXIS_Y; i++) {
-			offset_y[i] = this->gmm_component_border_bound + (i)*gmm_kernel_h_ /(Dtype)(NUM_GAUSS_PER_AXIS_Y) + (- 0.5+(gmm_kernel_h_)/(Dtype)(2*NUM_GAUSS_PER_AXIS_Y));
+			offset_y[i] = this->gmm_component_border_bound+5 + (i)*gmm_kernel_h_ /(Dtype)(NUM_GAUSS_PER_AXIS_Y) + (- 0.5+(gmm_kernel_h_)/(Dtype)(2*NUM_GAUSS_PER_AXIS_Y));
 		}
 
 		// add offset to mean so that (0,0) is at center
@@ -477,16 +477,7 @@ void BaseGaussianConvLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
 	this->deriv_sigma_sums_buffer_.ReshapeLike(*this->param_buffer_w_);
 
 	// pre-computed offset indexes for batched sums (when using caffe_gpu_sum)
-	this->tmp_precomp_index_.Reshape(1, 1, 1, this->conv_in_channels_ * NUM_GAUSS * this->conv_out_channels_ + 1);
-
-	int* tmp_precomp_index_cpu = this->tmp_precomp_index_.mutable_cpu_data();
-
-	tmp_precomp_index_cpu[0] = 0;
-
-	for (int i = 0; i < this->tmp_precomp_index_.count()-1; i++) tmp_precomp_index_cpu[i+1] = this->kernel_h_ * this->kernel_w_ * (i+1);
-
-	tmp_precomp_index_gpu = this->tmp_precomp_index_.mutable_gpu_data();
-
+	this->create_precompute_index(this->tmp_precomp_index_, this->conv_in_channels_ * NUM_GAUSS * this->conv_out_channels_, this->kernel_h_ * this->kernel_w_);
 
 	this->tmp_deriv_weight_buffer_.Reshape(1, NUM_GAUSS , this->kernel_h_, this->kernel_w_);
 
@@ -500,7 +491,21 @@ void BaseGaussianConvLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
 		this->bias_multiplier_.Reshape(bias_multiplier_shape);
 		caffe_set(this->bias_multiplier_.count(), Dtype(1), this->bias_multiplier_.mutable_cpu_data());
 	}
-}  
+}
+
+template <typename Dtype>
+void BaseGaussianConvLayer<Dtype>::create_precompute_index(Blob<int>& precomp_index_buff, const int index_size, const int kernel_size) {
+
+	precomp_index_buff.Reshape(1, 1, 1, index_size + 1);
+
+	int* tmp_precomp_index_cpu = precomp_index_buff.mutable_cpu_data();
+
+	tmp_precomp_index_cpu[0] = 0;
+
+	for (int i = 0; i < precomp_index_buff.count()-1; i++)
+		tmp_precomp_index_cpu[i+1] = kernel_size * (i+1);
+
+}
 
 
 template <typename Dtype>

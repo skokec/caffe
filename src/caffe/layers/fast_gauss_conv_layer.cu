@@ -189,7 +189,6 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 
 		// Gradient w.r.t. bias.
 		if (this->bias_term_ && this->param_propagate_down_[1]) {
-
 			CUDNN_CHECK(cudnnConvolutionBackwardBias(handle_[0],
 													 cudnn::dataType<Dtype>::one,
 													 top_bias_descs_[i],  top_error,
@@ -200,7 +199,6 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 
 		// Gradient w.r.t w,mu1,mu2 and sigma
 		if (this->param_propagate_down_[0]) {
-
 			// perform pre-filtering for each parameter i.e. with four different derivative filters
 			CUDNN_CHECK(cudnnConvolutionForward(handle_[0],
 												cudnn::dataType<Dtype>::one,
@@ -236,6 +234,7 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 
 		}
 
+
 		// finally perform back-propagation of the error values
 		if (propagate_down[i]) {
 
@@ -268,11 +267,10 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 				caffe_gpu_add_scalar(param_size, (Dtype)(this->kernel_h_ - 1), param_mu2_backprop);
 			}
 
-
 			// now we take the blured error data and perform sum over shifted input data with our custom kernel i.e. forward pass
 			caffe::fast_gauss_forward<Dtype>(interm_data,
 											 param_mu1_backprop, param_mu2_backprop, filter_weights, FAST_GAUSS_PARAM_FGS,
-											 bottom_error,
+                                             bottom_error,
 											 this->num_, this->num_output_, this->channels_, this->NUM_GAUSS,
 											 this->width_out_, this->height_out_,
 											 this->kernel_w_, this->kernel_h_,

@@ -478,16 +478,18 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_gauss_normalization_
 		const Dtype* gauss_dist = this->get_gauss_distribution_buffer()->gpu_data();
 		Dtype* guass_norm = this->tmp_buf.norm->mutable_gpu_data();
 
+        int* tmp_precomp_index_gpu = this->tmp_precomp_index_.mutable_gpu_data();
+
 		if (this->use_gmm_gauss_normalization == false) {
 			// set guass_norm to 1 if we sould NOT normalize to sum of 1
 			caffe_gpu_set_async((S*F*G), (Dtype)1, guass_norm, streamId);
 
 		} else if (this->use_gmm_square_gauss_normalization) {
 			// we need to normalize to sum of squares to 1
-			caffe_gpu_dot_batched((S*F*G) * (K_w*K_h), gauss_dist, gauss_dist, guass_norm, S*F*G, this->tmp_precomp_index_gpu, streamId);
+			caffe_gpu_dot_batched((S*F*G) * (K_w*K_h), gauss_dist, gauss_dist, guass_norm, S*F*G, tmp_precomp_index_gpu, streamId);
 		} else {
 			// we need to normalize to sum of 1
-			caffe_gpu_sum((S*F*G) * (K_w*K_h), gauss_dist, guass_norm, S*F*G, this->tmp_precomp_index_gpu, streamId);
+			caffe_gpu_sum((S*F*G) * (K_w*K_h), gauss_dist, guass_norm, S*F*G, tmp_precomp_index_gpu, streamId);
 		}
 
 		// invert guass_norm i.e. guass_norm = 1/guass_norm
@@ -696,6 +698,8 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_mu1_derivative_filte
 		// output buffer
 		Dtype* deriv_mu1 = output_buffer->mutable_gpu_data();
 
+        int* tmp_precomp_index_gpu = this->tmp_precomp_index_.mutable_gpu_data();
+
 		const int S = this->conv_in_channels_;
 		const int F = this->conv_out_channels_;
 		const int G = this->NUM_GAUSS;
@@ -718,14 +722,14 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_mu1_derivative_filte
 		} else if (this->use_gmm_square_gauss_normalization) {
 
 			// deriv_mu1_sums = 2 * sum(gauss_dist * deriv_mu1);
-			caffe_gpu_dot_batched((S*F*G) * (K_w*K_h), gauss_dist, deriv_mu1, deriv_mu1_sums, S*F*G, this->tmp_precomp_index_gpu, false, streamId);
+			caffe_gpu_dot_batched((S*F*G) * (K_w*K_h), gauss_dist, deriv_mu1, deriv_mu1_sums, S*F*G, tmp_precomp_index_gpu, false, streamId);
 
 			CUDNN_CALL_WITH_STREAM(streamId,
 					caffe_gpu_scal((S*F*G), (Dtype)2, deriv_mu1_sums)
 			);
 		} else {
 			// deriv_mu1_sums = sum(deriv_mu1);
-			caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_mu1, deriv_mu1_sums, S*F*G, this->tmp_precomp_index_gpu, streamId);
+			caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_mu1, deriv_mu1_sums, S*F*G, tmp_precomp_index_gpu, streamId);
 		}
 		// gauss_mu1_sum = abs(gauss_mu1_sum) > 1e-10 ? gauss_mu1_sum : 0;
 		caffe_gpu_clip_eps(this->deriv_mu1_sums_buffer_.count(), SUM_MIN_BOUND, deriv_mu1_sums, deriv_mu1_sums, streamId);
@@ -803,6 +807,8 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_mu2_derivative_filte
 
 		Dtype* deriv_mu2 = output_buffer->mutable_gpu_data();
 
+        int* tmp_precomp_index_gpu = this->tmp_precomp_index_.mutable_gpu_data();
+
 		const int S = this->conv_in_channels_;
 		const int F = this->conv_out_channels_;
 		const int G = this->NUM_GAUSS;
@@ -823,14 +829,14 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_mu2_derivative_filte
 
 		} else if (this->use_gmm_square_gauss_normalization) {
 			// deriv_mu2_sums = 2 * sum(gauss_dist * deriv_mu2);
-			caffe_gpu_dot_batched((S*F*G) * (K_w*K_h), gauss_dist, deriv_mu2, deriv_mu2_sums, S*F*G, this->tmp_precomp_index_gpu, false, streamId);
+			caffe_gpu_dot_batched((S*F*G) * (K_w*K_h), gauss_dist, deriv_mu2, deriv_mu2_sums, S*F*G, tmp_precomp_index_gpu, false, streamId);
 
 			CUDNN_CALL_WITH_STREAM(streamId,
 					caffe_gpu_scal((S*F*G), (Dtype)2, deriv_mu2_sums)
 			);
 		} else {
 			// deriv_mu2_sums = sum(deriv_mu2);
-			caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_mu2, deriv_mu2_sums, S*F*G, this->tmp_precomp_index_gpu, streamId);
+			caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_mu2, deriv_mu2_sums, S*F*G, tmp_precomp_index_gpu, streamId);
 		}
 
 		// gauss_mu2_sum = abs(gauss_mu2_sum) > 1e-10 ? gauss_mu2_sum : 0;
@@ -916,6 +922,8 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_sigma_derivative_fil
 
 		Dtype* deriv_sigma = output_buffer->mutable_gpu_data();
 
+        int* tmp_precomp_index_gpu = this->tmp_precomp_index_.mutable_gpu_data();
+
 		const int S = this->conv_in_channels_;
 		const int F = this->conv_out_channels_;
 		const int G = this->NUM_GAUSS;
@@ -936,14 +944,14 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_sigma_derivative_fil
 
 		} else if (this->use_gmm_square_gauss_normalization) {
 			// deriv_sigma_sums = 2 * sum(gauss_dist * deriv_sigma);
-			caffe_gpu_dot_batched((S*F*G) * (K_w*K_h), gauss_dist, deriv_sigma, deriv_sigma_sums, S*F*G, this->tmp_precomp_index_gpu, false, streamId);
+			caffe_gpu_dot_batched((S*F*G) * (K_w*K_h), gauss_dist, deriv_sigma, deriv_sigma_sums, S*F*G, tmp_precomp_index_gpu, false, streamId);
 
 			CUDNN_CALL_WITH_STREAM(streamId,
 					caffe_gpu_scal((S*F*G), (Dtype)2, deriv_sigma_sums)
 			);
 		} else {
 			// deriv_sigma_sums = sum(deriv_sigma);
-			caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_sigma, deriv_sigma_sums, S*F*G, this->tmp_precomp_index_gpu, streamId);
+			caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_sigma, deriv_sigma_sums, S*F*G, tmp_precomp_index_gpu, streamId);
 		}
 
 		// use caffe_gpu_mul_batched instead of caffe_gpu_mul to use manually defined cuda stream

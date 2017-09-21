@@ -632,6 +632,7 @@ void Net<Dtype>::ForwardDebugInfo(const int layer_id) {
   for (int param_id = 0; param_id < layers_[layer_id]->blobs().size();
        ++param_id) {
     const Blob<Dtype>& blob = *layers_[layer_id]->blobs()[param_id];
+    if (param_id_vecs_[layer_id].size() <= param_id) continue;
     const int net_param_id = param_id_vecs_[layer_id][param_id];
     const string& blob_name = param_display_names_[net_param_id];
     const Dtype data_abs_val_mean = blob.asum_data() / blob.count();
