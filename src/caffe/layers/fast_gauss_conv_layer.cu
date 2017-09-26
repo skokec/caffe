@@ -220,7 +220,7 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 			caffe::fast_gauss_backward_multi_subfeatures<Dtype>(interm_data, top_error,
 																filter_offsets_float_mu1, filter_offsets_float_mu2,
 																filter_weights, bwd_gradients_data,
-																this->num_, this->channels_, this->num_output_, this->NUM_GAUSS, NUM_K,
+																this->num_, this->channels_, this->num_output_, this->NUM_GAUSS, NUM_K, this->last_k_optional,
 																this->width_out_, this->height_out_,
 																this->kernel_w_, this->kernel_h_,
 																this->use_interpolation_, this->ignore_edge_gradients_,

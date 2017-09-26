@@ -17,7 +17,7 @@ void fast_gauss_backward_multi_subfeatures(const Dtype* filtered_images, const D
 										   const Dtype* filter_offsets_float_x, const Dtype* filter_offsets_float_y,
 										   const Dtype* filter_weights,
 										   Dtype* output,
-										   const int I, const int S, const int F, const int G, const int K,
+										   const int I, const int S, const int F, const int G, const int K, const bool last_k_optional,
 										   const int img_width, const int img_height,
 										   const int kernel_width, const int kernel_height,
 										   const bool use_interpolation, const bool ignore_edge_gradients,

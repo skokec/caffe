@@ -641,10 +641,10 @@ public:
 			//*(p.next_offset) = *((float4*)p.next_offset_address);
 
 			for (int f_quad_index = 0; f_quad_index < BATCH_COMPUTE_FEATURES_SIZE/NUM_READ_FEATURES; ++f_quad_index ) {
-				if (BATCH_COMPUTE_FEATURES_SIZE > 0) load_offset.output[f_quad_index].quad[0] = (float*)((void*)load_offset.base_address + load_offset.offset_address[f_quad_index * NUM_READ_FEATURES + 0]); // F[0]
-				if (BATCH_COMPUTE_FEATURES_SIZE > 1) load_offset.output[f_quad_index].quad[1] = (float*)((void*)load_offset.base_address + load_offset.offset_address[f_quad_index * NUM_READ_FEATURES + 1]); // F[1]
-				if (BATCH_COMPUTE_FEATURES_SIZE > 2) load_offset.output[f_quad_index].quad[2] = (float*)((void*)load_offset.base_address + load_offset.offset_address[f_quad_index * NUM_READ_FEATURES + 2]); // F[2]
-				if (BATCH_COMPUTE_FEATURES_SIZE > 3) load_offset.output[f_quad_index].quad[3] = (float*)((void*)load_offset.base_address + load_offset.offset_address[f_quad_index * NUM_READ_FEATURES + 3]); // F[3]
+				if (BATCH_COMPUTE_FEATURES_SIZE > 0) load_offset.output[f_quad_index].quad[0] = (float*)((char*)load_offset.base_address + load_offset.offset_address[f_quad_index * NUM_READ_FEATURES + 0]); // F[0]
+				if (BATCH_COMPUTE_FEATURES_SIZE > 1) load_offset.output[f_quad_index].quad[1] = (float*)((char*)load_offset.base_address + load_offset.offset_address[f_quad_index * NUM_READ_FEATURES + 1]); // F[1]
+				if (BATCH_COMPUTE_FEATURES_SIZE > 2) load_offset.output[f_quad_index].quad[2] = (float*)((char*)load_offset.base_address + load_offset.offset_address[f_quad_index * NUM_READ_FEATURES + 2]); // F[2]
+				if (BATCH_COMPUTE_FEATURES_SIZE > 3) load_offset.output[f_quad_index].quad[3] = (float*)((char*)load_offset.base_address + load_offset.offset_address[f_quad_index * NUM_READ_FEATURES + 3]); // F[3]
 
 			}
 		}
@@ -774,30 +774,29 @@ public:
 				else
 					w = compute.weights[weights_index].w;
 
-				//w = (interpolation_i == 0 && interpolation_j == 0) ? 1 : 0;
-
-				float data_org = compute.data[data_index].x;
-
-				float computeed_val = w * compute.data[data_index].x;
-				if (BATCH_PIXELS_FLOAT4 > 0) compute.output[compute_index].x += computeed_val;
+				if (BATCH_PIXELS_FLOAT4 > 0) compute.output[compute_index].x += w * compute.data[data_index].x;
 				if (BATCH_PIXELS_FLOAT4 > 1) compute.output[compute_index].y += w * compute.data[data_index].y;
 				if (BATCH_PIXELS_FLOAT4 > 2) compute.output[compute_index].z += w * compute.data[data_index].z;
 				if (BATCH_PIXELS_FLOAT4 > 3) compute.output[compute_index].w += w * compute.data[data_index].w;
 
-				float sum_val = compute.output[compute_index].x;
-
-				/*if ((thread_x == 0 ) && thread_y == 0 && f_index == 0 && f == 0 && px_x == 0 && px_y == 0 && block_x == 0 && block_y == 0 && interpolation_j == 0 && interpolation_i == 0 && image_index == 2 && g_index == 0)
 				{
-					//printf("thread j,i: %d,%d, with data read offset: %d and data value %f\n ", thread_y, thread_x, data_index, data_org);
-					printf("computed sum %f from current value from w %f * data %f = computed_value %f at interpolation index j,i=%d,%d, s=%d, f=%d, and block y,x=%d,%d, batched n=%d\n",
-						   sum_val, w, data_org, computeed_val, interpolation_j,interpolation_i, s_index, f_index + f, block_y, block_x, n);
+					/*float data_org = compute.data[data_index].x;
+					float computeed_val = w * compute.data[data_index].x;
+					float sum_val = compute.output[compute_index].x;*/
+					/*if ((thread_x == 0 ) && thread_y == 0 && f_index == 0 && f == 0 && px_x == 0 && px_y == 0 && block_x == 0 && block_y == 0 && interpolation_j == 0 && interpolation_i == 0 && image_index == 2 && g_index == 0)
+                    {
 
-					//printf("s_index=%d, with weight=%f\n ", s_index, w);
-				}*/
-				/*if ((thread_x == 31 ) && thread_y == 0 && f_index == 0 && f == 0 && block_x == 0 && block_y == 0 )
-				{
-					printf("s_index=%d, with weight=%f and px=%d,%d and interpol=%d,%d with data val=%f\n ", s_index, w, px_y, px_x, interpolation_j, interpolation_i, data_org);
-				}*/
+                        //printf("thread j,i: %d,%d, with data read offset: %d and data value %f\n ", thread_y, thread_x, data_index, data_org);
+                        printf("computed sum %f from current value from w %f * data %f = computed_value %f at interpolation index j,i=%d,%d, s=%d, f=%d, and block y,x=%d,%d, batched n=%d\n",
+                               sum_val, w, data_org, computeed_val, interpolation_j,interpolation_i, s_index, f_index + f, block_y, block_x, n);
+
+                        //printf("s_index=%d, with weight=%f\n ", s_index, w);
+                    }*/
+					/*if ((thread_x == 31 ) && thread_y == 0 && f_index == 0 && f == 0 && block_x == 0 && block_y == 0 )
+                    {
+                        printf("s_index=%d, with weight=%f and px=%d,%d and interpol=%d,%d with data val=%f\n ", s_index, w, px_y, px_x, interpolation_j, interpolation_i, data_org);
+                    }*/
+				}
 			}
 		}
 	}
@@ -2580,11 +2579,15 @@ void fast_gauss_forward<float>(const float* filtered_images,
 	if (USE_INTERPOLATION) { \
 		RUN_KERNEL_R0(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, true, SINGLE_FEATURE, SINGLE_SUBFEATURE, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
 	} else { \
-		RUN_KERNEL_R0(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, false, SINGLE_FEATURE, SINGLE_SUBFEATURE, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
+		/*RUN_KERNEL_R0(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, false, SINGLE_FEATURE, SINGLE_SUBFEATURE, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__)*/ \
+		printf("Support for non-interpolation currently disabled. Non-interpolation has not been extensivly tested so disabling support.\n"); \
+        throw std::exception(); \
 	}
 
 #define RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, ...) \
-    if (IMG_PATCH_SIZE_W >= 32) { \
+    if (IMG_PATCH_SIZE_W >= 64) { \
+		RUN_KERNEL_R1(CLASS_NAME, 64, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
+	} else if (IMG_PATCH_SIZE_W >= 32) { \
 		RUN_KERNEL_R1(CLASS_NAME, 32, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
 	} else { \
         RUN_KERNEL_R1(CLASS_NAME, 16, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__)  \
@@ -2592,7 +2595,9 @@ void fast_gauss_forward<float>(const float* filtered_images,
 
 
 #define RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, ...) \
-	if (IMG_PATCH_SIZE_H >= 32) { \
+	if (IMG_PATCH_SIZE_H >= 64) { \
+		RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE_W, 64, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
+	} else if (IMG_PATCH_SIZE_H >= 32) { \
 		RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE_W, 32, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
 	} else if (IMG_PATCH_SIZE_H >= 16) { \
         RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE_W, 16, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
@@ -2610,17 +2615,18 @@ void fast_gauss_forward<float>(const float* filtered_images,
         printf("Unsupported filter size: %d. Supported only max up to 9x9 and 17x17 at the moment\n", MAX_OFFSET); \
         throw std::exception(); \
     }
-
 	/*else if (MAX_OFFSET <= 33) { \
         RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE, 16, BATCH_IMAGES, USE_INTERPOLATION, __VA_ARGS__) \
     */
 
 #define RUN_KERNEL_R5(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, ...) \
-	if (WARP_PIXELS_X == 16 && BLOCK_IMAGES >= 2 ) { \
-		RUN_KERNEL_R4(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, 16, 2, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
-	} else if (WARP_PIXELS_X == 16 && BLOCK_IMAGES == 1 ) { \
-		RUN_KERNEL_R4(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, 16, 1, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
-	} else if (WARP_PIXELS_X == 32)  { \
+	if (WARP_PIXELS_X == 16) { \
+		if (BLOCK_IMAGES % 2 == 0) { \
+		    RUN_KERNEL_R4(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, 16, 2, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
+	    } else { \
+		    RUN_KERNEL_R4(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, 16, 1, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
+        } \
+    } else if (WARP_PIXELS_X == 32)  { \
         RUN_KERNEL_R4(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, 32, 1, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, __VA_ARGS__) \
 	} else { \
 		printf("Unsupported WARP_PIXELS_X: %d. Supported only 16 or 32 at the moment\n", WARP_PIXELS_X); \

@@ -237,7 +237,7 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
     size_t workspace_limit_bytes = 8*1024*1024;
 
     // use inter buffer for both fwd and bwd passes so allocate buffer with suitable size for both
-    interm_buffer_.Reshape(this->num_, std::max(this->channels_ * 4, this->num_output_), height, width);
+    interm_buffer_.Reshape(this->num_, std::max(this->channels_ * this->NUM_K, this->num_output_), height, width);
 
     this->prefilter_kernel_.Reshape(1,1,this->prefilter_h_, this->prefilter_w_);
 
@@ -266,7 +266,7 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
     this->create_precompute_index(this->tmp_precomp_index_, 1, this->prefilter_h_ * this->prefilter_w_);
 
 
-    this->bwd_gradients.Reshape(4, this->conv_in_channels_, this->NUM_GAUSS, this->conv_out_channels_);
+    this->bwd_gradients.Reshape(this->NUM_K, this->conv_in_channels_, this->NUM_GAUSS, this->conv_out_channels_);
 
     // temporary buffer used during the back-propagation of the error where we rotate mu1 and mu2
     this->tmp_param_buffer_.Reshape(2, this->conv_in_channels_, this->NUM_GAUSS, this->conv_out_channels_);
@@ -393,7 +393,7 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
 
     // for gradient accumulation
     caffe::fast_gauss_backward_multi_subfeatures<Dtype>(NULL, NULL, NULL, NULL, NULL, NULL,
-                                                        this->num_, this->channels_, this->num_output_, this->NUM_GAUSS, NUM_K,
+                                                        this->num_, this->channels_, this->num_output_, this->NUM_GAUSS, NUM_K, this->last_k_optional,
                                                         this->width_out_, this->height_out_,
                                                         this->kernel_w_, this->kernel_h_,
                                                         this->use_interpolation_, this->ignore_edge_gradients_,
@@ -919,8 +919,20 @@ void offset_and_dot_opencv(const Dtype* input_data, const Dtype* error_data,
 
                 int access_f_offset = f * height_out_;
 
-                top_mat(cv::Rect(width_out_-1, access_f_offset, 1, height_out_ )) = 0.0f;
-                top_mat(cv::Rect(0, height_out_-1 + access_f_offset , width_out_, 1)) = 0.0f;
+                bool disable_last_column = false;
+                bool disable_last_row = false;
+
+                if (width_out_ >= 64) disable_last_column = width_out_ % 64 == 0 ? true : false;
+                else if (width_out_ >= 32) disable_last_column = width_out_ % 32 == 0 ? true : false;
+                else if (width_out_ >= 16) disable_last_column = width_out_ % 16 == 0 ? true : false;
+
+                if (height_out_ >= 64) disable_last_row = height_out_ % 64 == 0 ? true : false;
+                else if (height_out_ >= 32) disable_last_row = height_out_ % 32 == 0 ? true : false;
+                else if (height_out_ >= 16) disable_last_row = height_out_ % 16 == 0 ? true : false;
+                else if (height_out_ >= 8) disable_last_row = height_out_ % 8 == 0 ? true : false;
+
+                if (disable_last_column) top_mat(cv::Rect(width_out_-1, access_f_offset, 1, height_out_ )) = 0.0f;
+                if (disable_last_row) top_mat(cv::Rect(0, height_out_-1 + access_f_offset , width_out_, 1)) = 0.0f;
             }
         }
         for (int f_offset = 0; f_offset < conv_out_channels_; f_offset+=F_BATCH) {

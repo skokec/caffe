@@ -1334,12 +1334,12 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussBackward) {
     const int F = 128;
     const int S = 96;
     const int G = 2;
-    const int W = 64;
+    const int W = 16;
     const int H = 32;
 
     // number of Guassian learning parameters we have (w,mu1,mu2,sigma)
     // for each parameter we need convolution of input data with specific kernel
-    const int K = 3;
+    const int K = 4;
     const bool use_interpolation = true;
     const bool ignore_edge_gradients = true; // for cpu/gpu compatability
 
@@ -1480,7 +1480,7 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussBackward) {
 
         double diff_gradient = 0;
         double max_diff = 0;
-        for (int k = 0; k < K; ++k) {
+        for (int k = 0; k < K - 1; ++k) { // do not test last K since it is optional by default (i.e. it will not be computed unless there is no computation penalty)
             for (int s = 0; s < S; ++s) {
                 for (int g = 0; g < G; ++g) {
                     for (int f = 0; f < F; ++f) {
@@ -1580,12 +1580,12 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussBackwardWithGroundtruth) {
     const int F = 128;
     const int S = 96;
     const int G = 2;
-    const int W = 64;
+    const int W = 16;
     const int H = 32;
 
     // number of Guassian learning parameters we have (w,mu1,mu2,sigma)
     // for each parameter we need convolution of input data with specific kernel
-    const int K = 3;
+    const int K = 4;
     const bool use_interpolation = true;
     const bool ignore_edge_gradients = true; // for cpu/gpu compatability
 
@@ -1759,7 +1759,7 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussBackwardWithGroundtruth) {
 
         double diff_gradient = 0;
         double max_diff = 0;
-        for (int k = 0; k < K; ++k) {
+        for (int k = 0; k < K -1; ++k) { // do not test last K since it is optional by default (i.e. it will not be computed unless there is no computation penalty)
             for (int s = 0; s < S; ++s) {
                 for (int g = 0; g < G; ++g) {
                     for (int f = 0; f < F; ++f) {
@@ -2116,17 +2116,17 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussBackwardMultiSubfeatures) {
         return;
 
 
-    const int N = 64;
+    const int N = 128;
     const int F = 32;
-    const int S = 16;
+    const int S = 32;
     const int G = 2;
-    const int W = 32;
-    const int H = 16;
+    const int W = 16;
+    const int H = 32;
 
 
     // number of Guassian learning parameters we have (w,mu1,mu2,sigma)
     // for each parameter we need convolution of input data with specific kernel
-    const int K = 3;
+    const int K = 4;
     const bool use_interpolation = true;
     const bool ignore_edge_gradients = true; // for cpu/gpu compatability
 
@@ -2176,9 +2176,9 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussBackwardMultiSubfeatures) {
     for (int n = 0; n < N; ++n){
         for (int s = 0; s < S; ++s) {
             for (int i = 0; i < H * W; ++i) {
-                //data[n*H*W + i] = i % W + 1;
+                //data[( n * S  +   s  )* H * W + i] = i % W + 1;
                 //data[( n * S  +   s  )* H * W + i] = (s ) +n*4;
-                //data[n*H*W + i] = 1;
+                //data[( n * S  +   s  )* H * W + i] = 1;
             }
         }
     }
@@ -2346,7 +2346,7 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussBackwardMultiSubfeatures) {
                     //mu2_data[OFFSET(0, s, g, f, 1, S, G, F)] = kernel_size/2;
 
                     // discretize the weights
-                    mu1_data[OFFSET(0, s, g, f, 1, S, G, F)] = floor(mu1_data[OFFSET(0, s, g, f, 1, S, G, F)]);
+                    /*mu1_data[OFFSET(0, s, g, f, 1, S, G, F)] = floor(mu1_data[OFFSET(0, s, g, f, 1, S, G, F)]);
                     mu2_data[OFFSET(0, s, g, f, 1, S, G, F)] = floor(mu2_data[OFFSET(0, s, g, f, 1, S, G, F)]);
 
                     w_data_gt[OFFSET(0, s, g, f, 1, S, G, F)] = w_data[OFFSET(0,s,g,f, 1, S,G,F)];
@@ -2357,11 +2357,11 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussBackwardMultiSubfeatures) {
                     //mu2_data_gt[OFFSET(0, s, g, f, 1, S, G, F)] = kernel_size/2;
 
                     // set fixed sigma for all components in groundtruth layer
-                    sigma_data_gt[OFFSET(0, s, g, f, 1, S, G, F)] = sigma_data[OFFSET(0, s, g, f, 1, S, G, F)];
+                    sigma_data_gt[OFFSET(0, s, g, f, 1, S, G, F)] = sigma_data[OFFSET(0, s, g, f, 1, S, G, F)];*/
                 }
             }
         }
-
+/*
         layer_gt.Backward_gpu(blob_top_vec_gt, propagate_down, blob_bottom_vec);
 
         // save backproped error values
@@ -2379,7 +2379,7 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussBackwardMultiSubfeatures) {
             if (K > 2) caffe_copy(num_params, layer_gt.param_buffer_mu2_->cpu_diff(), gradients_gt + 2 * num_params );
             if (K > 3) caffe_copy(num_params, layer_gt.param_buffer_sigma_->cpu_diff(), gradients_gt + 3 * num_params);
         }
-/*
+*/
         caffe_gpu_set(layer.param_buffer_w_->count(), (Dtype)0, (Dtype*)layer.param_buffer_w_->mutable_gpu_diff());
         caffe_gpu_set(layer.param_buffer_mu1_->count(), (Dtype)0, (Dtype*)layer.param_buffer_mu1_->mutable_gpu_diff());
         caffe_gpu_set(layer.param_buffer_mu2_->count(), (Dtype)0, (Dtype*)layer.param_buffer_mu2_->mutable_gpu_diff());
@@ -2402,7 +2402,7 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussBackwardMultiSubfeatures) {
             if (K > 2) caffe_copy(num_params, layer.param_buffer_mu2_->cpu_diff(), gradients_cpu + 2 * num_params );
             if (K > 3) caffe_copy(num_params, layer.param_buffer_sigma_->cpu_diff(), gradients_cpu + 3 * num_params);
         }
-*/
+
         // reset values for GPU run
         caffe_gpu_set(layer.param_buffer_w_->count(), (Dtype)0, (Dtype*)layer.param_buffer_w_->mutable_gpu_diff());
         caffe_gpu_set(layer.param_buffer_mu1_->count(), (Dtype)0, (Dtype*)layer.param_buffer_mu1_->mutable_gpu_diff());
@@ -2442,15 +2442,15 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussBackwardMultiSubfeatures) {
 
             double diff = 0;
             double max_diff = 0;
-            for (int k = 0; k < K; ++k) {
-                std::cout << "k=" << k << std::endl;
+            for (int k = 0; k < K - 1; ++k) { // do not test last K since it is optional by default (i.e. it will not be computed unless there is no computation penalty)
+                //std::cout << "k=" << k << std::endl;
                 for (int s = 0; s < S; ++s) {
                     for (int g = 0; g < G; ++g) {
                         for (int f = 0; f < F; ++f) {
                             int idx = OFFSET(k,s,g,f, K, S,  G, F);
                             float val = gradients_gpu[idx];
-                            //float GT_VALUE = gradients_cpu[idx];
-                            float GT_VALUE = gradients_gt[idx];
+                            float GT_VALUE = gradients_cpu[idx];
+                            //float GT_VALUE = gradients_gt[idx];
 
                             if (val != val) {
                                 printf("error: got NaN at loc (%d=%d,%d,%d,%d) - should be %f\n",  idx, k, s,g,f, GT_VALUE);
@@ -2478,7 +2478,7 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussBackwardMultiSubfeatures) {
             diff /= found_invalid;
 
             if (found_invalid > 0)
-                printf("found num of invalid accumulated gradient vals: %d/%d with mean diff val %f and max diff val %f\n", found_invalid, K*S*G*F, diff, max_diff);
+                printf("found num of invalid accumulated gradient vals: %d/%d with mean diff val %f and max diff val %f\n", found_invalid, (K-1)*S*G*F, diff, max_diff);
 
         }
         {
@@ -2492,8 +2492,8 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussBackwardMultiSubfeatures) {
                     for (int i = 0; i < H * W; ++i) {
                         int index = (n * S + s )* H * W + i;
                         float val = backprop_error_gpu[index];
-                        //float GT_VALUE = backprop_error_cpu[index];
-                        float GT_VALUE = backprop_error_gt[index];
+                        float GT_VALUE = backprop_error_cpu[index];
+                        //float GT_VALUE = backprop_error_gt[index];
 
                         if (val != val) {
                             printf("error: got NaN at loc (%d=%d,%d,%d,%d) - should be %f\n",  index, n, s, i / W, i % W, GT_VALUE);

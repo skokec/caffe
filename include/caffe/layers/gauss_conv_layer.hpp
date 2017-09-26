@@ -263,7 +263,7 @@ class FastAproxGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
   Blob<Dtype>* get_deriv_kernel_error(cudaStream_t stream = 0);
 
 	// TODO: add support for K=4 as well
-	const int NUM_K = 3;
+	const int NUM_K = 4;
 
 	bool use_interpolation_;
 
@@ -271,6 +271,7 @@ class FastAproxGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
 	// since right/bottom edge values will not be computed properly we can ignore gradients at right/bottom image edge
 	// NOTE: since gradients are not avegred but summed this should not be an issue, so this is used only for unit-testing (to make it compatible with cpu version)
 	bool ignore_edge_gradients_ = false;
+	bool last_k_optional = true;
 
 	int prefilter_h_;
 	int prefilter_w_;
