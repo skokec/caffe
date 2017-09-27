@@ -91,8 +91,17 @@ void FastAproxGaussianConvLayer<Dtype>::Forward_gpu(
 		// now we take the blured input data and perform sum over shifted input data with our custom kernel
 		*/
         /*start_t = clock();*/
-		caffe::fast_gauss_forward<Dtype>(interm_data,
-										 filter_offsets_float_mu1, filter_offsets_float_mu2, filter_weights, FAST_GAUSS_PARAM_SGF,
+
+		this->forward_obj->forward_pass(interm_data,
+										filter_offsets_float_mu1, filter_offsets_float_mu2, filter_weights, FastGaussForward<Dtype>::SGF, this->kernel_w_, this->kernel_h_,
+										top_data,
+										buffer_fwd_.filtered_images,
+										NULL,
+										NULL,
+										buffer_fwd_.filter_offsets_and_weights, stream_[0]);
+
+		/*caffe::fast_gauss_forward<Dtype>(interm_data,
+										 filter_offsets_float_mu1, filter_offsets_float_mu2, filter_weights, PARAM_FORMAT_SGF,
 										 top_data,
 										 this->num_, this->channels_, this->num_output_, this->NUM_GAUSS,
 										 this->width_out_, this->height_out_,
@@ -101,7 +110,7 @@ void FastAproxGaussianConvLayer<Dtype>::Forward_gpu(
 										 buffer_fwd_.filtered_images,0,
 										 NULL,0,
 										 NULL,0,
-										 buffer_fwd_.filter_offsets_and_weights, stream_[0]);
+										 buffer_fwd_.filter_offsets_and_weights, stream_[0]);*/
         /*
         cudaDeviceSynchronize();
         end_t = clock();
@@ -222,7 +231,20 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 			// TODO: update support for K=4 as well
             clock_t start_t = clock();*/
 			// collect gradients by shifting convolved bottom input data and multiplying it with the top error data
-			caffe::fast_gauss_backward_multi_subfeatures<Dtype>(interm_data, top_error,
+			//caffe::FastGaussBackward<Dtype> backward_grad_obj(this->width_out_, this->height_out_, this->num_, this->channels_, this->num_output_, this->NUM_GAUSS, this->NUM_K, this->last_k_optional, this->use_interpolation_);
+
+            // WARNING: if this->kernel_w_ or this->kernel_h_ changes then memory will not be allocated properly
+			backward_grad_obj->backward_pass(interm_data, top_error,
+									   filter_offsets_float_mu1, filter_offsets_float_mu2,
+									   filter_weights, this->kernel_w_, this->kernel_h_,
+									   bwd_gradients_data,
+									   this->buffer_bwd_.filtered_images,
+									   this->buffer_bwd_.error_images,
+									   this->buffer_bwd_.filter_weights,
+									   this->buffer_bwd_.filter_offsets,
+									   this->ignore_edge_gradients_, stream_[0]);
+
+			/*caffe::fast_gauss_backward_multi_subfeatures<Dtype>(interm_data, top_error,
 																filter_offsets_float_mu1, filter_offsets_float_mu2,
 																filter_weights, bwd_gradients_data,
 																this->num_, this->channels_, this->num_output_, this->NUM_GAUSS, NUM_K, this->last_k_optional,
@@ -232,7 +254,7 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 																this->buffer_bwd_.filtered_images,0,
 																this->buffer_bwd_.error_images,0,
 																this->buffer_bwd_.filter_weights,0,
-																this->buffer_bwd_.filter_offsets,0, stream_[0]);
+																this->buffer_bwd_.filter_offsets,0, stream_[0]);*/
 			/*cudaDeviceSynchronize();
 			clock_t end_t = clock();
             std::cout << "fast_gauss_backward_multi_subfeatures in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;*/
@@ -275,8 +297,15 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 			}
 
 			// now we take the blured error data and perform sum over shifted input data with our custom kernel i.e. forward pass
-			caffe::fast_gauss_forward<Dtype>(interm_data,
-											 param_mu1_backprop, param_mu2_backprop, filter_weights, FAST_GAUSS_PARAM_FGS,
+			this->backward_backporp_obj->forward_pass(interm_data,
+													  param_mu1_backprop, param_mu2_backprop, filter_weights, FastGaussForward<Dtype>::FGS, this->kernel_w_, this->kernel_h_,
+													  bottom_error,
+													  buffer_fwd_.filtered_images,
+													  NULL,
+													  NULL,
+													  buffer_fwd_.filter_offsets_and_weights, stream_[0]);
+			/*caffe::fast_gauss_forward<Dtype>(interm_data,
+											 param_mu1_backprop, param_mu2_backprop, filter_weights, PARAM_FORMAT_FGS,
                                              bottom_error,
 											 this->num_, this->num_output_, this->channels_, this->NUM_GAUSS,
 											 this->width_out_, this->height_out_,
@@ -285,7 +314,7 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 											 buffer_fwd_.filtered_images,0,
 											 NULL,0,
 											 NULL,0,
-											 buffer_fwd_.filter_offsets_and_weights, stream_[0]);
+											 buffer_fwd_.filter_offsets_and_weights, stream_[0]);*/
 
 		}
 	}

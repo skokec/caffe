@@ -2118,7 +2118,7 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussBackwardMultiSubfeatures) {
 
     const int N = 128;
     const int F = 32;
-    const int S = 32;
+    const int S = 16;
     const int G = 2;
     const int W = 16;
     const int H = 32;

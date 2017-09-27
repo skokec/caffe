@@ -2313,7 +2313,7 @@ namespace caffe {
     private:
         enum {
             // values from main block indexing sizes
-                    NUM_K = BlockIndexingT::NUM_K,
+            NUM_K = BlockIndexingT::NUM_K,
             BATCH_PIXELS_X = BlockIndexingT::BATCH_PIXELS_SIZE_X,
             BATCH_K = BlockIndexingT::BATCH_K_SIZE,
             NEW_WIDTH = BlockIndexingT::IMG_WIDTH,
@@ -2321,10 +2321,10 @@ namespace caffe {
             BORDER_SIZE = BlockIndexingT::MAX_OFFSET,
 
             // values specific for this kernel
-                    CUDA_THREADS = 256,
+            CUDA_THREADS = 256,
 
             // TILE_DIM_X * TILE_DIM_Y * TILE_DIM_IMAGE gets us to 512 of shared data per block (i.e. 2 kB)
-                    TILE_DIM_X = CUDA_THREADS/8,
+            TILE_DIM_X = CUDA_THREADS/8,
             TILE_DIM_Y = NUM_K,
             TILE_DIM_IMAGE = BlockIndexingT::BATCH_IMAGES >= 4 ? 4 : 1	//
         };
@@ -2492,7 +2492,7 @@ namespace caffe {
     class FastBackwardInputWeightAndOffsets {
         enum {
             // values from main block indexing sizes
-                    BATCH_FEATURES_SIZE = BlockIndexingT::BATCH_FEATURES_SIZE,
+            BATCH_FEATURES_SIZE = BlockIndexingT::BATCH_FEATURES_SIZE,
             NUM_BATCH_FEATURES =  BlockIndexingT::BATCH_COMPUTE_FEATURES_SIZE >= 4 ? 4 :
                                   (BlockIndexingT::BATCH_COMPUTE_FEATURES_SIZE >= 2 ? 2 : 1),
 
@@ -2500,7 +2500,7 @@ namespace caffe {
             WEIGHT_BLOCK_MEM_SIZE = BlockIndexingT::BLOCK_SUBFEATURES * BlockIndexingT::BATCH_MEM_SUBFEATURES_SIZE * BlockIndexingT::BATCH_GAUSS_SIZE * BlockIndexingT::PIXELS_INTERPOLATION_Dx*BlockIndexingT::PIXELS_INTERPOLATION_Dy * BATCH_FEATURES_SIZE * BlockIndexingT::BLOCK_FEATURES,
 
             // values specific for this kernel
-                    CUDA_THREADS = 256,
+            CUDA_THREADS = 256,
 
         };
         const int img_width;
@@ -2637,7 +2637,7 @@ namespace caffe {
     };
 
     template<int _IMG_SIZE_W, int _IMG_SIZE_H, int _MAX_OFFSET, int _NUM_K, int _BATCH_K_SIZE, int _WARP_PIXELS_X, int _BATCH_IMAGES, bool _USE_INTERPOLATION, bool _SINGLE_SUBFEATURE>
-    class FastGaussBackwardMultiSubfeaturesCUDA {
+    class FastGaussBackwardCUDA {
         enum {
             // Variable parameters
 
@@ -2743,7 +2743,7 @@ namespace caffe {
         FastBackwardInputError<BlockIndexingPipelineT> error_cuda_prepare;
         FastBackwardInputWeightAndOffsets<BlockIndexingPipelineT> weight_and_offsets_cuda_prepare;
 
-        FastGaussBackwardMultiSubfeaturesCUDA(const FastGaussBackwardMultiSubfeaturesCUDAParam& p) :
+        FastGaussBackwardCUDA(const FastGaussBackward<float>::CUDAParams& p) :
                 img_width(p.img_width), img_height(p.img_height), I(p.I), S(p.S), F(p.F), G(p.G), K(p.K), IN_K(p.IN_K),
 
                 // we will split image into patches of size [IMG_HEIGHT x IMG_WIDTH] so use that as image size, however,
@@ -2759,7 +2759,7 @@ namespace caffe {
                 weight_and_offsets_cuda_prepare(img_width, img_height, I, F, S, G) {
 
             if (NUM_K != K) {
-                printf("Invalid input K %d in FastGaussBackwardMultiSubfeaturesCUDA. Only a value of %d supported.\n", K, NUM_K);
+                printf("Invalid input K %d in FastGaussBackwardCUDA. Only a value of %d supported.\n", K, NUM_K);
                 throw std::exception();
             }
 
@@ -2769,7 +2769,7 @@ namespace caffe {
             numBlocks = block_indexing.getBlocksPerGrid(I * new_img_parts_width * new_img_parts_height, F, S, G, IMG_WIDTH, IMG_HEIGHT);
         }
 
-        void get_allocation_sizes(FastGaussBackwardMultiSubfeaturesCUDAParam& p) {
+        void get_allocation_sizes(FastGaussBackward<float>::CUDAParams& p) {
 
             if (p.alloc_img != NULL) *p.alloc_img = image_cuda_prepare.get_allocation_size();
             if (p.alloc_err != NULL) *p.alloc_err = error_cuda_prepare.get_allocation_size();
@@ -2777,7 +2777,7 @@ namespace caffe {
             if (p.alloc_off != NULL) *p.alloc_off = weight_and_offsets_cuda_prepare.get_offsets_allocation_size();
         }
 
-        void run_kernel(FastGaussBackwardMultiSubfeaturesCUDAParam& p) {
+        void run_kernel(FastGaussBackward<float>::CUDAParams& p) {
 
             CUDA_CHECK(cudaMemset(p.prepared_error_images, 0, error_cuda_prepare.get_allocation_size()));
 

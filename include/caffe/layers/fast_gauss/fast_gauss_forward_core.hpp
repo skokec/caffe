@@ -1822,7 +1822,7 @@ __global__  void
 perpare_weights_and_offsets(const float* filter_weights, const float* filter_offsets_x, const float* filter_offsets_y,
                             float *prepared_filter_weights, int *prepared_filter_offsets, float* prepared_filter_offsets_and_weights,
                             int S, int G, int F, int kernel_w, int kernel_h,
-                            int PARAM_FORMAT) {
+                            const FastGaussForward<float>::PARAM_FORMAT param_format) {
 
     static const int NUM_SM = BlockIndexingT::NUM_SM;
     static const int Bx = BlockIndexingT::Bx;
@@ -1869,10 +1869,10 @@ perpare_weights_and_offsets(const float* filter_weights, const float* filter_off
     int input_f_offset = -1;
 
     int input_index = -1;
-    if (PARAM_FORMAT == FAST_GAUSS_PARAM_SGF) {
+    if (param_format == FastGaussForward<float>::SGF ) {
         input_index = OFFSET(0, s_input_index, g_input_index, f_input_index, 1, S, G, F);//(( s_input_index )*G + g_input_index ) * F + f_input_index ;
         input_f_offset = 1;
-    } else if (PARAM_FORMAT == FAST_GAUSS_PARAM_FGS) {
+    } else if (param_format == FastGaussForward<float>::FGS) {
         input_index = OFFSET(0, f_input_index, g_input_index, s_input_index, 1, F, G, S);
         input_f_offset = G * S;
     }
@@ -2210,14 +2210,14 @@ public:
 
     void create_input(float* prepared_filter_weights, int* prepared_filter_offsets, float* prepared_filter_offsets_and_weights, // OUTPUT
                       const float* filter_weights, const float* filter_offsets_float_x, const float* filter_offsets_float_y, // INPUT
-                      const int kernel_w, const int kernel_h, const int PARAM_FORMAT, cudaStream_t streamId = NULL) {
+                      const int kernel_w, const int kernel_h, const FastGaussForward<float>::PARAM_FORMAT param_format, cudaStream_t streamId = NULL) {
 
         if (NUM_BATCH_FEATURES == 4)
-            perpare_weights_and_offsets<BlockIndexingT, float4, int4><<<numBlocks,threadsPerBlock, 0, streamId>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, prepared_filter_offsets_and_weights, S, G, F, kernel_w, kernel_h, PARAM_FORMAT);
+            perpare_weights_and_offsets<BlockIndexingT, float4, int4><<<numBlocks,threadsPerBlock, 0, streamId>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, prepared_filter_offsets_and_weights, S, G, F, kernel_w, kernel_h, param_format);
         else if (NUM_BATCH_FEATURES == 2)
-            perpare_weights_and_offsets<BlockIndexingT, float2, int2><<<numBlocks,threadsPerBlock, 0, streamId>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, prepared_filter_offsets_and_weights, S, G, F, kernel_w, kernel_h, PARAM_FORMAT);
+            perpare_weights_and_offsets<BlockIndexingT, float2, int2><<<numBlocks,threadsPerBlock, 0, streamId>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, prepared_filter_offsets_and_weights, S, G, F, kernel_w, kernel_h, param_format);
         else
-        perpare_weights_and_offsets<BlockIndexingT, float, int><<<numBlocks,threadsPerBlock, 0, streamId>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, prepared_filter_offsets_and_weights, S, G, F, kernel_w, kernel_h, PARAM_FORMAT);
+        perpare_weights_and_offsets<BlockIndexingT, float, int><<<numBlocks,threadsPerBlock, 0, streamId>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, prepared_filter_offsets_and_weights, S, G, F, kernel_w, kernel_h, param_format);
 
         if (0) {
 
@@ -2406,7 +2406,7 @@ public:
     FastForwardInputImage<BlockIndexingPipelineT> image_cuda_prepare;
     FastForwardInputWeightAndOffsets<BlockIndexingPipelineT> weight_and_offsets_cuda_prepare;
 
-    FastGaussForwardCUDA(const FastGaussForwardCUDAParams& p) :
+    FastGaussForwardCUDA(const FastGaussForward<float>::CUDAParams& p) :
             img_width(p.img_width), img_height(p.img_height), I(p.I), S(p.S), F(p.F), G(p.G),
 
             // we will split image into patches of size [IMG_HEIGHT x IMG_WIDTH] so use that as image size, however,
@@ -2428,14 +2428,14 @@ public:
     }
 
 
-    void get_allocation_sizes(FastGaussForwardCUDAParams& p) {
+    void get_allocation_sizes(FastGaussForward<float>::CUDAParams& p) {
 
         if (p.alloc_img != NULL) *p.alloc_img = image_cuda_prepare.get_allocation_size();
         if (p.alloc_w != NULL) *p.alloc_w = weight_and_offsets_cuda_prepare.get_weights_allocation_size();
         if (p.alloc_off != NULL) *p.alloc_off = weight_and_offsets_cuda_prepare.get_offsets_allocation_size();
     }
 
-    void run_kernel(FastGaussForwardCUDAParams& p) {
+    void run_kernel(FastGaussForward<float>::CUDAParams& p) {
 
         CUDA_CHECK(cudaMemsetAsync(p.output, 0, sizeof(float) * I * F * img_width * img_height, p.streamId));
         CUDA_CHECK(cudaMemsetAsync(p.prepared_filtered_images, 0, image_cuda_prepare.get_allocation_size(), p.streamId));
@@ -2466,7 +2466,7 @@ public:
 
     clock_t start_t = clock();
 #endif
-            weight_and_offsets_cuda_prepare.create_input(p.prepared_filter_weights, p.prepared_filter_offsets, p.prepared_filter_offsets_and_weights, p.filter_weights, p.filter_offsets_float_x, p.filter_offsets_float_y, p.kernel_w, p.kernel_h, p.PARAM_FORMAT, p.streamId);
+            weight_and_offsets_cuda_prepare.create_input(p.prepared_filter_weights, p.prepared_filter_offsets, p.prepared_filter_offsets_and_weights, p.filter_weights, p.filter_offsets_float_x, p.filter_offsets_float_y, p.kernel_w, p.kernel_h, p.param_format, p.streamId);
 #ifdef PROFILE_CUDA
             cudaDeviceSynchronize();
 
@@ -2515,7 +2515,7 @@ for (int jj = 0; jj < 1; ++jj) {
 			PARAMS.alloc_off != NULL) { 	\
 			_kernel_class.get_allocation_sizes(PARAMS); \
 		} else { \
-			_kernel_class.run_kernel(PARAMS);\
+			_kernel_class.run_kernel(PARAMS); \
 		} \
 	}
 

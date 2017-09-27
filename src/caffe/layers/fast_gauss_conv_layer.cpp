@@ -380,8 +380,14 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
     }
 
 
+    forward_obj.reset(new caffe::FastGaussForward<Dtype>(this->width_out_, this->height_out_, this->num_, this->channels_, this->num_output_, this->NUM_GAUSS, this->use_interpolation_));
+    forward_obj->get_allocation_sizes(this->kernel_w_, this->kernel_h_,
+                                      &buffer_fwd_.filtered_images_sizes_,
+                                      &buffer_fwd_.filter_weights_sizes_,
+                                      &buffer_fwd_.filter_offsets_sizes_);
+
     // check how much memory do we need for our custom kernels
-    caffe::fast_gauss_forward<Dtype>(NULL, NULL, NULL, NULL, FAST_GAUSS_PARAM_SGF, NULL,
+    /*caffe::fast_gauss_forward<Dtype>(NULL, NULL, NULL, NULL, PARAM_FORMAT_SGF, NULL,
                                      this->num_, this->channels_, this->num_output_, this->NUM_GAUSS,
                                      this->width_out_, this->height_out_,
                                      this->kernel_w_, this->kernel_h_,
@@ -389,10 +395,19 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
                                      NULL,&buffer_fwd_.filtered_images_sizes_,
                                      NULL,&buffer_fwd_.filter_weights_sizes_,
                                      NULL,&buffer_fwd_.filter_offsets_sizes_,
-                                     NULL);
+                                     NULL);*/
 
+    backward_grad_obj.reset(new caffe::FastGaussBackward<Dtype>(this->width_out_, this->height_out_, this->num_, this->channels_, this->num_output_, this->NUM_GAUSS, this->NUM_K, this->last_k_optional, this->use_interpolation_));
+
+    // WARNING: if this->kernel_w_ or this->kernel_h_ changes then memory will not be allocated properly so we should use here
+    //          maximum kernel_w_ and kernel_h_ allowed
+    backward_grad_obj->get_allocation_sizes(this->kernel_w_, this->kernel_h_,
+                                       &buffer_bwd_.filtered_images_sizes_,
+                                       &buffer_bwd_.error_image_sizes_,
+                                       &buffer_bwd_.filter_weights_sizes_,
+                                       &buffer_bwd_.filter_offsets_sizes_);
     // for gradient accumulation
-    caffe::fast_gauss_backward_multi_subfeatures<Dtype>(NULL, NULL, NULL, NULL, NULL, NULL,
+    /*caffe::fast_gauss_backward_multi_subfeatures<Dtype>(NULL, NULL, NULL, NULL, NULL, NULL,
                                                         this->num_, this->channels_, this->num_output_, this->NUM_GAUSS, NUM_K, this->last_k_optional,
                                                         this->width_out_, this->height_out_,
                                                         this->kernel_w_, this->kernel_h_,
@@ -400,13 +415,19 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
                                                         NULL,&buffer_bwd_.filtered_images_sizes_,
                                                         NULL,&buffer_bwd_.error_image_sizes_,
                                                         NULL,&buffer_bwd_.filter_weights_sizes_,
-                                                        NULL,&buffer_bwd_.filter_offsets_sizes_);
+                                                        NULL,&buffer_bwd_.filter_offsets_sizes_);*/
 
     // for error back-propagation
     // we use the same buffer as for forward pass but can be shared, just ensure buffer can accomodate both sizes
     size_t filtered_error_sizes_, filter_error_weights_sizes_, filter_error_offsets_sizes_;
 
-    caffe::fast_gauss_forward<Dtype>(NULL, NULL, NULL, NULL, FAST_GAUSS_PARAM_FGS, NULL,
+    backward_backporp_obj.reset(new caffe::FastGaussForward<Dtype>(this->width_out_, this->height_out_, this->num_, this->num_output_, this->channels_, this->NUM_GAUSS, this->use_interpolation_));
+    backward_backporp_obj->get_allocation_sizes(this->kernel_w_, this->kernel_h_,
+                                             &filtered_error_sizes_,
+                                             &filter_error_weights_sizes_,
+                                             &filter_error_offsets_sizes_);
+
+    /*caffe::fast_gauss_forward<Dtype>(NULL, NULL, NULL, NULL, PARAM_FORMAT_FGS, NULL,
                                      this->num_, this->num_output_, this->channels_, this->NUM_GAUSS,
                                      this->width_out_, this->height_out_,
                                      this->kernel_w_, this->kernel_h_,
@@ -414,7 +435,7 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
                                      NULL,&filtered_error_sizes_,
                                      NULL,&filter_error_weights_sizes_,
                                      NULL,&filter_error_offsets_sizes_,
-                                     NULL);
+                                     NULL);*/
 
     // this ensures that buffers will accomodate both fast_gauss_forward functions one used for forward pass and the second one used of error back-propagation
     buffer_fwd_.filtered_images_sizes_ = std::max(buffer_fwd_.filtered_images_sizes_, filtered_error_sizes_);
@@ -713,7 +734,7 @@ void offset_and_sum_opencv(const Dtype* input_data,
                     const int num_, const int conv_in_channels_, const int NUM_GAUSS, const int conv_out_channels_,
                     const int width_, const int height_,
                     const int width_out_, const int height_out_, const int kernel_width, const int kernel_height,
-                   const int INPUT_FORMAT = FAST_GAUSS_PARAM_SGF) {
+                   const FastGaussForward<float>::PARAM_FORMAT INPUT_FORMAT = FastGaussForward<float>::SGF) {
 
     // perform offset and sum over individual outputs
 #define OFFSET(l,k,j,i, num_l, num_k, num_j, num_i) ((( (l)*(num_k) + (k)) * (num_j) + (j))*(num_i) + (i) )
@@ -744,9 +765,9 @@ void offset_and_sum_opencv(const Dtype* input_data,
 
                         for (int g = 0; g < NUM_GAUSS; ++g) {
                             int param_offset = -1;
-                            if (INPUT_FORMAT == FAST_GAUSS_PARAM_SGF)
+                            if (INPUT_FORMAT == FastGaussForward<float>::SGF)
                                 param_offset = OFFSET(0, s,g,f, 1, conv_in_channels_, NUM_GAUSS, conv_out_channels_);
-                            else if (INPUT_FORMAT == FAST_GAUSS_PARAM_FGS)
+                            else if (INPUT_FORMAT == FastGaussForward<float>::FGS)
                                 param_offset = OFFSET(0, f,g,s, 1, conv_out_channels_, NUM_GAUSS, conv_in_channels_);
 
                             float w = filter_weights[param_offset];
@@ -892,7 +913,7 @@ void offset_and_dot_opencv(const Dtype* input_data, const Dtype* error_data,
                            const int num_, const int conv_in_channels_, const int NUM_GAUSS, const int conv_out_channels_,
                            const int width_, const int height_,
                            const int width_out_, const int height_out_, const int kernel_width, const int kernel_height,
-                           const bool ignore_edge_gradients, const int INPUT_FORMAT = FAST_GAUSS_PARAM_SGF) {
+                           const bool ignore_edge_gradients, const FastGaussForward<float>::PARAM_FORMAT INPUT_FORMAT = FastGaussForward<float>::SGF) {
 
     // perform offset and sum over individual outputs
 #define OFFSET(l,k,j,i, num_l, num_k, num_j, num_i) ((( (l)*(num_k) + (k)) * (num_j) + (j))*(num_i) + (i) )
@@ -950,9 +971,9 @@ void offset_and_dot_opencv(const Dtype* input_data, const Dtype* error_data,
                             int param_output_offset = OFFSET(0, s,g,f, 1, conv_in_channels_, NUM_GAUSS, conv_out_channels_);
 
                             int param_offset = -1;
-                            if (INPUT_FORMAT == FAST_GAUSS_PARAM_SGF)
+                            if (INPUT_FORMAT == FastGaussForward<float>::SGF)
                                 param_offset = OFFSET(0, s,g,f, 1, conv_in_channels_, NUM_GAUSS, conv_out_channels_);
-                            else if (INPUT_FORMAT == FAST_GAUSS_PARAM_FGS)
+                            else if (INPUT_FORMAT == FastGaussForward<float>::FGS)
                                 param_offset = OFFSET(0, f,g,s, 1, conv_out_channels_, NUM_GAUSS, conv_in_channels_);
 
                             float w = filter_weights[param_offset];
@@ -1114,7 +1135,7 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>&
                                   bottom_error,
                                   this->num_, this->num_output_, this->NUM_GAUSS, this->channels_,
                                   this->width_out_, this->height_out_,
-                                  this->width_, this->height_, this->kernel_w_, this->kernel_h_, FAST_GAUSS_PARAM_FGS);
+                                  this->width_, this->height_, this->kernel_w_, this->kernel_h_, FastGaussForward<float>::FGS);
 
 
         }

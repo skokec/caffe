@@ -7,6 +7,8 @@
 
 //#include "caffe/vision_layers.hpp"
 #include "caffe/layers/base_conv_layer.hpp"
+#include "caffe/layers/fast_gauss/fast_gauss_backward.hpp"
+#include "caffe/layers/fast_gauss/fast_gauss_forward.hpp"
 
 namespace caffe {
 
@@ -234,6 +236,8 @@ class GaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
 };
 
 #ifdef USE_CUDNN
+
+
 template <typename Dtype>
 class FastAproxGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
  public:
@@ -308,6 +312,9 @@ class FastAproxGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
 	vector<cudnnConvolutionDescriptor_t> bwd_conv_data_descs_;
 	vector<cudnnConvolutionDescriptor_t> bwd_conv_error_descs_;
 
+	shared_ptr<caffe::FastGaussBackward<Dtype> > backward_grad_obj;
+	shared_ptr<caffe::FastGaussForward<Dtype> > backward_backporp_obj;
+	shared_ptr<caffe::FastGaussForward<Dtype> > forward_obj;
 
 	size_t *workspace_fwd_sizes_;
 	size_t *workspace_bwd_data_sizes_;
