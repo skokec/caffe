@@ -6,7 +6,7 @@
 
 #include "caffe/util/math_functions_extra.hpp"
 #include "caffe/util/custom_cub.cuh"
-#include "caffe/util/fast_gauss_forward.hpp"
+#include "caffe/layers/fast_gauss/fast_gauss_forward.hpp"
 
 namespace caffe {
 

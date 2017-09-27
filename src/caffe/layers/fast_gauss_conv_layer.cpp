@@ -6,8 +6,8 @@
 
 #include "caffe/util/math_functions_extra.hpp"
 
-#include "caffe/util/fast_gauss_forward.hpp"
-#include "caffe/util/fast_gauss_backward.hpp"
+#include "caffe/layers/fast_gauss/fast_gauss_forward.hpp"
+#include "caffe/layers/fast_gauss/fast_gauss_backward.hpp"
 
 #include <opencv2/opencv.hpp>
 #include <opencv2/gpu/gpu.hpp>

@@ -7,8 +7,8 @@
 #include "caffe/util/math_functions_extra.hpp"
 #include "caffe/util/custom_cub.cuh"
 
-#include "caffe/util/fast_gauss_forward.hpp"
-#include "caffe/util/fast_gauss_backward.hpp"
+#include "caffe/layers/fast_gauss/fast_gauss_forward.hpp"
+#include "caffe/layers/fast_gauss/fast_gauss_backward.hpp"
 
 namespace caffe {
 
@@ -64,6 +64,8 @@ void FastAproxGaussianConvLayer<Dtype>::Forward_gpu(
 		cudaDeviceSynchronize();
 		clock_t start_t = clock();
 		*/
+//#ifdef USE_ARRAYFIRE_CUDA
+//#else
 
 		// first perform convolutions with gaussian filter (i.e. gaussian blur)
 		// we use cudnn forward implementation by casting
@@ -79,6 +81,7 @@ void FastAproxGaussianConvLayer<Dtype>::Forward_gpu(
 											fwd_algo_[i], workspace[0], workspace_fwd_sizes_[i],
 											cudnn::dataType<Dtype>::zero,
 											fwd_interm_descs_[i], interm_data));
+//#endif
 		//interm_data = (Dtype*)bottom_data;
 		/*
         //cudaMemset(buffer_fwd_.filter_offsets_and_weights, 0, buffer_fwd_.filter_weights_sizes_ + buffer_fwd_.filter_offsets_sizes_);
@@ -199,6 +202,8 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 
 		// Gradient w.r.t w,mu1,mu2 and sigma
 		if (this->param_propagate_down_[0]) {
+//#ifdef USE_ARRAYFIRE_CUDA
+//#else
 			// perform pre-filtering for each parameter i.e. with four different derivative filters
 			CUDNN_CHECK(cudnnConvolutionForward(handle_[0],
 												cudnn::dataType<Dtype>::one,
@@ -208,7 +213,7 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 												bwd_data_algo_[i], workspace[0], workspace_bwd_data_sizes_[i],
 												cudnn::dataType<Dtype>::zero,
 												bwd_interm_data_descs_[i], interm_data));
-
+//#endif
 			// TODO: if it is faster we should add zeroing to input prepare functions !!
 			CUDA_CHECK(cudaMemsetAsync(this->buffer_bwd_.filtered_images,0,this->buffer_bwd_.filtered_images_sizes_, stream_[0]));
 			CUDA_CHECK(cudaMemsetAsync(this->buffer_bwd_.error_images,0,this->buffer_bwd_.error_image_sizes_, stream_[0]));
@@ -237,6 +242,8 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 
 		// finally perform back-propagation of the error values
 		if (propagate_down[i]) {
+//#ifdef USE_ARRAYFIRE_CUDA
+//#else
 
 			// we need to do pre-filtering of the error values
 			CUDNN_CHECK(cudnnConvolutionForward(handle_[0],
@@ -247,7 +254,7 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 												bwd_error_algo_[i], workspace[0], workspace_bwd_error_sizes_[i],
 												cudnn::dataType<Dtype>::zero,
 												bwd_interm_error_descs_[i], interm_data));
-
+//#endif
 			// then use our custom kernel for forwarding, however we need to transpose kernels, which in our case means
 			// that we need to rotate mu1,mu2 locations
 
