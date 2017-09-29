@@ -1,18 +1,13 @@
-#ifdef USE_CUDNN
 #include <vector>
 #include <memory>
-#include <caffe/layers/gauss_conv_layer.hpp>
 
 #include "caffe/layers/gauss_conv_layer.hpp"
 
 #include "caffe/util/math_functions_extra.hpp"
-#include "caffe/util/custom_cub.cuh"
 #include "caffe/util/convolve.hpp"
 
 #include "caffe/layers/fast_gauss/fast_gauss_forward.hpp"
 #include "caffe/layers/fast_gauss/fast_gauss_backward.hpp"
-
-
 
 
 namespace caffe {
@@ -103,6 +98,7 @@ void FastAproxGaussianConvLayer<Dtype>::Forward_gpu(
             CUDA_CHECK(cudaStreamWaitEvent(stream_[0], memset_top, 0));
             CUDA_CHECK(cudaStreamWaitEvent(stream_[0], memset_filter, 0));
 		} else {
+#ifdef USE_CUDNN
 			// first perform convolutions with gaussian filter (i.e. gaussian blur)
 			// we use cudnn forward implementation by casting
 			//  - input into [N*S x 1 x HxW]
@@ -117,7 +113,10 @@ void FastAproxGaussianConvLayer<Dtype>::Forward_gpu(
 												fwd_algo_[i], workspace[0], workspace_fwd_sizes_[i],
 												cudnn::dataType<Dtype>::zero,
 												fwd_interm_descs_[i], interm_data));
-
+#else
+            printf("Requested CuDNN in FastAproxGaussianConvLayer, nut not compiled with CuDNN support !!");
+			throw std::exception();
+#endif
             // if using CuDNN then use default stream to zero buffer since that buffer is used by cudnnConvolutionForward and
             // we need to wait for it to finish
             caffe_gpu_set<Dtype>(this->num_output_* this->num_* this->height_out_* this->width_out_, (Dtype)0, top_data);
@@ -133,11 +132,6 @@ void FastAproxGaussianConvLayer<Dtype>::Forward_gpu(
 										NULL,
 										buffer_fwd_.filter_offsets_and_weights, stream_[0]);
 
-        /*
-        cudaDeviceSynchronize();
-        end_t = clock();
-        std::cout << "fast_gauss_forward in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
-         */
 
 		// add bias if needed
 		if (this->bias_term_) {
@@ -153,8 +147,6 @@ void FastAproxGaussianConvLayer<Dtype>::Forward_gpu(
 		// NOLINT_NEXT_LINE(whitespace/operators)
 		//sync_fast_gauss_conv_groups<<<1, 1>>>();
 	}
-	//cudaDeviceSynchronize();
-
 
 }
 
@@ -265,6 +257,7 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
                 CUDA_CHECK(cudaStreamWaitEvent(stream_[0], memset_error, 0));
 
 			} else {
+#ifdef USE_CUDNN
 				// perform pre-filtering for each parameter i.e. with four different derivative filters
 				CUDNN_CHECK(cudnnConvolutionForward(handle_[0],
 													cudnn::dataType<Dtype>::one,
@@ -275,6 +268,10 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 													cudnn::dataType<Dtype>::zero,
 													bwd_interm_data_descs_[i], interm_data));
 
+#else
+				printf("Requested CuDNN in FastAproxGaussianConvLayer, nut not compiled with CuDNN support !!");
+				throw std::exception();
+#endif
                 // if using CuDNN then use default stream to zero buffer since that buffer is used by cudnnConvolutionForward and
                 // we need to wait for it to finish
                 caffe_gpu_set(this->buffer_bwd_.filtered_images_sizes_/sizeof(Dtype), (Dtype)0, this->buffer_bwd_.filtered_images);
@@ -326,6 +323,7 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
                 CUDA_CHECK(cudaStreamWaitEvent(stream_[0], memset_filter, 0));
 
 			} else {
+#ifdef USE_CUDNN
 				// we need to do pre-filtering of the error values
 				CUDNN_CHECK(cudnnConvolutionForward(handle_[0],
 													cudnn::dataType<Dtype>::one,
@@ -335,7 +333,10 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 													bwd_error_algo_[i], workspace[0], workspace_bwd_error_sizes_[i],
 													cudnn::dataType<Dtype>::zero,
 													bwd_interm_error_descs_[i], interm_data));
-
+#else
+				printf("Requested CuDNN in FastAproxGaussianConvLayer, nut not compiled with CuDNN support !!");
+			throw std::exception();
+#endif
                 // if using CuDNN then use default stream to zero buffer since that buffer is used by cudnnConvolutionForward and
                 // we need to wait for it to finish
                 caffe_gpu_set<Dtype>(this->channels_* this->num_* this->height_* this->width_, (Dtype)0, bottom_error);
@@ -393,4 +394,3 @@ INSTANTIATE_LAYER_GPU_FUNCS(FastAproxGaussianConvLayer);
 
 
 }  // namespace caffe
-#endif

@@ -175,7 +175,7 @@ class BaseGaussianConvLayer : public BaseConvolutionLayer<Dtype> {
 template <typename Dtype>
 class GaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
  public:
-  
+
   explicit GaussianConvLayer(const LayerParameter& param)
       : BaseGaussianConvLayer<Dtype>(param),  A(0), B(0), C(0), d_A(0), d_B(0), d_C(0) {}
 
@@ -184,14 +184,14 @@ class GaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
   virtual inline const char* type() const { return "GaussianConv"; }
   virtual void LayerSetUp(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top);
   virtual void Reshape(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top);
-  
+
  //protected:
   virtual void Forward_cpu(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top);
   virtual void Forward_gpu(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top);
   virtual void Backward_cpu(const vector<Blob<Dtype>*>& top, const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
   virtual void Backward_gpu(const vector<Blob<Dtype>*>& top,const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
 
-  void compute_parameter_deriv(int num_iter,const Blob<Dtype>& col_activations_buffer, const Blob<Dtype>& deriv_kernels_buffer, 
+  void compute_parameter_deriv(int num_iter,const Blob<Dtype>& col_activations_buffer, const Blob<Dtype>& deriv_kernels_buffer,
 				//const Blob<Dtype>& top_error_buffer, Blob<Dtype>& param_output_buffer, int param_output_offset);
 		  	  	  Blob<Dtype>& top_error_buffer, Blob<Dtype>& param_output_buffer, int param_output_offset);
 
@@ -235,9 +235,33 @@ class GaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
 
 };
 
-#ifdef USE_CUDNN
-
-
+/**
+ * FastAproxGaussianConvLayer
+ *
+ * Implementation of Deep Compositional Layer (GaussianConvLayer) that introduces two constraints which allows for 3-5
+ * times faster computation of inference and learning. This introduces a slight loss of information and is only an
+ * aproximation of the original GaussianConvLayer.
+ *
+ * FastAproxGaussianConvLayer implements two constraints on composition/gaussian parameters:
+ *  - single sigma/variance for the whole layer (shared accross all features)
+ *  - internal discretization of mu1/mu2 position values *
+ * Due to discretization of mu1/mu2 values this implementation handles sub-pixel offsets using bilinear interpolation
+ * of input channels.
+ *
+ * Due to cuda implementation this method does not compute accuretely on bottom/right border (1px). Thise values
+ * are used in gradient accumulation unless ignore_edge_gradients_ is set to true. Border values are back-propagated
+ * nevertheless.
+ *
+ *
+ * TODO:
+ *  - add sharing of GPU memory accross layers that are computed in sequence
+ *  - add stride>1 (currently allows only stride=1)
+ *  - improve cudaStream for forward and backward pass
+ *  - combine convolve and input preparation forward and backward pass (might shave 5-10% off the whole computation time) *
+ *
+ *
+ * @tparam Dtype
+ */
 template <typename Dtype>
 class FastAproxGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
  public:
@@ -288,10 +312,12 @@ class FastAproxGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
 
 
     bool handles_setup_;
-	cudnnHandle_t* handle_;
 	cudaStream_t*  stream_;
 
 	cudaStream_t* paralel_streams; // parallel streams for custom back-propagation kernels
+
+#ifdef USE_CUDNN
+	cudnnHandle_t* handle_;
 
 	// algos and descriptors for forward convolution
 	cudnnConvolutionFwdAlgo_t *fwd_algo_;
@@ -301,7 +327,6 @@ class FastAproxGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
 	cudnnTensorDescriptor_t    bias_desc_;
 
 	vector<cudnnConvolutionDescriptor_t> fwd_conv_descs_;
-	int bottom_offset_, top_offset_, bias_offset_;
 
 	// algos and descriptors for backward convolution
 	cudnnConvolutionFwdAlgo_t *bwd_data_algo_, *bwd_error_algo_;
@@ -311,6 +336,8 @@ class FastAproxGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
 
 	vector<cudnnConvolutionDescriptor_t> bwd_conv_data_descs_;
 	vector<cudnnConvolutionDescriptor_t> bwd_conv_error_descs_;
+#endif
+	int bottom_offset_, top_offset_, bias_offset_;
 
 	shared_ptr<caffe::FastGaussBackward<Dtype> > backward_grad_obj;
 	shared_ptr<caffe::FastGaussForward<Dtype> > backward_backporp_obj;
@@ -381,7 +408,7 @@ class FastAproxGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
 
 };
 
-
+#ifdef USE_CUDNN
 template <typename Dtype>
 class CuDNNGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
  public:

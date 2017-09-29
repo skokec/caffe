@@ -1,4 +1,3 @@
-#ifdef USE_CUDNN
 #include <algorithm>
 #include <vector>
 
@@ -12,11 +11,6 @@
 #include <opencv2/opencv.hpp>
 #include <opencv2/gpu/gpu.hpp>
 
-#ifdef USE_ARRAYFIRE_CUDA
-#include <arrayfire.h>
-#include <af/cuda.h>
-#endif
-
 namespace caffe {
 
 template <typename Dtype>
@@ -25,38 +19,30 @@ void FastAproxGaussianConvLayer<Dtype>::LayerSetUp(
 
     BaseGaussianConvLayer<Dtype>::LayerSetUp(bottom, top);
 
-    CHECK_EQ(1, this->group_)
-        << "CuDNNGaussianConvLayer does not support group parameter at the moment";
+    CHECK_EQ(1, this->group_) << "CuDNNGaussianConvLayer does not support group parameter at the moment";
 
-    // Initialize CUDA streams and cuDNN.
+
+    // Initialize CUDA streams
     stream_         = new cudaStream_t[this->group_];
-    handle_         = new cudnnHandle_t[this->group_ ];
-
-
-    // Initialize algorithm arrays
-    fwd_algo_       = new cudnnConvolutionFwdAlgo_t[bottom.size()];
-    bwd_data_algo_  = new cudnnConvolutionFwdAlgo_t[bottom.size()];
-    bwd_error_algo_ = new cudnnConvolutionFwdAlgo_t[bottom.size()];
-
-    // initialize size arrays
-    workspace_fwd_sizes_ = new size_t[bottom.size()];
-    workspace_bwd_data_sizes_ = new size_t[bottom.size()];
-    workspace_bwd_error_sizes_ = new size_t[bottom.size()];
 
     // workspace data
     workspaceSizeInBytes = 0;
     workspaceData = NULL;
     workspace = new void*[this->group_ ];
 
+    // initialize size arrays
+    workspace_fwd_sizes_ = new size_t[bottom.size()];
+    workspace_bwd_data_sizes_ = new size_t[bottom.size()];
+    workspace_bwd_error_sizes_ = new size_t[bottom.size()];
+
+    for (int g = 0; g < this->group_ ; g++) {
+        workspace[g] = NULL;
+    }
+
     for (size_t i = 0; i < bottom.size(); ++i) {
-        // initialize all to default algorithms
-        fwd_algo_[i] = (cudnnConvolutionFwdAlgo_t)0;
-        bwd_data_algo_[i] = (cudnnConvolutionFwdAlgo_t)0;
-        bwd_error_algo_[i] = (cudnnConvolutionFwdAlgo_t)0;
         // default algorithms don't require workspace
         workspace_fwd_sizes_[i] = 0;
         workspace_bwd_data_sizes_[i] = 0;
-
     }
 
     buffer_fwd_.filtered_images_sizes_ = 0;
@@ -67,15 +53,6 @@ void FastAproxGaussianConvLayer<Dtype>::LayerSetUp(
     buffer_bwd_.error_image_sizes_= 0;
     buffer_bwd_.filter_weights_sizes_ = 0;
     buffer_bwd_.filter_offsets_sizes_ = 0;
-
-    for (int g = 0; g < this->group_ ; g++) {
-        CUDA_CHECK(cudaStreamCreate(&stream_[g]));
-        CUDNN_CHECK(cudnnCreate(&handle_[g]));
-
-        CUDNN_CHECK (cudnnSetStream(handle_[g], stream_[g]));
-
-        workspace[g] = NULL;
-    }
 
     buffer_fwd_.filter_offsets = NULL;
     buffer_fwd_.filter_weights = NULL;
@@ -107,13 +84,6 @@ void FastAproxGaussianConvLayer<Dtype>::LayerSetUp(
     prefilter_stride_h_ = 1;
     prefilter_stride_w_ = 1;
 
-    cudnn::createFilterDesc<Dtype>(&fwd_prefilter_kernel_desc_,
-                                   1, 1, prefilter_h_, prefilter_w_);
-
-    cudnn::createFilterDesc<Dtype>(&bwd_prefilter_kernel_desc_,
-                                   NUM_K, 1, prefilter_h_, prefilter_w_);
-
-
     // create buffers used to generate kernels (i.e. we need only one kernel
     prefilter_param_w_.Reshape(1,1,1,1);
     prefilter_param_mu1_.Reshape(1,1,1,1);
@@ -128,6 +98,43 @@ void FastAproxGaussianConvLayer<Dtype>::LayerSetUp(
 
     this->use_interpolation_ = true;
 
+    paralel_streams = new cudaStream_t[4];
+    for (int g = 0; g < 4; ++g) {
+        cudaStreamCreate(&paralel_streams[g]);
+    }
+
+    this->gmm_use_cudnn_in_fast_aproximation_ = this->layer_param_.convolution_param().gmm_use_cudnn_in_fast_aproximation();
+
+#ifdef USE_CUDNN
+
+    // Initialize CUDA streams and cuDNN.
+    handle_         = new cudnnHandle_t[this->group_ ];
+
+    // Initialize algorithm arrays
+    fwd_algo_       = new cudnnConvolutionFwdAlgo_t[bottom.size()];
+    bwd_data_algo_  = new cudnnConvolutionFwdAlgo_t[bottom.size()];
+    bwd_error_algo_ = new cudnnConvolutionFwdAlgo_t[bottom.size()];
+
+
+    for (size_t i = 0; i < bottom.size(); ++i) {
+        // initialize all to default algorithms
+        fwd_algo_[i] = (cudnnConvolutionFwdAlgo_t)0;
+        bwd_data_algo_[i] = (cudnnConvolutionFwdAlgo_t)0;
+        bwd_error_algo_[i] = (cudnnConvolutionFwdAlgo_t)0;
+    }
+
+    for (int g = 0; g < this->group_ ; g++) {
+        CUDA_CHECK(cudaStreamCreate(&stream_[g]));
+        CUDNN_CHECK(cudnnCreate(&handle_[g]));
+
+        CUDNN_CHECK (cudnnSetStream(handle_[g], stream_[g]));
+    }
+
+    cudnn::createFilterDesc<Dtype>(&fwd_prefilter_kernel_desc_,
+                                   1, 1, prefilter_h_, prefilter_w_);
+
+    cudnn::createFilterDesc<Dtype>(&bwd_prefilter_kernel_desc_,
+                                   NUM_K, 1, prefilter_h_, prefilter_w_);
 
     top_bias_descs_.clear();
     top_descs_.clear();
@@ -175,8 +182,6 @@ void FastAproxGaussianConvLayer<Dtype>::LayerSetUp(
             cudnn::createTensor4dDesc<Dtype>(&interm_error_desc);
             bwd_interm_error_descs_.push_back(interm_error_desc);
 
-
-
             cudnnConvolutionDescriptor_t conv_data_desc;
             cudnn::createConvolutionDesc<Dtype>(&conv_data_desc);
             bwd_conv_data_descs_.push_back(conv_data_desc);
@@ -184,27 +189,17 @@ void FastAproxGaussianConvLayer<Dtype>::LayerSetUp(
             cudnnConvolutionDescriptor_t conv_error_desc;
             cudnn::createConvolutionDesc<Dtype>(&conv_error_desc);
             bwd_conv_error_descs_.push_back(conv_error_desc);
-
-
         }
-
     }
-
 
     // Tensor descriptor for bias.
     if (this->bias_term_) {
         cudnn::createTensor4dDesc<Dtype>(&bias_desc_);
     }
 
+#endif
+
     handles_setup_ = true;
-
-    paralel_streams = new cudaStream_t[4];
-    for (int g = 0; g < 4; ++g) {
-        cudaStreamCreate(&paralel_streams[g]);
-    }
-
-    this->gmm_use_cudnn_in_fast_aproximation_ = this->layer_param_.convolution_param().gmm_use_cudnn_in_fast_aproximation();
-
 }
 
 template <typename Dtype>
@@ -219,6 +214,9 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
     }
 
     BaseGaussianConvLayer<Dtype>::Reshape(bottom, top);
+
+    CHECK_EQ(1, this->stride_h_) << "CuDNNGaussianConvLayer does not support stride>1 parameter at the moment";
+    CHECK_EQ(1, this->stride_w_) << "CuDNNGaussianConvLayer does not support stride>1 parameter at the moment";
 
     CHECK_EQ(2, this->num_spatial_axes_)
         << "CuDNNGaussianConvLayer input must have 2 spatial axes "
@@ -278,6 +276,56 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
     // temporary buffer used during the back-propagation of the error where we rotate mu1 and mu2
     this->tmp_param_buffer_.Reshape(2, this->conv_in_channels_, this->NUM_GAUSS, this->conv_out_channels_);
 
+
+    forward_obj.reset(new caffe::FastGaussForward<Dtype>(this->width_out_, this->height_out_, this->num_, this->channels_, this->num_output_, this->NUM_GAUSS, this->use_interpolation_));
+    forward_obj->get_allocation_sizes(this->kernel_w_, this->kernel_h_,
+                                      &buffer_fwd_.filtered_images_sizes_,
+                                      &buffer_fwd_.filter_weights_sizes_,
+                                      &buffer_fwd_.filter_offsets_sizes_);
+
+    // check how much memory do we need for our custom kernels
+    backward_grad_obj.reset(new caffe::FastGaussBackward<Dtype>(this->width_out_, this->height_out_, this->num_, this->channels_, this->num_output_, this->NUM_GAUSS, this->NUM_K, this->last_k_optional, this->use_interpolation_));
+
+    // WARNING: if this->kernel_w_ or this->kernel_h_ changes then memory will not be allocated properly so we should use here
+    //          maximum kernel_w_ and kernel_h_ allowed
+    backward_grad_obj->get_allocation_sizes(this->kernel_w_, this->kernel_h_,
+                                            &buffer_bwd_.filtered_images_sizes_,
+                                            &buffer_bwd_.error_image_sizes_,
+                                            &buffer_bwd_.filter_weights_sizes_,
+                                            &buffer_bwd_.filter_offsets_sizes_);
+    // for gradient accumulation
+
+    // for error back-propagation
+    // we use the same buffer as for forward pass but can be shared, just ensure buffer can accomodate both sizes
+    size_t filtered_error_sizes_, filter_error_weights_sizes_, filter_error_offsets_sizes_;
+
+    backward_backporp_obj.reset(new caffe::FastGaussForward<Dtype>(this->width_out_, this->height_out_, this->num_, this->num_output_, this->channels_, this->NUM_GAUSS, this->use_interpolation_));
+    backward_backporp_obj->get_allocation_sizes(this->kernel_w_, this->kernel_h_,
+                                                &filtered_error_sizes_,
+                                                &filter_error_weights_sizes_,
+                                                &filter_error_offsets_sizes_);
+
+    // this ensures that buffers will accomodate both fast_gauss_forward functions one used for forward pass and the second one used of error back-propagation
+    buffer_fwd_.filtered_images_sizes_ = std::max(buffer_fwd_.filtered_images_sizes_, filtered_error_sizes_);
+    buffer_fwd_.filter_weights_sizes_ = std::max(buffer_fwd_.filter_weights_sizes_, filter_error_weights_sizes_);
+    buffer_fwd_.filter_offsets_sizes_ = std::max(buffer_fwd_.filter_offsets_sizes_, filter_error_offsets_sizes_);
+
+    // reduce over all workspace sizes to get a maximum to allocate / reallocate
+    size_t total_workspace_fwd = 0;
+    size_t total_workspace_bwd_data = 0;
+    size_t total_workspace_bwd_error = 0;
+
+    total_workspace_fwd         = std::max(total_workspace_fwd,
+                                           buffer_fwd_.filtered_images_sizes_ +
+                                           buffer_fwd_.filter_weights_sizes_ +
+                                           buffer_fwd_.filter_offsets_sizes_);
+    total_workspace_bwd_data    = std::max(total_workspace_bwd_data,
+                                           buffer_bwd_.filtered_images_sizes_ +
+                                           buffer_bwd_.error_image_sizes_ +
+                                           buffer_bwd_.filter_weights_sizes_ +
+                                           buffer_bwd_.filter_offsets_sizes_);
+
+#ifdef USE_CUDNN
     for (int i = 0; i < bottom.size(); i++) {
 
         cudnn::setTensor4dDesc<Dtype>(&top_bias_descs_[i],
@@ -386,44 +434,12 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
         }
     }
 
+    // Tensor descriptor for bias.
+    if (this->bias_term_) {
+        cudnn::setTensor4dDesc<Dtype>(&bias_desc_,
+                                      1, this->num_output_ , 1, 1);
+    }
 
-    forward_obj.reset(new caffe::FastGaussForward<Dtype>(this->width_out_, this->height_out_, this->num_, this->channels_, this->num_output_, this->NUM_GAUSS, this->use_interpolation_));
-    forward_obj->get_allocation_sizes(this->kernel_w_, this->kernel_h_,
-                                      &buffer_fwd_.filtered_images_sizes_,
-                                      &buffer_fwd_.filter_weights_sizes_,
-                                      &buffer_fwd_.filter_offsets_sizes_);
-
-    // check how much memory do we need for our custom kernels
-    backward_grad_obj.reset(new caffe::FastGaussBackward<Dtype>(this->width_out_, this->height_out_, this->num_, this->channels_, this->num_output_, this->NUM_GAUSS, this->NUM_K, this->last_k_optional, this->use_interpolation_));
-
-    // WARNING: if this->kernel_w_ or this->kernel_h_ changes then memory will not be allocated properly so we should use here
-    //          maximum kernel_w_ and kernel_h_ allowed
-    backward_grad_obj->get_allocation_sizes(this->kernel_w_, this->kernel_h_,
-                                       &buffer_bwd_.filtered_images_sizes_,
-                                       &buffer_bwd_.error_image_sizes_,
-                                       &buffer_bwd_.filter_weights_sizes_,
-                                       &buffer_bwd_.filter_offsets_sizes_);
-    // for gradient accumulation
-
-    // for error back-propagation
-    // we use the same buffer as for forward pass but can be shared, just ensure buffer can accomodate both sizes
-    size_t filtered_error_sizes_, filter_error_weights_sizes_, filter_error_offsets_sizes_;
-
-    backward_backporp_obj.reset(new caffe::FastGaussForward<Dtype>(this->width_out_, this->height_out_, this->num_, this->num_output_, this->channels_, this->NUM_GAUSS, this->use_interpolation_));
-    backward_backporp_obj->get_allocation_sizes(this->kernel_w_, this->kernel_h_,
-                                             &filtered_error_sizes_,
-                                             &filter_error_weights_sizes_,
-                                             &filter_error_offsets_sizes_);
-
-    // this ensures that buffers will accomodate both fast_gauss_forward functions one used for forward pass and the second one used of error back-propagation
-    buffer_fwd_.filtered_images_sizes_ = std::max(buffer_fwd_.filtered_images_sizes_, filtered_error_sizes_);
-    buffer_fwd_.filter_weights_sizes_ = std::max(buffer_fwd_.filter_weights_sizes_, filter_error_weights_sizes_);
-    buffer_fwd_.filter_offsets_sizes_ = std::max(buffer_fwd_.filter_offsets_sizes_, filter_error_offsets_sizes_);
-
-    // reduce over all workspace sizes to get a maximum to allocate / reallocate
-    size_t total_workspace_fwd = 0;
-    size_t total_workspace_bwd_data = 0;
-    size_t total_workspace_bwd_error = 0;
 
     for (size_t i = 0; i < bottom.size(); i++) {
         total_workspace_fwd        = std::max(total_workspace_fwd,
@@ -433,16 +449,7 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
         total_workspace_bwd_error   = std::max(total_workspace_bwd_error,
                                               workspace_bwd_error_sizes_[i]);
     }
-
-    total_workspace_fwd         = std::max(total_workspace_fwd,
-                                          buffer_fwd_.filtered_images_sizes_ +
-                                          buffer_fwd_.filter_weights_sizes_ +
-                                          buffer_fwd_.filter_offsets_sizes_);
-    total_workspace_bwd_data    = std::max(total_workspace_bwd_data,
-                                           buffer_bwd_.filtered_images_sizes_ +
-                                           buffer_bwd_.error_image_sizes_ +
-                                           buffer_bwd_.filter_weights_sizes_ +
-                                           buffer_bwd_.filter_offsets_sizes_);
+#endif
 
     // get max over all operations
     size_t max_workspace = std::max(total_workspace_fwd,
@@ -468,8 +475,10 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
             for (int i = 0; i < bottom.size(); i++) {
                 workspace_fwd_sizes_[i] = 0;
                 workspace_bwd_data_sizes_[i] = 0;
+#ifdef USE_CUDNN
                 fwd_algo_[i] = CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_GEMM;
                 bwd_data_algo_[i] = CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_GEMM;
+#endif
             }
 
             // NULL out all workspace pointers
@@ -493,6 +502,21 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
         //    - this would work for layer that are executed in sequence but will fail for parallel layers
         //    - also make sure to count on multi-GPU implementations so do explicitly use only static buffers !!!
 
+        // We should implement memory as:
+        // - for each GPU-device we use seperate class for handling memory
+        // - we use static array within this class to store memory storage classes and save them with GPU-id
+        // - we can get GPU-id of current active device since that is setup for us by caffe
+        // - memory storage class needs to take care of:
+        //   - allocating memory when requested
+        //   - ensuring the same memory is used across all alocations
+        //   - if more memory is requested then currently allocated then we need to allocat new memory
+        //   - in case of allocating additional memory we NEED to ensure that existing instances with pointers to that memory are updated
+        //     (this should be done by wraping allocated pointer around new class, possibly std:shared_ptr and using that one instead of raw pointers)
+        // - we need to ensure to deallocate memory when all not used any more
+        //   - when each FastAproxGaussianConvLayer is destroyed it should indicate to memory manegement class to destroy its memory
+        //   - memory manegment should keep an index if valid pointer that are still using it and it should deallocate CUDA memory when there are no more valid pointers!!
+
+
         // TODO: make all memory align to 4x 32bit values
         buffer_fwd_.filtered_images = reinterpret_cast<Dtype*>(reinterpret_cast<char *>(workspaceData));
         buffer_fwd_.filter_offsets_and_weights = reinterpret_cast<Dtype*>(reinterpret_cast<char *>(workspaceData) + buffer_fwd_.filtered_images_sizes_);
@@ -506,16 +530,6 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
         buffer_bwd_.filter_offsets = reinterpret_cast<int*>(reinterpret_cast<char *>(workspaceData) + buffer_bwd_.filtered_images_sizes_ + buffer_bwd_.error_image_sizes_ + buffer_bwd_.filter_weights_sizes_);
     }
 
-    // Tensor descriptor for bias.
-    if (this->bias_term_) {
-        cudnn::setTensor4dDesc<Dtype>(&bias_desc_,
-                                      1, this->num_output_ , 1, 1);
-    }
-#ifdef USE_ARRAYFIRE_CUDA
-    int current_device;
-    CUDA_CHECK(cudaGetDevice(&current_device));
-    afcu::setNativeId(current_device);
-#endif
 }
 
 template <typename Dtype>
@@ -523,6 +537,23 @@ FastAproxGaussianConvLayer<Dtype>::~FastAproxGaussianConvLayer() {
     // Check that handles have been setup before destroying.
     if (!handles_setup_) { return; }
 
+    for (int g = 0; g < this->group_ ; g++) {
+        cudaStreamDestroy(stream_[g]);
+    }
+
+    for (int g = 0; g < 4; ++g) {
+        cudaStreamDestroy(paralel_streams[g]);
+    }
+
+    cudaFree(workspaceData);
+    delete [] stream_;
+    delete [] paralel_streams;
+    delete [] workspace;
+    delete [] workspace_fwd_sizes_;
+    delete [] workspace_bwd_data_sizes_;
+    delete [] workspace_bwd_error_sizes_;
+
+#ifdef USE_CUDNN
     for (int i = 0; i < bottom_descs_.size(); i++) {
         cudnnDestroyTensorDescriptor(top_bias_descs_[i]);
 
@@ -544,25 +575,15 @@ FastAproxGaussianConvLayer<Dtype>::~FastAproxGaussianConvLayer() {
     cudnnDestroyFilterDescriptor(bwd_prefilter_kernel_desc_);
 
     for (int g = 0; g < this->group_ ; g++) {
-        cudaStreamDestroy(stream_[g]);
         cudnnDestroy(handle_[g]);
     }
 
-    for (int g = 0; g < 4; ++g) {
-        cudaStreamDestroy(paralel_streams[g]);
-    }
-
-    cudaFree(workspaceData);
-    delete [] stream_;
-    delete [] paralel_streams;
     delete [] handle_;
     delete [] fwd_algo_;
     delete [] bwd_data_algo_;
     delete [] bwd_error_algo_;
-    delete [] workspace;
-    delete [] workspace_fwd_sizes_;
-    delete [] workspace_bwd_data_sizes_;
-    delete [] workspace_bwd_error_sizes_;
+#endif
+
 }
 
 __global__ void sync_fast_gauss_conv_groups() { }
@@ -1194,4 +1215,3 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>&
 INSTANTIATE_CLASS(FastAproxGaussianConvLayer);
 
 }   // namespace caffe
-#endif
