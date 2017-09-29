@@ -2437,8 +2437,12 @@ public:
 
     void run_kernel(FastGaussForward<float>::CUDAParams& p) {
 
-        CUDA_CHECK(cudaMemsetAsync(p.output, 0, sizeof(float) * I * F * img_width * img_height, p.streamId));
-        CUDA_CHECK(cudaMemsetAsync(p.prepared_filtered_images, 0, image_cuda_prepare.get_allocation_size(), p.streamId));
+        //caffe_gpu_set<float>(I * F * img_width * img_height, (float)0, p.output);
+        //caffe_gpu_set<float>(image_cuda_prepare.get_allocation_size()/sizeof(float), (float)0, p.prepared_filtered_images);
+
+
+        //CUDA_CHECK(cudaMemsetAsync(p.output, 0, sizeof(float) * I * F * img_width * img_height, p.streamId));
+        //CUDA_CHECK(cudaMemsetAsync(p.prepared_filtered_images, 0, image_cuda_prepare.get_allocation_size(), p.streamId));
 
         //CUDA_CHECK(cudaDeviceSynchronize());
         {

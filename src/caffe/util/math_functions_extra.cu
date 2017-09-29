@@ -62,8 +62,8 @@ __global__ void set_kernel(const int n, const Dtype alpha, Dtype* y) {
 template <typename Dtype>
 void caffe_gpu_set_async(const int N, const Dtype alpha, Dtype* Y, cudaStream_t streamId) {
   if (alpha == 0) {
-    CUDA_CHECK(cudaMemsetAsync(Y, 0, sizeof(Dtype) * N, streamId));  // NOLINT(caffe/alt_fn)
-    return;
+    //CUDA_CHECK(cudaMemsetAsync(Y, 0, sizeof(Dtype) * N, streamId));  // NOLINT(caffe/alt_fn)
+    //return;
   }
   // NOLINT_NEXT_LINE(whitespace/operators)
   set_kernel<Dtype><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS, 0, streamId>>>(
@@ -262,7 +262,9 @@ void caffe_gpu_sum(const int n, const Dtype* x, Dtype* y, const int m, cudaStrea
 
 	caffe_gpu_memcpy_async(sizeof(int)*(num_segments + 1), offsets, offsets_d);
 
-	caffe_gpu_sum(n, x, y, num_segments, offsets_d, false, streamId);
+	caffe_gpu_sum(n, x, y, num_segments, offsets_d, false);
+
+	CUDA_CHECK(cudaFree(offsets_d));
 
 	delete offsets;
 }

@@ -2779,7 +2779,7 @@ namespace caffe {
 
         void run_kernel(FastGaussBackward<float>::CUDAParams& p) {
 
-            CUDA_CHECK(cudaMemset(p.prepared_error_images, 0, error_cuda_prepare.get_allocation_size()));
+            //CUDA_CHECK(cudaMemsetAsync(p.prepared_error_images, 0, error_cuda_prepare.get_allocation_size(), p.streamId));
 
             {
 //#define PROFILE_CUDA

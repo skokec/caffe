@@ -49,7 +49,7 @@ template <typename Dtype>
 void caffe_gpu_mul_split(const int N, const Dtype* a, const Dtype* b, Dtype* y, const int M, const int K, const int L, cudaStream_t streamId = 0);
 
 template <typename Dtype>
-void caffe_gpu_sum(const int N, const Dtype* x, Dtype* y, const int M = 0, cudaStream_t streamId = 0);
+void caffe_gpu_sum(const int N, const Dtype* x, Dtype* y, const int M = 1, cudaStream_t streamId = 0);
 
 template <typename Dtype>
 void caffe_gpu_sum(const int N, const Dtype* x, Dtype* y, const int num_segments, int* offsets_gpu, bool with_add = false, cudaStream_t streamId = NULL);

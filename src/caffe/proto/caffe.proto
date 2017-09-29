@@ -609,6 +609,7 @@ message ConvolutionParameter {
   optional bool gmm_legacy_merge_blobs = 134 [default = false]; // ignore blobs for random means during component merging - to allow loading older snapshots
   optional bool gmm_discretize_mean = 135 [default = false]; // force discretization of means to closest integer value
   optional bool gmm_use_fast_aproximation = 136 [default = false]; // use faster implementation with aproximation by discretizing the offsets
+  optional bool gmm_use_cudnn_in_fast_aproximation = 137 [default = false]; // use faster implementation with aproximation by discretizing the offsets
   enum Engine {
     DEFAULT = 0;
     CAFFE = 1;

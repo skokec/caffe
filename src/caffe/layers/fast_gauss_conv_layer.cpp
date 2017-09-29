@@ -12,6 +12,11 @@
 #include <opencv2/opencv.hpp>
 #include <opencv2/gpu/gpu.hpp>
 
+#ifdef USE_ARRAYFIRE_CUDA
+#include <arrayfire.h>
+#include <af/cuda.h>
+#endif
+
 namespace caffe {
 
 template <typename Dtype>
@@ -197,6 +202,8 @@ void FastAproxGaussianConvLayer<Dtype>::LayerSetUp(
     for (int g = 0; g < 4; ++g) {
         cudaStreamCreate(&paralel_streams[g]);
     }
+
+    this->gmm_use_cudnn_in_fast_aproximation_ = this->layer_param_.convolution_param().gmm_use_cudnn_in_fast_aproximation();
 
 }
 
@@ -387,16 +394,6 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
                                       &buffer_fwd_.filter_offsets_sizes_);
 
     // check how much memory do we need for our custom kernels
-    /*caffe::fast_gauss_forward<Dtype>(NULL, NULL, NULL, NULL, PARAM_FORMAT_SGF, NULL,
-                                     this->num_, this->channels_, this->num_output_, this->NUM_GAUSS,
-                                     this->width_out_, this->height_out_,
-                                     this->kernel_w_, this->kernel_h_,
-                                     this->use_interpolation_,
-                                     NULL,&buffer_fwd_.filtered_images_sizes_,
-                                     NULL,&buffer_fwd_.filter_weights_sizes_,
-                                     NULL,&buffer_fwd_.filter_offsets_sizes_,
-                                     NULL);*/
-
     backward_grad_obj.reset(new caffe::FastGaussBackward<Dtype>(this->width_out_, this->height_out_, this->num_, this->channels_, this->num_output_, this->NUM_GAUSS, this->NUM_K, this->last_k_optional, this->use_interpolation_));
 
     // WARNING: if this->kernel_w_ or this->kernel_h_ changes then memory will not be allocated properly so we should use here
@@ -407,15 +404,6 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
                                        &buffer_bwd_.filter_weights_sizes_,
                                        &buffer_bwd_.filter_offsets_sizes_);
     // for gradient accumulation
-    /*caffe::fast_gauss_backward_multi_subfeatures<Dtype>(NULL, NULL, NULL, NULL, NULL, NULL,
-                                                        this->num_, this->channels_, this->num_output_, this->NUM_GAUSS, NUM_K, this->last_k_optional,
-                                                        this->width_out_, this->height_out_,
-                                                        this->kernel_w_, this->kernel_h_,
-                                                        this->use_interpolation_, this->ignore_edge_gradients_,
-                                                        NULL,&buffer_bwd_.filtered_images_sizes_,
-                                                        NULL,&buffer_bwd_.error_image_sizes_,
-                                                        NULL,&buffer_bwd_.filter_weights_sizes_,
-                                                        NULL,&buffer_bwd_.filter_offsets_sizes_);*/
 
     // for error back-propagation
     // we use the same buffer as for forward pass but can be shared, just ensure buffer can accomodate both sizes
@@ -426,16 +414,6 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
                                              &filtered_error_sizes_,
                                              &filter_error_weights_sizes_,
                                              &filter_error_offsets_sizes_);
-
-    /*caffe::fast_gauss_forward<Dtype>(NULL, NULL, NULL, NULL, PARAM_FORMAT_FGS, NULL,
-                                     this->num_, this->num_output_, this->channels_, this->NUM_GAUSS,
-                                     this->width_out_, this->height_out_,
-                                     this->kernel_w_, this->kernel_h_,
-                                     this->use_interpolation_,
-                                     NULL,&filtered_error_sizes_,
-                                     NULL,&filter_error_weights_sizes_,
-                                     NULL,&filter_error_offsets_sizes_,
-                                     NULL);*/
 
     // this ensures that buffers will accomodate both fast_gauss_forward functions one used for forward pass and the second one used of error back-propagation
     buffer_fwd_.filtered_images_sizes_ = std::max(buffer_fwd_.filtered_images_sizes_, filtered_error_sizes_);
@@ -533,6 +511,11 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
         cudnn::setTensor4dDesc<Dtype>(&bias_desc_,
                                       1, this->num_output_ , 1, 1);
     }
+#ifdef USE_ARRAYFIRE_CUDA
+    int current_device;
+    CUDA_CHECK(cudaGetDevice(&current_device));
+    afcu::setNativeId(current_device);
+#endif
 }
 
 template <typename Dtype>

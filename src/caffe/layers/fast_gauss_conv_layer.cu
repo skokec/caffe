@@ -1,14 +1,19 @@
 #ifdef USE_CUDNN
 #include <vector>
 #include <memory>
+#include <caffe/layers/gauss_conv_layer.hpp>
 
 #include "caffe/layers/gauss_conv_layer.hpp"
 
 #include "caffe/util/math_functions_extra.hpp"
 #include "caffe/util/custom_cub.cuh"
+#include "caffe/util/convolve.hpp"
 
 #include "caffe/layers/fast_gauss/fast_gauss_forward.hpp"
 #include "caffe/layers/fast_gauss/fast_gauss_backward.hpp"
+
+
+
 
 namespace caffe {
 
@@ -31,22 +36,34 @@ void FastAproxGaussianConvLayer<Dtype>::Forward_gpu(
 		//merge_components();
 	}
 
+    // before we get params we need to ensure params are within valid bounds
+    {
+        // we still need to ensure our values are within valid bounds
+        // clip sigma, mu1 and mu2 to within bounds
+        caffe_gpu_clip_lower(this->param_buffer_sigma_->count(), this->gmm_sigma_lower_bound, this->param_buffer_sigma_->mutable_gpu_data(), this->param_buffer_sigma_->mutable_gpu_data());
+
+        caffe_gpu_clip_lower(this->param_buffer_mu1_->count(), (Dtype)this->gmm_component_border_bound, this->param_buffer_mu1_->mutable_gpu_data(), this->param_buffer_mu1_->mutable_gpu_data());
+        caffe_gpu_clip_lower(this->param_buffer_mu1_->count(), (Dtype)this->gmm_component_border_bound, this->param_buffer_mu2_->mutable_gpu_data(), this->param_buffer_mu2_->mutable_gpu_data());
+
+        caffe_gpu_clip_upper(this->param_buffer_mu1_->count(), this->kernel_w_-1 - (Dtype)this->gmm_component_border_bound, this->param_buffer_mu1_->mutable_gpu_data(), this->param_buffer_mu1_->mutable_gpu_data());
+        caffe_gpu_clip_upper(this->param_buffer_mu1_->count(), this->kernel_h_-1 - (Dtype)this->gmm_component_border_bound, this->param_buffer_mu2_->mutable_gpu_data(), this->param_buffer_mu2_->mutable_gpu_data());
+    }
+
 	const int height_out = top[0]->shape(this->channel_axis_ + 1);
 	const int width_out = top[0]->shape(this->channel_axis_ + 2);
 
 	// get filter for gaussian blur step
-	const Dtype* gauss_kernel = this->get_gaussian_kernel(stream_[0])->gpu_data();
+    Blob<Dtype>* gauss_kernel_blob = this->get_gaussian_kernel(stream_[0]);
+	const Dtype* gauss_kernel = gauss_kernel_blob->gpu_data();
 
-	// get buffers for all parameters that we learn
+    // get buffers for all parameters that we learn
 	const Dtype* filter_weights = this->param_buffer_w_->gpu_data();
 	const Dtype* filter_offsets_float_mu1 = this->param_buffer_mu1_->gpu_data();
 	const Dtype* filter_offsets_float_mu2 = this->param_buffer_mu2_->gpu_data();
 
-	/*
-	plot_blob_data(*this->param_buffer_w_);
-	plot_blob_data(*this->param_buffer_mu1_);
-	plot_blob_data(*this->param_buffer_mu2_);
-	*/
+    cudaEvent_t memset_top, memset_filter;
+    CUDA_CHECK(cudaEventCreate(&memset_top));
+    CUDA_CHECK(cudaEventCreate(&memset_filter));
 
 	for (int i = 0; i < bottom.size(); ++i) {
 		// input data
@@ -64,35 +81,51 @@ void FastAproxGaussianConvLayer<Dtype>::Forward_gpu(
 		cudaDeviceSynchronize();
 		clock_t start_t = clock();
 		*/
-//#ifdef USE_ARRAYFIRE_CUDA
-//#else
 
-		// first perform convolutions with gaussian filter (i.e. gaussian blur)
-		// we use cudnn forward implementation by casting
-		//  - input into [N*S x 1 x HxW]
-		//  - weight into [1 x K_h x K_w]
-		// this effectively perform single convolution on each input feature and we get
-		//  - output [N*S x 1 x HxW] => [N x S x HxW]
-		CUDNN_CHECK(cudnnConvolutionForward(handle_[0],
-											cudnn::dataType<Dtype>::one,
-											bottom_descs_[i], bottom_data,
-											fwd_prefilter_kernel_desc_, gauss_kernel,
-											fwd_conv_descs_[i],
-											fwd_algo_[i], workspace[0], workspace_fwd_sizes_[i],
-											cudnn::dataType<Dtype>::zero,
-											fwd_interm_descs_[i], interm_data));
-//#endif
-		//interm_data = (Dtype*)bottom_data;
-		/*
-        //cudaMemset(buffer_fwd_.filter_offsets_and_weights, 0, buffer_fwd_.filter_weights_sizes_ + buffer_fwd_.filter_offsets_sizes_);
-		cudaDeviceSynchronize();
-		clock_t end_t = clock();
-		std::cout << "gaussian pre-filtering in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
-		// now we take the blured input data and perform sum over shifted input data with our custom kernel
-		*/
-        /*start_t = clock();*/
+		if (gmm_use_cudnn_in_fast_aproximation_ == false) {
+            caffe_gpu_set_async<Dtype>(this->num_output_* this->num_* this->height_out_* this->width_out_, (Dtype)0, top_data, paralel_streams[0]);
+            caffe_gpu_set_async<Dtype>(buffer_fwd_.filtered_images_sizes_ / sizeof(float), (Dtype)0, buffer_fwd_.filtered_images, paralel_streams[1]);
 
-		this->forward_obj->forward_pass(interm_data,
+            CUDA_CHECK(cudaEventRecord(memset_top, paralel_streams[0]));
+            CUDA_CHECK(cudaEventRecord(memset_filter, paralel_streams[1]));
+
+            conv2_data_desc sig_desc(1, this->channels_* this->num_, this->height_, this->width_,
+									 this->channels_* this->num_*this->height_*this->width_, this->height_*this->width_, this->width_, 1);
+			conv2_data_desc filt_desc(1,1,this->prefilter_h_,this->prefilter_w_,
+									  this->prefilter_h_ * this->prefilter_w_, this->prefilter_h_ * this->prefilter_w_, this->prefilter_w_, 1);
+
+			conv2_data_desc out_desc = sig_desc;
+
+			caffe_gpu_convolve2(interm_data, out_desc,
+								bottom_data, sig_desc,
+								gauss_kernel, filt_desc, stream_[0]);
+
+            CUDA_CHECK(cudaStreamWaitEvent(stream_[0], memset_top, 0));
+            CUDA_CHECK(cudaStreamWaitEvent(stream_[0], memset_filter, 0));
+		} else {
+			// first perform convolutions with gaussian filter (i.e. gaussian blur)
+			// we use cudnn forward implementation by casting
+			//  - input into [N*S x 1 x HxW]
+			//  - weight into [1 x K_h x K_w]
+			// this effectively perform single convolution on each input feature and we get
+			//  - output [N*S x 1 x HxW] => [N x S x HxW]
+			CUDNN_CHECK(cudnnConvolutionForward(handle_[0],
+												cudnn::dataType<Dtype>::one,
+												bottom_descs_[i], bottom_data,
+												fwd_prefilter_kernel_desc_, gauss_kernel,
+												fwd_conv_descs_[i],
+												fwd_algo_[i], workspace[0], workspace_fwd_sizes_[i],
+												cudnn::dataType<Dtype>::zero,
+												fwd_interm_descs_[i], interm_data));
+
+            // if using CuDNN then use default stream to zero buffer since that buffer is used by cudnnConvolutionForward and
+            // we need to wait for it to finish
+            caffe_gpu_set<Dtype>(this->num_output_* this->num_* this->height_out_* this->width_out_, (Dtype)0, top_data);
+            caffe_gpu_set<Dtype>(buffer_fwd_.filtered_images_sizes_ / sizeof(float), (Dtype)0, buffer_fwd_.filtered_images);
+		}
+
+
+        this->forward_obj->forward_pass(interm_data,
 										filter_offsets_float_mu1, filter_offsets_float_mu2, filter_weights, FastGaussForward<Dtype>::SGF, this->kernel_w_, this->kernel_h_,
 										top_data,
 										buffer_fwd_.filtered_images,
@@ -100,17 +133,6 @@ void FastAproxGaussianConvLayer<Dtype>::Forward_gpu(
 										NULL,
 										buffer_fwd_.filter_offsets_and_weights, stream_[0]);
 
-		/*caffe::fast_gauss_forward<Dtype>(interm_data,
-										 filter_offsets_float_mu1, filter_offsets_float_mu2, filter_weights, PARAM_FORMAT_SGF,
-										 top_data,
-										 this->num_, this->channels_, this->num_output_, this->NUM_GAUSS,
-										 this->width_out_, this->height_out_,
-										 this->kernel_w_, this->kernel_h_,
-										 this->use_interpolation_,
-										 buffer_fwd_.filtered_images,0,
-										 NULL,0,
-										 NULL,0,
-										 buffer_fwd_.filter_offsets_and_weights, stream_[0]);*/
         /*
         cudaDeviceSynchronize();
         end_t = clock();
@@ -126,7 +148,6 @@ void FastAproxGaussianConvLayer<Dtype>::Forward_gpu(
 									   cudnn::dataType<Dtype>::one,
 									   top_bias_descs_[i], top_data));
 		}
-		cudaDeviceSynchronize();
 		// Synchronize the work across groups, each of which went into its own
 		// stream, by launching an empty kernel into the default (null) stream.
 		// NOLINT_NEXT_LINE(whitespace/operators)
@@ -189,6 +210,11 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 	// make sure gradient accumulation buffer is zeroed
 	caffe_gpu_memset(param_size * NUM_K * sizeof(Dtype), 0, bwd_gradients_data);
 
+	cudaEvent_t memset_top, memset_filter, memset_error;
+	CUDA_CHECK(cudaEventCreate(&memset_top));
+	CUDA_CHECK(cudaEventCreate(&memset_filter));
+	CUDA_CHECK(cudaEventCreate(&memset_error));
+
 	for (int i = 0; i < bottom.size(); ++i) {
 
 		// input data
@@ -211,27 +237,52 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 
 		// Gradient w.r.t w,mu1,mu2 and sigma
 		if (this->param_propagate_down_[0]) {
-//#ifdef USE_ARRAYFIRE_CUDA
-//#else
-			// perform pre-filtering for each parameter i.e. with four different derivative filters
-			CUDNN_CHECK(cudnnConvolutionForward(handle_[0],
-												cudnn::dataType<Dtype>::one,
-												bottom_descs_[i], bottom_data,
-												bwd_prefilter_kernel_desc_, deriv_kernels_data,
-												bwd_conv_data_descs_[i],
-												bwd_data_algo_[i], workspace[0], workspace_bwd_data_sizes_[i],
-												cudnn::dataType<Dtype>::zero,
-												bwd_interm_data_descs_[i], interm_data));
-//#endif
 			// TODO: if it is faster we should add zeroing to input prepare functions !!
-			CUDA_CHECK(cudaMemsetAsync(this->buffer_bwd_.filtered_images,0,this->buffer_bwd_.filtered_images_sizes_, stream_[0]));
-			CUDA_CHECK(cudaMemsetAsync(this->buffer_bwd_.error_images,0,this->buffer_bwd_.error_image_sizes_, stream_[0]));
-			/*cudaDeviceSynchronize();
 
-			// TODO: update support for K=4 as well
-            clock_t start_t = clock();*/
+
+			if (gmm_use_cudnn_in_fast_aproximation_ == false) {
+                caffe_gpu_set_async(this->buffer_bwd_.filtered_images_sizes_/sizeof(Dtype), (Dtype)0, this->buffer_bwd_.filtered_images, paralel_streams[0]);
+                caffe_gpu_set_async(this->buffer_bwd_.error_image_sizes_/sizeof(Dtype), (Dtype)0, this->buffer_bwd_.error_images, paralel_streams[1]);
+
+                CUDA_CHECK(cudaEventRecord(memset_filter, paralel_streams[0]));
+                CUDA_CHECK(cudaEventRecord(memset_error, paralel_streams[1]));
+
+                conv2_data_desc sig_desc(this->channels_* this->num_, 1, this->height_, this->width_,
+										 this->height_*this->width_,  this->height_*this->width_, this->width_, 1);
+
+				conv2_data_desc filt_desc(1,this->NUM_K,this->prefilter_h_,this->prefilter_w_,
+										  this->NUM_K * this->prefilter_h_ * this->prefilter_w_, this->prefilter_h_ * this->prefilter_w_, this->prefilter_w_, 1);
+
+				conv2_data_desc out_desc(this->channels_* this->num_, this->NUM_K, this->height_, this->width_,
+										 this->height_*this->width_ * this->NUM_K,  this->height_*this->width_, this->width_, 1);
+
+				caffe_gpu_convolve2(interm_data, out_desc,
+									bottom_data, sig_desc,
+									deriv_kernels_data, filt_desc, stream_[0]);
+
+
+                CUDA_CHECK(cudaStreamWaitEvent(stream_[0], memset_filter, 0));
+                CUDA_CHECK(cudaStreamWaitEvent(stream_[0], memset_error, 0));
+
+			} else {
+				// perform pre-filtering for each parameter i.e. with four different derivative filters
+				CUDNN_CHECK(cudnnConvolutionForward(handle_[0],
+													cudnn::dataType<Dtype>::one,
+													bottom_descs_[i], bottom_data,
+													bwd_prefilter_kernel_desc_, deriv_kernels_data,
+													bwd_conv_data_descs_[i],
+													bwd_data_algo_[i], workspace[0], workspace_bwd_data_sizes_[i],
+													cudnn::dataType<Dtype>::zero,
+													bwd_interm_data_descs_[i], interm_data));
+
+                // if using CuDNN then use default stream to zero buffer since that buffer is used by cudnnConvolutionForward and
+                // we need to wait for it to finish
+                caffe_gpu_set(this->buffer_bwd_.filtered_images_sizes_/sizeof(Dtype), (Dtype)0, this->buffer_bwd_.filtered_images);
+                caffe_gpu_set(this->buffer_bwd_.error_image_sizes_/sizeof(Dtype), (Dtype)0, this->buffer_bwd_.error_images);
+
+            }
+
 			// collect gradients by shifting convolved bottom input data and multiplying it with the top error data
-			//caffe::FastGaussBackward<Dtype> backward_grad_obj(this->width_out_, this->height_out_, this->num_, this->channels_, this->num_output_, this->NUM_GAUSS, this->NUM_K, this->last_k_optional, this->use_interpolation_);
 
             // WARNING: if this->kernel_w_ or this->kernel_h_ changes then memory will not be allocated properly
 			backward_grad_obj->backward_pass(interm_data, top_error,
@@ -244,41 +295,55 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 									   this->buffer_bwd_.filter_offsets,
 									   this->ignore_edge_gradients_, stream_[0]);
 
-			/*caffe::fast_gauss_backward_multi_subfeatures<Dtype>(interm_data, top_error,
-																filter_offsets_float_mu1, filter_offsets_float_mu2,
-																filter_weights, bwd_gradients_data,
-																this->num_, this->channels_, this->num_output_, this->NUM_GAUSS, NUM_K, this->last_k_optional,
-																this->width_out_, this->height_out_,
-																this->kernel_w_, this->kernel_h_,
-																this->use_interpolation_, this->ignore_edge_gradients_,
-																this->buffer_bwd_.filtered_images,0,
-																this->buffer_bwd_.error_images,0,
-																this->buffer_bwd_.filter_weights,0,
-																this->buffer_bwd_.filter_offsets,0, stream_[0]);*/
-			/*cudaDeviceSynchronize();
-			clock_t end_t = clock();
-            std::cout << "fast_gauss_backward_multi_subfeatures in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;*/
-
 		}
 
 
 		// finally perform back-propagation of the error values
 		if (propagate_down[i]) {
-//#ifdef USE_ARRAYFIRE_CUDA
-//#else
+			if (gmm_use_cudnn_in_fast_aproximation_ == false) {
 
-			// we need to do pre-filtering of the error values
-			CUDNN_CHECK(cudnnConvolutionForward(handle_[0],
-												cudnn::dataType<Dtype>::one,
-												top_descs_[i], top_error,
-												fwd_prefilter_kernel_desc_, deriv_error_kernel,
-												bwd_conv_error_descs_[i],
-												bwd_error_algo_[i], workspace[0], workspace_bwd_error_sizes_[i],
-												cudnn::dataType<Dtype>::zero,
-												bwd_interm_error_descs_[i], interm_data));
-//#endif
+                // NOTE: memory buffer is shared with gradient compute so make sure not to zero it before backward_grad_obj->backward_pass is done
+
+                caffe_gpu_set_async<Dtype>(this->channels_* this->num_* this->height_* this->width_, (Dtype)0, bottom_error, paralel_streams[0]);
+                caffe_gpu_set_async<Dtype>(buffer_fwd_.filtered_images_sizes_ / sizeof(float), (Dtype)0, buffer_fwd_.filtered_images, paralel_streams[1]);
+
+                CUDA_CHECK(cudaEventRecord(memset_top, paralel_streams[0]));
+                CUDA_CHECK(cudaEventRecord(memset_filter, paralel_streams[1]));
+
+				conv2_data_desc sig_desc(1, this->num_output_* this->num_, this->height_out_, this->width_out_,
+										 this->num_output_* this->num_*this->height_out_*this->width_out_, this->height_out_*this->width_out_, this->width_out_, 1);
+
+				conv2_data_desc filt_desc(1,1,this->prefilter_h_,this->prefilter_w_,
+										  this->prefilter_h_ * this->prefilter_w_, this->prefilter_h_ * this->prefilter_w_, this->prefilter_w_, 1);
+
+				conv2_data_desc out_desc = sig_desc;
+
+				caffe_gpu_convolve2(interm_data, out_desc,
+									top_error, sig_desc,
+									deriv_error_kernel, filt_desc, stream_[0]);
+
+                CUDA_CHECK(cudaStreamWaitEvent(stream_[0], memset_top, 0));
+                CUDA_CHECK(cudaStreamWaitEvent(stream_[0], memset_filter, 0));
+
+			} else {
+				// we need to do pre-filtering of the error values
+				CUDNN_CHECK(cudnnConvolutionForward(handle_[0],
+													cudnn::dataType<Dtype>::one,
+													top_descs_[i], top_error,
+													fwd_prefilter_kernel_desc_, deriv_error_kernel,
+													bwd_conv_error_descs_[i],
+													bwd_error_algo_[i], workspace[0], workspace_bwd_error_sizes_[i],
+													cudnn::dataType<Dtype>::zero,
+													bwd_interm_error_descs_[i], interm_data));
+
+                // if using CuDNN then use default stream to zero buffer since that buffer is used by cudnnConvolutionForward and
+                // we need to wait for it to finish
+                caffe_gpu_set<Dtype>(this->channels_* this->num_* this->height_* this->width_, (Dtype)0, bottom_error);
+                caffe_gpu_set<Dtype>(buffer_fwd_.filtered_images_sizes_ / sizeof(float), (Dtype)0, buffer_fwd_.filtered_images);
+			}
 			// then use our custom kernel for forwarding, however we need to transpose kernels, which in our case means
 			// that we need to rotate mu1,mu2 locations
+
 
 			// get param buffer for mu1 and mu2 that will be rotated
 			Dtype *param_mu1_backprop = this->tmp_param_buffer_.mutable_gpu_data() + 0 * param_size;
@@ -286,8 +351,8 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 
 			// rot(mu) = (kernel_w-1) - mu
 			{
-				caffe_gpu_memcpy(param_size * sizeof(float), filter_offsets_float_mu1, param_mu1_backprop);
-				caffe_gpu_memcpy(param_size * sizeof(float), filter_offsets_float_mu2, param_mu2_backprop);
+				caffe_gpu_memcpy_async(param_size * sizeof(float), filter_offsets_float_mu1, param_mu1_backprop, 0);
+				caffe_gpu_memcpy_async(param_size * sizeof(float), filter_offsets_float_mu2, param_mu2_backprop, 0);
 
 				caffe_gpu_scal(param_size, (Dtype)-1, param_mu1_backprop);
 				caffe_gpu_scal(param_size, (Dtype)-1, param_mu2_backprop);
@@ -295,6 +360,7 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 				caffe_gpu_add_scalar(param_size, (Dtype)(this->kernel_w_ - 1), param_mu1_backprop);
 				caffe_gpu_add_scalar(param_size, (Dtype)(this->kernel_h_ - 1), param_mu2_backprop);
 			}
+
 
 			// now we take the blured error data and perform sum over shifted input data with our custom kernel i.e. forward pass
 			this->backward_backporp_obj->forward_pass(interm_data,
@@ -304,17 +370,6 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 													  NULL,
 													  NULL,
 													  buffer_fwd_.filter_offsets_and_weights, stream_[0]);
-			/*caffe::fast_gauss_forward<Dtype>(interm_data,
-											 param_mu1_backprop, param_mu2_backprop, filter_weights, PARAM_FORMAT_FGS,
-                                             bottom_error,
-											 this->num_, this->num_output_, this->channels_, this->NUM_GAUSS,
-											 this->width_out_, this->height_out_,
-											 this->kernel_w_, this->kernel_h_,
-											 this->use_interpolation_,
-											 buffer_fwd_.filtered_images,0,
-											 NULL,0,
-											 NULL,0,
-											 buffer_fwd_.filter_offsets_and_weights, stream_[0]);*/
 
 		}
 	}

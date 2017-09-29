@@ -1334,8 +1334,8 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussBackward) {
     const int F = 128;
     const int S = 96;
     const int G = 2;
-    const int W = 16;
-    const int H = 32;
+    const int W = 32;
+    const int H = 64;
 
     // number of Guassian learning parameters we have (w,mu1,mu2,sigma)
     // for each parameter we need convolution of input data with specific kernel
@@ -1858,10 +1858,10 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussConvolution) {
     // evaluate size settings
     const int N = 128;
     const int F = 96;
-    const int S = 128;
+    const int S = 16;
     const int G = 4;
-    const int W = 32;
-    const int H = 16;
+    const int W = 16;
+    const int H = 32;
 
     const bool use_interpolation = true;
 
@@ -2102,7 +2102,7 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussConvolution) {
     }
 }
 
-TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussBackwardMultiSubfeatures) {
+TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussBackward) {
 
 
     typedef typename TypeParam::Dtype Dtype;
@@ -2116,7 +2116,7 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussBackwardMultiSubfeatures) {
         return;
 
 
-    const int N = 128;
+    const int N = 16;
     const int F = 32;
     const int S = 16;
     const int G = 2;
@@ -2530,6 +2530,244 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussBackwardMultiSubfeatures) {
     }
 }
 
+TYPED_TEST(GaussConvolutionLayerTest, ProfileFastGaussConvolution) {
+
+    Caffe::SetDevice(0);
+
+    typedef typename TypeParam::Dtype Dtype;
+
+
+    if (Caffe::mode() == Caffe::CPU)
+        return;
+
+    if (sizeof(Dtype) > 4)
+        return;
+
+    // evaluate size settings
+    const int N = 128;
+    const int F = 128;
+    const int S = 128;
+    const int G = 2;
+    const int W = 64;
+    const int H = 64;
+
+    const bool use_interpolation = true;
+
+    const int kernel_size = 17;
+
+    Blob<float> blob_input(N,S,H,W);
+    Blob<float> blob_weights(1, S, G, F);
+    Blob<float> blob_output(N,F,H,W);
+    Blob<float> blob_output_cpu(N,F,H,W);
+
+    FillerParameter const_zero_filler_param;
+    const_zero_filler_param.set_value(0);
+    ConstantFiller<float> const_zero_float_filer(const_zero_filler_param);
+
+    FillerParameter rand_filler_param;
+    rand_filler_param.set_std(0.1);
+    GaussianFiller<float> input_filler(rand_filler_param);
+
+    input_filler.Fill(&blob_input);
+
+    FillerParameter offset_filler_param;
+    offset_filler_param.set_min(2);
+    offset_filler_param.set_max(kernel_size-2);
+    UniformFiller<float> offset_filler(offset_filler_param);
+
+    const_zero_float_filer.Fill(&blob_output);
+
+    LayerParameter layer_param;
+
+    ConvolutionParameter* gauss_convolution_param = layer_param.mutable_convolution_param();
+
+    gauss_convolution_param->add_kernel_size(kernel_size);
+    gauss_convolution_param->add_stride(1);
+    gauss_convolution_param->add_pad(kernel_size/2);
+
+    gauss_convolution_param->add_number_gauss(G);
+    gauss_convolution_param->add_number_gauss(1);
+
+    gauss_convolution_param->set_num_output(F);
+
+
+    gauss_convolution_param->mutable_weight_filler()->set_type("gaussian");
+    gauss_convolution_param->mutable_weight_filler()->set_std(0.1);
+
+    gauss_convolution_param->mutable_bias_filler()->set_type("constant");
+    gauss_convolution_param->mutable_bias_filler()->set_value(0);
+
+    gauss_convolution_param->mutable_mu_filler()->set_type("constant");
+    gauss_convolution_param->mutable_mu_filler()->set_value(0);
+
+    gauss_convolution_param->mutable_sigma_filler()->set_type("constant");
+    gauss_convolution_param->mutable_sigma_filler()->set_value(0.8);
+
+    gauss_convolution_param->set_gmm_component_border_bound(100);
+    gauss_convolution_param->set_gmm_sigma_lower_bound(0.5);
+
+    gauss_convolution_param->set_gmm_weight_normalization(false);
+    gauss_convolution_param->set_gmm_gauss_normalization(true);
+    gauss_convolution_param->set_gmm_square_gauss_normalization(false);
+
+    FastAproxGaussianConvLayer<float> layer(layer_param);
+
+    std::vector<Blob<float>* > blob_bottom_vec;
+    std::vector<Blob<float>* > blob_top_vec;
+
+    blob_bottom_vec.push_back(&blob_input);
+    blob_top_vec.push_back(&blob_output);
+
+    for (int ii = 0; ii < 1; ++ii) {
+
+        layer.SetUp(blob_bottom_vec, blob_top_vec);
+
+        offset_filler.Fill(layer.param_buffer_mu1_.get());
+        offset_filler.Fill(layer.param_buffer_mu2_.get());
+
+
+        for (int i = 0; i < 30; ++i) {
+            cudaDeviceSynchronize();
+
+            clock_t start_t = clock();
+            layer.Forward_gpu(blob_bottom_vec, blob_top_vec);
+
+            cudaDeviceSynchronize();
+            clock_t end_t = clock();
+
+            std::cout << "fast_gauss_forward in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
+        }
+    }
+}
+
+TYPED_TEST(GaussConvolutionLayerTest, ProfileFastGaussBackward) {
+
+
+    typedef typename TypeParam::Dtype Dtype;
+
+    Caffe::SetDevice(0);
+
+    if (Caffe::mode() == Caffe::CPU)
+        return;
+
+    if (sizeof(Dtype) > 4)
+        return;
+
+
+    const int N = 128;
+    const int F = 128;
+    const int S = 128;
+    const int G = 2;
+    const int W = 64;
+    const int H = 64;
+
+
+    // number of Guassian learning parameters we have (w,mu1,mu2,sigma)
+    // for each parameter we need convolution of input data with specific kernel
+    const int K = 4;
+    const bool use_interpolation = true;
+    const bool ignore_edge_gradients = true; // for cpu/gpu compatability
+
+    const int kernel_size = 11;
+
+    Blob<float> blob_input(N,S,H,W);
+    Blob<float> blob_error(N,F,H,W);
+    Blob<float> blob_weights(1, S, G, F);
+    Blob<float> blob_output(K, S, G, F);
+
+    FillerParameter const_zero_filler_param;
+    const_zero_filler_param.set_value(0);
+    ConstantFiller<float> const_zero_float_filer(const_zero_filler_param);
+
+    FillerParameter rand_filler_param;
+    rand_filler_param.set_value(1);
+    GaussianFiller<float> input_filler(rand_filler_param);
+
+    input_filler.Fill(&blob_input);
+    input_filler.Fill(&blob_weights);
+    input_filler.Fill(&blob_error);
+    caffe_rng_gaussian<float>(blob_error.count(), float(0), float(0.1), blob_error.mutable_cpu_diff());
+
+    FillerParameter offset_filler_param;
+    offset_filler_param.set_min(3);
+    offset_filler_param.set_max(kernel_size - 3);
+
+    UniformFiller<float> offset_filler(offset_filler_param);
+
+    const_zero_float_filer.Fill(&blob_output);
+
+    LayerParameter layer_param;
+    ConvolutionParameter* gauss_convolution_param = layer_param.mutable_convolution_param();
+
+    gauss_convolution_param->add_kernel_size(kernel_size);
+    gauss_convolution_param->add_stride(1);
+    gauss_convolution_param->add_pad(kernel_size/2);
+
+    gauss_convolution_param->add_number_gauss(G);
+    gauss_convolution_param->add_number_gauss(1);
+
+    gauss_convolution_param->set_num_output(F);
+
+    gauss_convolution_param->mutable_weight_filler()->set_type("gaussian");
+    gauss_convolution_param->mutable_weight_filler()->set_std(0.1);
+
+    gauss_convolution_param->mutable_bias_filler()->set_type("constant");
+    gauss_convolution_param->mutable_bias_filler()->set_value(0);
+
+    gauss_convolution_param->mutable_mu_filler()->set_type("constant");
+    gauss_convolution_param->mutable_mu_filler()->set_value(0);
+
+    gauss_convolution_param->mutable_sigma_filler()->set_type("constant");
+    gauss_convolution_param->mutable_sigma_filler()->set_value(0.8);
+
+    gauss_convolution_param->set_gmm_component_border_bound(0);
+    gauss_convolution_param->set_gmm_sigma_lower_bound(0.5);
+
+    gauss_convolution_param->set_gmm_weight_normalization(false);
+    gauss_convolution_param->set_gmm_gauss_normalization(true);
+    gauss_convolution_param->set_gmm_square_gauss_normalization(false);
+
+    FastAproxGaussianConvLayer<float> layer(layer_param);
+
+    layer.ignore_edge_gradients_ = ignore_edge_gradients;
+
+    std::vector<Blob<float>* > blob_bottom_vec;
+    std::vector<Blob<float>* > blob_top_vec;
+
+    std::vector<bool > propagate_down;
+    propagate_down.push_back(true);
+
+    blob_bottom_vec.push_back(&blob_input);
+    blob_top_vec.push_back(&blob_error);
+
+
+    for (int ii = 0; ii < 1; ++ii) {
+
+        layer.SetUp(blob_bottom_vec, blob_top_vec);
+
+        offset_filler.Fill(layer.param_buffer_mu1_.get());
+        offset_filler.Fill(layer.param_buffer_mu2_.get());
+
+        // reset values for GPU run
+        caffe_gpu_set(layer.param_buffer_w_->count(), (Dtype)0, (Dtype*)layer.param_buffer_w_->mutable_gpu_diff());
+        caffe_gpu_set(layer.param_buffer_mu1_->count(), (Dtype)0, (Dtype*)layer.param_buffer_mu1_->mutable_gpu_diff());
+        caffe_gpu_set(layer.param_buffer_mu2_->count(), (Dtype)0, (Dtype*)layer.param_buffer_mu2_->mutable_gpu_diff());
+        caffe_gpu_set(layer.param_buffer_sigma_->count(), (Dtype)0, (Dtype*)layer.param_buffer_sigma_->mutable_gpu_diff());
+
+        cudaDeviceSynchronize();
+
+        for (int i = 0; i < 30; ++i) {
+            clock_t start_t = clock();
+
+            layer.Backward_gpu(blob_top_vec, propagate_down, blob_bottom_vec);
+
+            cudaDeviceSynchronize();
+            clock_t end_t = clock();
+
+            std::cout << "fast_gauss_backward in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
+        }
+    }
+}
 #ifdef USE_CUDNN
 
 #endif
