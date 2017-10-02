@@ -240,12 +240,9 @@ void BaseGaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom
 
 		shared_ptr<Filler<Dtype> > weight_filler(GetFiller<Dtype>(this->layer_param_.convolution_param().weight_filler()));
 		shared_ptr<Filler<Dtype> > sigma_filler(GetFiller<Dtype>(this->layer_param_.convolution_param().sigma_filler()));
-		shared_ptr<Filler<Dtype> > mu_filler(GetFiller<Dtype>(this->layer_param_.convolution_param().mu_filler()));
 
 		weight_filler->Fill(&tmp_w);
 		sigma_filler->Fill(&tmp_sigma);
-		//mu_filler->Fill(&tmp_mu1);
-		//mu_filler->Fill(&tmp_mu2);
 
 		Dtype* mu1_buf = tmp_mu1.mutable_cpu_data();
 		Dtype* mu2_buf = tmp_mu2.mutable_cpu_data();
@@ -255,14 +252,25 @@ void BaseGaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom
 		Dtype* offset_y = new Dtype[NUM_GAUSS_PER_AXIS_Y];
 
 		// use gmm_component_border_bound as start and stop position of where components are allowed to be within the kernel
-		Dtype gmm_kernel_h_ = (Dtype)this->kernel_h_ - 2*this->gmm_component_border_bound;
-		Dtype gmm_kernel_w_ = (Dtype)this->kernel_w_ - 2*this->gmm_component_border_bound;
+		Dtype gmm_mu_bounds_h_ = (Dtype)this->kernel_h_ - 2*this->gmm_component_border_bound;
+		Dtype gmm_mu_bounds_w_ = (Dtype)this->kernel_w_ - 2*this->gmm_component_border_bound;
 
+		Dtype gmm_mu_border_bound = this->gmm_component_border_bound;
+
+		// if filler for mu is "gmm_mu_bounds" then use min/max values as bounds instead of default (if it is not gmm_mu_bounds then just ignore filler)
+		const FillerParameter& mu_filler_param = this->layer_param_.convolution_param().mu_filler();
+
+		if (mu_filler_param.type() == "gmm_mu_bounds") {
+			gmm_mu_bounds_h_ = mu_filler_param.max() -  mu_filler_param.min();
+			gmm_mu_bounds_w_ = mu_filler_param.max() -  mu_filler_param.min();
+
+			gmm_mu_border_bound = mu_filler_param.min();
+		}
 		for (int i = 0; i < NUM_GAUSS_PER_AXIS_X; i++) {
-			offset_x[i] = this->gmm_component_border_bound + (i)*gmm_kernel_w_ /(Dtype)(NUM_GAUSS_PER_AXIS_X) + (- 0.5+(gmm_kernel_w_)/(Dtype)(2*NUM_GAUSS_PER_AXIS_X));
+			offset_x[i] = gmm_mu_border_bound + (i)*gmm_mu_bounds_w_ /(Dtype)(NUM_GAUSS_PER_AXIS_X) + (- 0.5+(gmm_mu_bounds_w_)/(Dtype)(2*NUM_GAUSS_PER_AXIS_X));
 		}
 		for (int i = 0; i < NUM_GAUSS_PER_AXIS_Y; i++) {
-			offset_y[i] = this->gmm_component_border_bound + (i)*gmm_kernel_h_ /(Dtype)(NUM_GAUSS_PER_AXIS_Y) + (- 0.5+(gmm_kernel_h_)/(Dtype)(2*NUM_GAUSS_PER_AXIS_Y));
+			offset_y[i] = gmm_mu_border_bound + (i)*gmm_mu_bounds_h_ /(Dtype)(NUM_GAUSS_PER_AXIS_Y) + (- 0.5+(gmm_mu_bounds_h_)/(Dtype)(2*NUM_GAUSS_PER_AXIS_Y));
 		}
 
 		// add offset to mean so that (0,0) is at center
