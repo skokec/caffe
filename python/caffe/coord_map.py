@@ -12,7 +12,7 @@ from caffe import layers as L
 PASS_THROUGH_LAYERS = ['AbsVal', 'BatchNorm', 'Bias', 'BNLL', 'Dropout',
                        'Eltwise', 'ELU', 'Log', 'LRN', 'Exp', 'MVN', 'Power',
                        'ReLU', 'PReLU', 'Scale', 'Sigmoid', 'Split', 'TanH',
-                       'Threshold']
+                       'Threshold','BatchNormScale','Python']
 
 
 def conv_params(fn):
@@ -63,13 +63,13 @@ def coord_map(fn):
     s.t. the identity mapping, as for pointwise layers like ReLu, is defined by
     (None, 1, 0) since it is independent of axis and does not transform coords.
     """
-    if fn.type_name in ['Convolution', 'Pooling', 'Im2col']:
+    if fn.type_name in ['Convolution', 'Pooling', 'Im2col', 'GaussianConv']:
         axis, stride, ks, pad = conv_params(fn)
         return axis, 1 / stride, (pad - (ks - 1) / 2) / stride
     elif fn.type_name == 'Deconvolution':
         axis, stride, ks, pad = conv_params(fn)
         return axis, stride, (ks - 1) / 2 - pad
-    elif fn.type_name in PASS_THROUGH_LAYERS:
+    elif fn.type_name in PASS_THROUGH_LAYERS  or fn.type_name in ['Concat'] and len(fn.params) <= 0:
         return None, 1, 0
     elif fn.type_name == 'Crop':
         axis, offset = crop_params(fn)
