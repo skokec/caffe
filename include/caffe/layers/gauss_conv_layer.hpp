@@ -267,7 +267,7 @@ class FastAproxGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
  public:
 
   explicit FastAproxGaussianConvLayer(const LayerParameter& param)
-      : BaseGaussianConvLayer<Dtype>(param){}
+      : BaseGaussianConvLayer<Dtype>(param), current_prefilter_sigma(0) {}
 
   virtual ~FastAproxGaussianConvLayer();
 
