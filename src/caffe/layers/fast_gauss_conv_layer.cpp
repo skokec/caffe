@@ -200,6 +200,9 @@ void FastAproxGaussianConvLayer<Dtype>::LayerSetUp(
 #endif
 
     handles_setup_ = true;
+
+    this->gmm_store_filter_blobs_ = this->layer_param_.convolution_param().gmm_store_filter_blobs();
+
 }
 
 template <typename Dtype>
@@ -530,6 +533,19 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
         buffer_bwd_.filter_offsets = reinterpret_cast<int*>(reinterpret_cast<char *>(workspaceData) + buffer_bwd_.filtered_images_sizes_ + buffer_bwd_.error_image_sizes_ + buffer_bwd_.filter_weights_sizes_);
     }
 
+
+    // we do not need blobs from parent version as they only take up unneccessary memory
+    // but due to legacy models we retain them unless explicity requested not to
+    if (this->gmm_store_filter_blobs_ == false) {
+        this->weight_buffer_->Reshape(1, 1, 1, 1);
+        this->deriv_error_buffer_->Reshape(1, 1, 1, 1);
+        this->deriv_weight_buffer_->Reshape(1, 1, 1, 1);
+        this->deriv_sigma_buffer_->Reshape(1, 1, 1, 1);
+        this->deriv_mu1_buffer_->Reshape(1, 1, 1, 1);
+        this->deriv_mu2_buffer_->Reshape(1, 1, 1, 1);
+        this->random_mu1_buffer_->Reshape(1, 1, 1, 1);
+        this->random_mu2_buffer_->Reshape(1, 1, 1, 1);
+    }
 }
 
 template <typename Dtype>
