@@ -984,6 +984,7 @@ void offset_and_dot_opencv(const Dtype* input_data, const Dtype* error_data,
                 if (width_out_ >= 64) disable_last_column = width_out_ % 64 == 0 ? true : false;
                 else if (width_out_ >= 32) disable_last_column = width_out_ % 32 == 0 ? true : false;
                 else if (width_out_ >= 16) disable_last_column = width_out_ % 16 == 0 ? true : false;
+                else if (width_out_ >= 8) disable_last_column = width_out_ % 8 == 0 ? true : false;
 
                 if (height_out_ >= 64) disable_last_row = height_out_ % 64 == 0 ? true : false;
                 else if (height_out_ >= 32) disable_last_row = height_out_ % 32 == 0 ? true : false;

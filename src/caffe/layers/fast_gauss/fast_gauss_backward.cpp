@@ -31,24 +31,24 @@ FastGaussBackward<Dtype>::FastGaussBackward(const int img_width_in, const int im
         patch_size_w = 1;
         patch_size_h = 1;
     } else {
-	    patch_size_w = img_width <= 16 ? 16 : select_optimal_block_size_bw(img_width, 5, 6); // allowed patch sizes = 2^[5,6] i.e, [32,64]
+        // do not prefer 8 or 16 sizes since this does not lead to full utilization most of the time (use them only for small sizes so not to waste too much resources)
+	    patch_size_w = img_width <= 8 ? 8 :
+                        (img_width <= 16 ? 16 : select_optimal_block_size_bw(img_width, 5, 6)); // allowed patch sizes = 2^[5,6] i.e, [32,64]
 	    patch_size_h = img_height <= 8 ? 8 :
 				    	(img_height <= 16 ? 16 : select_optimal_block_size_bw(img_height, 5, 6)); // allowed patch sizes = 2^[5,6] i.e, [32,64]
 	}
 
 	// decide wheather to use:
 	//  - 32 pixels per warp
-	// 		- if 32x8 pixels and 1 images per block (full utilization)
 	//  - 16 pixels per warp
-	// 		- if 16x8 pixels and 2 images per block (full utilization)
-	// 		- if 16x8 pixels and 1 images per block (half utilization)
+    //  - 8 pixels per warp
+    //	- 1 pixel per warp
 
 	int boundary_img_width = img_width - floor(img_width/patch_size_w) * patch_size_w;
 
-	int warp_pixel_size_x = patch_size_w == 1 ? 1 : std::min(patch_size_w, select_optimal_block_size_bw(boundary_img_width, 4,5)); // allowed warp pixels sizes = 2^[4,5] ie, [16,32]
-	// NOTE:
-	//	we make sure img size is not smaller then what a single block of cuda threads will use (i.e. 32x8)
-
+    // use warp size 1x1 if patch size only 1x1 otherwise use [16,32]x8 (if patch_size_w==8 then use 8x8 but do not prefer it for bigger patches)
+	int warp_pixel_size_x = patch_size_w == 1 ? 1 :
+                                (patch_size_w <= 8 ? 8 : std::min(patch_size_w, select_optimal_block_size_bw(boundary_img_width, 4,5))); // allowed warp pixels sizes = 2^[4,5] ie, [16,32]
 
 	// we will split image into patches of size [IMG_HEIGHT x IMG_WIDTH] so use that as image size, however,
 	// we need to increase the number of images that will be process as each patch is now considered as one image
@@ -62,12 +62,15 @@ FastGaussBackward<Dtype>::FastGaussBackward(const int img_width_in, const int im
 	single_subfeature = (S % 2 == 0 ? false : true);
 
 
-	// last_k_optional==false and NUM_K==3
-	// last_k_optional==true and NUM_K==4 and img_size_w >= 32 or
+	// last_k_optional==false and NUM_K==3 or
+	// last_k_optional==true and NUM_K==4 and img_size_w >= 32
 	//  - NUM_K = 3, BATCH_K_SIZE = 1, _WARP_PIXELS_X = 32
 	//
-	// last_k_optional==true and NUM_K==4 and img_size_w == 16 or
+	// last_k_optional==true and NUM_K==4 and img_size_w == 16
 	//  - NUM_K = 4, BATCH_K_SIZE = 2, _WARP_PIXELS_X = 16
+    //
+    // last_k_optional==true and NUM_K==4 and img_size_w == 8
+    //  - NUM_K = 4, BATCH_K_SIZE = 4, _WARP_PIXELS_X = 8
 
 	use_smaller_warp_and_group_k = false;
 
@@ -75,10 +78,10 @@ FastGaussBackward<Dtype>::FastGaussBackward(const int img_width_in, const int im
 
 	if (K == 4) {
 		if (last_k_optional == false) {
-			// we can automatically use 16 pixel warps and group K by 2
+			// we can automatically use 16 pixel warps and group K by 2 (or 8 pixel warps and group K by 4)
 			use_smaller_warp_and_group_k = true;
 		} else {
-			// if last K is optional (i.e. we do not care for sigma) then decide to use 16 pixel warps only if our patch size is smaller
+			// if last K is optional (i.e. we do not care for sigma) then decide to use 16 or 8 pixel warps only if our patch size is smaller then WARP size (i.e. WARP size=32)
 			use_smaller_warp_and_group_k = (warp_pixel_size_x < 32 ? true : false);
 			// in case that we will be not be grouping then then we can skip last K since it appears to be optional
 			// (NOTE: input K must remain the same to correctly load the data !!
@@ -207,32 +210,40 @@ void FastGaussBackward<float>::call_cuda_kernel(CUDAParams& params) {
 			fast_gauss_backward_multi_subfeatures_patch_64x64(patch_size_w, patch_size_h, max_offset, use_smaller_warp_and_group_k, num_images, use_interpolation, single_subfeature, params);
 		} else if (patch_size_w >= 32) {
 			fast_gauss_backward_multi_subfeatures_patch_32x64(patch_size_w, patch_size_h, max_offset, use_smaller_warp_and_group_k, num_images, use_interpolation, single_subfeature, params);
-		} else {
+		} else if (patch_size_w >= 16) {
 			fast_gauss_backward_multi_subfeatures_patch_16x64(patch_size_w, patch_size_h, max_offset, use_smaller_warp_and_group_k, num_images, use_interpolation, single_subfeature, params);
+		} else {
+			fast_gauss_backward_multi_subfeatures_patch_8x64(patch_size_w, patch_size_h, max_offset, use_smaller_warp_and_group_k, num_images, use_interpolation, single_subfeature, params);
 		}
 	} else if (patch_size_h >= 32) {
 		if (patch_size_w >= 64) {
 			fast_gauss_backward_multi_subfeatures_patch_64x32(patch_size_w, patch_size_h, max_offset, use_smaller_warp_and_group_k, num_images, use_interpolation, single_subfeature, params);
 		} else if (patch_size_w >= 32) {
 			fast_gauss_backward_multi_subfeatures_patch_32x32(patch_size_w, patch_size_h, max_offset, use_smaller_warp_and_group_k, num_images, use_interpolation, single_subfeature, params);
-		} else {
+		} else if (patch_size_w >= 16) {
 			fast_gauss_backward_multi_subfeatures_patch_16x32(patch_size_w, patch_size_h, max_offset, use_smaller_warp_and_group_k, num_images, use_interpolation, single_subfeature, params);
+		} else {
+			fast_gauss_backward_multi_subfeatures_patch_8x32(patch_size_w, patch_size_h, max_offset, use_smaller_warp_and_group_k, num_images, use_interpolation, single_subfeature, params);
 		}
 	} else if (patch_size_h >= 16) {
 		if (patch_size_w >= 64) {
 			fast_gauss_backward_multi_subfeatures_patch_64x16(patch_size_w, patch_size_h, max_offset, use_smaller_warp_and_group_k, num_images, use_interpolation, single_subfeature, params);
 		} else if (patch_size_w >= 32) {
 			fast_gauss_backward_multi_subfeatures_patch_32x16(patch_size_w, patch_size_h, max_offset, use_smaller_warp_and_group_k, num_images, use_interpolation, single_subfeature, params);
-		} else {
+		} else if (patch_size_w >= 16) {
 			fast_gauss_backward_multi_subfeatures_patch_16x16(patch_size_w, patch_size_h, max_offset, use_smaller_warp_and_group_k, num_images, use_interpolation, single_subfeature, params);
+		} else {
+			fast_gauss_backward_multi_subfeatures_patch_8x16(patch_size_w, patch_size_h, max_offset, use_smaller_warp_and_group_k, num_images, use_interpolation, single_subfeature, params);
 		}
 	} else {
 		if (patch_size_w >= 64) {
 			fast_gauss_backward_multi_subfeatures_patch_64x8(patch_size_w, patch_size_h, max_offset, use_smaller_warp_and_group_k, num_images, use_interpolation, single_subfeature, params);
 		} else if (patch_size_w >= 32) {
 			fast_gauss_backward_multi_subfeatures_patch_32x8(patch_size_w, patch_size_h, max_offset, use_smaller_warp_and_group_k, num_images, use_interpolation, single_subfeature, params);
-		} else {
+		} else if (patch_size_w >= 16) {
 			fast_gauss_backward_multi_subfeatures_patch_16x8(patch_size_w, patch_size_h, max_offset, use_smaller_warp_and_group_k, num_images, use_interpolation, single_subfeature, params);
+		} else {
+			fast_gauss_backward_multi_subfeatures_patch_8x8(patch_size_w, patch_size_h, max_offset, use_smaller_warp_and_group_k, num_images, use_interpolation, single_subfeature, params);
 		}
 
 	}

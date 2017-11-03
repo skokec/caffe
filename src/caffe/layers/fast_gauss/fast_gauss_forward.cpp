@@ -35,7 +35,8 @@ FastGaussForward<Dtype>::FastGaussForward(const int img_width_in, const int img_
 		patch_size_w = 1;
 		patch_size_h = 1;
 	} else {
-		patch_size_w = img_width <= 16 ? 16 : select_optimal_block_size(img_width, 5, 6); // allowed patch sizes = 2^[5,6] i.e, [32,64]
+		patch_size_w = img_width <= 8 ? 8 :
+					   	(img_width <= 16 ? 16 : select_optimal_block_size(img_width, 5, 6)); // allowed patch sizes = 2^[5,6] i.e, [32,64]
 		patch_size_h = img_height <= 8 ? 8 :
 						   (img_height <= 16 ? 16 : select_optimal_block_size(img_height, 5, 6)); // allowed patch sizes = 2^[5,6] i.e, [32,64]
 	}
@@ -46,14 +47,19 @@ FastGaussForward<Dtype>::FastGaussForward(const int img_width_in, const int img_
     //  - 16 pixels per warp
     // 		- if 16x8 pixels and 2 images per block (full utilization)
     // 		- if 16x8 pixels and 1 images per block (half utilization)
+	//  - 8 pixels per warp
+	// 		- if 8x8 pixels and 4 images per block (full utilization)
+	// 		- if 8x8 pixels and 2 images per block (half utilization)
+	// 		- if 8x8 pixels and 1 images per block (1/4 utilization)
 	//	- 1 pixel per warp
 	//		- if 1x1 pixels and 16 images per block (half utilization) (32 images uses too much shared memory so we cannot have full utilization)
 
     int boundry_img_width = img_width - floor(img_width/patch_size_w) * patch_size_w;
 
 
-	// use warp size 1x1 if patch size only 1x1 otherwise use [16,32]x8
-	warp_pixel_size_x = patch_size_w == 1 ? 1 : std::min(patch_size_w, select_optimal_block_size(boundry_img_width, 4,5)); // allowed warp pixels sizes = 2^[4,5] ie, [16,32]
+	// use warp size 1x1 if patch size only 1x1 otherwise use [16,32]x8 (if patch_size_w==8 then use 8x8 but do not prefer it)
+	warp_pixel_size_x = patch_size_w == 1 ? 1 :
+							(patch_size_w <= 8 ? 8 : std::min(patch_size_w, select_optimal_block_size(boundry_img_width, 2,5))); // allowed warp pixels sizes = 2^[3,4,5] i.e. [8,16,32]
 	warp_pixel_size_y = patch_size_h == 1 ? 1 : 8;
 
     int new_img_parts_width = (int)ceil((float)img_width / patch_size_w);

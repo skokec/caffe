@@ -1844,7 +1844,7 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussBackwardWithGroundtruth) {
 
 TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussConvolution) {
 
-    Caffe::SetDevice(0);
+    Caffe::SetDevice(1);
 
     typedef typename TypeParam::Dtype Dtype;
 
@@ -1860,7 +1860,7 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussConvolution) {
     const int F = 96;
     const int S = 16;
     const int G = 4;
-    const int W = 16;
+    const int W = 8;
     const int H = 32;
 
     const bool use_interpolation = true;
@@ -2117,10 +2117,10 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussBackward) {
 
 
     const int N = 16;
-    const int F = 32;
+    const int F = 64;
     const int S = 16;
     const int G = 2;
-    const int W = 16;
+    const int W = 8;
     const int H = 32;
 
 
