@@ -10,6 +10,7 @@
 
 #include <opencv2/opencv.hpp>
 #include <opencv2/gpu/gpu.hpp>
+#include <caffe/layers/gauss_conv_layer.hpp>
 
 namespace caffe {
 
@@ -240,12 +241,15 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
     const int stride_h = stride_data[0];
     const int stride_w = stride_data[1];
 
+    const int max_width = std::max(this->width_out_,this->width_);
+    const int max_height = std::max(this->height_out_,this->height_);
+
     // Specify workspace limit for kernels directly until we have a
     // planning strategy and a rewrite of Caffe's GPU memory mangagement
     size_t workspace_limit_bytes = 8*1024*1024;
 
     // use inter buffer for both fwd and bwd passes so allocate buffer with suitable size for both
-    interm_buffer_.Reshape(this->num_, std::max(this->channels_ * this->NUM_K, this->num_output_), height, width);
+    interm_buffer_.Reshape(this->num_, std::max(this->channels_ * this->NUM_K, this->num_output_), max_height, max_width);
 
     this->prefilter_kernel_.Reshape(1,1,this->prefilter_h_, this->prefilter_w_);
 
@@ -280,14 +284,14 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
     this->tmp_param_buffer_.Reshape(2, this->conv_in_channels_, this->NUM_GAUSS, this->conv_out_channels_);
 
 
-    forward_obj.reset(new caffe::FastGaussForward<Dtype>(this->width_out_, this->height_out_, this->num_, this->channels_, this->num_output_, this->NUM_GAUSS, this->use_interpolation_));
+    forward_obj.reset(new caffe::FastGaussForward<Dtype>(this->width_, this->height_, this->width_out_, this->height_out_, this->num_, this->channels_, this->num_output_, this->NUM_GAUSS, this->use_interpolation_));
     forward_obj->get_allocation_sizes(this->kernel_w_, this->kernel_h_,
                                       &buffer_fwd_.filtered_images_sizes_,
                                       &buffer_fwd_.filter_weights_sizes_,
                                       &buffer_fwd_.filter_offsets_sizes_);
 
     // check how much memory do we need for our custom kernels
-    backward_grad_obj.reset(new caffe::FastGaussBackward<Dtype>(this->width_out_, this->height_out_, this->num_, this->channels_, this->num_output_, this->NUM_GAUSS, this->NUM_K, this->last_k_optional, this->use_interpolation_));
+    backward_grad_obj.reset(new caffe::FastGaussBackward<Dtype>(this->width_, this->height_, this->width_out_, this->height_out_, this->num_, this->channels_, this->num_output_, this->NUM_GAUSS, this->NUM_K, this->last_k_optional, this->use_interpolation_));
 
     // WARNING: if this->kernel_w_ or this->kernel_h_ changes then memory will not be allocated properly so we should use here
     //          maximum kernel_w_ and kernel_h_ allowed
@@ -302,11 +306,17 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
     // we use the same buffer as for forward pass but can be shared, just ensure buffer can accomodate both sizes
     size_t filtered_error_sizes_, filter_error_weights_sizes_, filter_error_offsets_sizes_;
 
-    backward_backporp_obj.reset(new caffe::FastGaussForward<Dtype>(this->width_out_, this->height_out_, this->num_, this->num_output_, this->channels_, this->NUM_GAUSS, this->use_interpolation_));
+    backward_backporp_obj.reset(new caffe::FastGaussForward<Dtype>(max_width, max_height, max_width, max_height, this->num_, this->num_output_, this->channels_, this->NUM_GAUSS, this->use_interpolation_));
     backward_backporp_obj->get_allocation_sizes(this->kernel_w_, this->kernel_h_,
                                                 &filtered_error_sizes_,
                                                 &filter_error_weights_sizes_,
                                                 &filter_error_offsets_sizes_);
+
+    buffer_bwd_.resized_top_for_bwd_sizes_ = 0;
+
+    if (this->width_out_ != this->width_ || this->height_out_ != this->height_) {
+        buffer_bwd_.resized_top_for_bwd_sizes_ = this->num_ * this->num_output_* max_height*max_width * sizeof(Dtype);
+    }
 
     // this ensures that buffers will accomodate both fast_gauss_forward functions one used for forward pass and the second one used of error back-propagation
     buffer_fwd_.filtered_images_sizes_ = std::max(buffer_fwd_.filtered_images_sizes_, filtered_error_sizes_);
@@ -326,7 +336,10 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
                                            buffer_bwd_.filtered_images_sizes_ +
                                            buffer_bwd_.error_image_sizes_ +
                                            buffer_bwd_.filter_weights_sizes_ +
-                                           buffer_bwd_.filter_offsets_sizes_);
+                                           buffer_bwd_.filter_offsets_sizes_ );
+
+    total_workspace_bwd_data    = std::max(total_workspace_bwd_data,
+                                           buffer_bwd_.resized_top_for_bwd_sizes_);
 
 #ifdef USE_CUDNN
     for (int i = 0; i < bottom.size(); i++) {
@@ -531,6 +544,9 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
         buffer_bwd_.error_images = reinterpret_cast<Dtype*>(reinterpret_cast<char *>(workspaceData) + buffer_bwd_.filtered_images_sizes_);
         buffer_bwd_.filter_weights = reinterpret_cast<Dtype*>(reinterpret_cast<char *>(workspaceData) + buffer_bwd_.filtered_images_sizes_ + buffer_bwd_.error_image_sizes_);
         buffer_bwd_.filter_offsets = reinterpret_cast<int*>(reinterpret_cast<char *>(workspaceData) + buffer_bwd_.filtered_images_sizes_ + buffer_bwd_.error_image_sizes_ + buffer_bwd_.filter_weights_sizes_);
+
+        // we can reuse workspace data since it will not be used at the same time
+        buffer_bwd_.resized_top_for_bwd = reinterpret_cast<Dtype*>(reinterpret_cast<char *>(workspaceData));
     }
 
 
@@ -771,6 +787,12 @@ void offset_and_sum_opencv(const Dtype* input_data,
         cv::Mat interm_mat(conv_in_channels_ * height_,width_, CV_32F, (Dtype*)input_data + n * conv_in_channels_ * width_ * height_);
         cv::Mat top_mat(conv_out_channels_ * height_out_, width_out_, CV_32F, output_data + n * conv_out_channels_ * width_out_  * height_out_);
 
+        int border_x = width_/2 - width_out_/2;
+        int border_y = height_/2 - height_out_/2;
+
+        border_x = border_x > 0 ? border_x : 0;
+        border_y = border_y > 0 ? border_y : 0;
+
         top_mat.setTo(0);
 
         for (int f_offset = 0; f_offset < conv_out_channels_; f_offset+=F_BATCH) {
@@ -813,30 +835,25 @@ void offset_and_sum_opencv(const Dtype* input_data,
                                     interpol_w *= (dx == 0 ? (1-interpol_off_x) : interpol_off_x);
                                     interpol_w *= (dy == 0 ? (1-interpol_off_y) : interpol_off_y);
 
-                                    cv::Rect interm_roi(std::max(0, access_x_off),
-                                                        std::max(0, access_y_off) + access_s_offset,
-                                                        std::min(width_ + access_x_off, width_ - access_x_off),
-                                                        std::min(height_ + access_y_off, height_ - access_y_off));
+                                    cv::Rect interm_roi(border_x+std::max(0, access_x_off),
+                                                        border_y+std::max(0, access_y_off) + access_s_offset,
+                                                        std::min(width_out_ + access_x_off, width_out_ - access_x_off),
+                                                        std::min(height_out_ + access_y_off, height_out_ - access_y_off));
 
                                     cv::Rect top_roi(std::max(0, -access_x_off),
                                                      std::max(0, -access_y_off) + access_f_offset,
-                                                     std::min(width_ + access_x_off, width_ - access_x_off),
-                                                     std::min(height_ + access_y_off, height_ - access_y_off));
+                                                     std::min(width_out_ + access_x_off, width_out_ - access_x_off),
+                                                     std::min(height_out_ + access_y_off, height_out_ - access_y_off));
 
-                                    top_mat(top_roi) +=  interpol_w * interm_mat(interm_roi);
+                                    //std::cout << "top_roi: " << top_roi << " interm_roi: " << interm_roi  << std::endl;
+                                    if (top_roi.width > 0 && top_roi.height > 0 && interm_roi.width > 0 && interm_roi.height > 0) {
+                                        top_mat(top_roi) += interpol_w * interm_mat(interm_roi);
 
-                                    /*for (int jj = 0; jj < height_out_; ++jj) {
-                                        for (int ii = 0; ii < width_out_; ++ii) {
-                                            if (0 <= jj + access_y_off && jj + access_y_off < height_ &&
-                                                0 <= ii + access_x_off && ii + access_x_off < width_) {
-
-                                                int in_offset = OFFSET(n, s, jj + access_y_off, ii + access_x_off, num_, conv_in_channels_, height_, width_);
-                                                int out_offset = OFFSET(n, f, jj, ii, num_, conv_out_channels_, height_out_, width_out_);
-
-                                                output_data[out_offset] += interpol_w * input_data[in_offset];
-                                            }
-                                        }
-                                    }*/
+                                        //if (f == 0) {
+                                        //    printf("sum of f,s,g=%d,%d,%d is val: ", f,s,g);
+                                        //    std::cout << top_mat(top_roi) << " with top roi: " << top_roi  << " and inter roi: " << interm_roi << " and iter val " << interm_mat(interm_roi) << std::endl;
+                                        //}
+                                    }
                                 }
                             }
                         }
@@ -902,7 +919,7 @@ void FastAproxGaussianConvLayer<Dtype>::Forward_cpu(
 
             caffe_cpu_gemm<Dtype>(CblasNoTrans, CblasNoTrans, 1 , this->height_ * this->width_, this->prefilter_h_ * this->prefilter_w_,
                                   (Dtype)1., gauss_kernel , col_buff,
-                                  (Dtype)0., interm_data + n * this->width_out_ * this->height_out_);
+                                  (Dtype)0., interm_data + n * this->width_ * this->height_);
         }
 
         //Dtype* interm_data = bottom[i]->mutable_cpu_data();
@@ -946,6 +963,7 @@ void offset_and_dot_opencv(const Dtype* input_data, const Dtype* error_data,
 
     for (int n = 0; n < num_; ++n) {
         //printf("n=%d\n",n);
+
 
         cv::Mat interm_mat(conv_in_channels_ * height_,width_, CV_32F, (Dtype*)input_data + n * conv_in_channels_ * width_ * height_);
         cv::Mat top_mat_org(conv_out_channels_ * height_out_, width_out_, CV_32F, (Dtype*)error_data + n * conv_out_channels_ * width_out_  * height_out_);
@@ -1020,30 +1038,25 @@ void offset_and_dot_opencv(const Dtype* input_data, const Dtype* error_data,
 
                                     cv::Rect interm_roi(std::max(0, access_x_off),
                                                         std::max(0, access_y_off) + access_s_offset,
-                                                        std::min(width_ + access_x_off, width_ - access_x_off),
-                                                        std::min(height_ + access_y_off, height_ - access_y_off));
+                                                        std::min(width_out_ + access_x_off, width_out_ - access_x_off),
+                                                        std::min(height_out_ + access_y_off, height_out_ - access_y_off));
 
                                     cv::Rect top_roi(std::max(0, -access_x_off),
                                                      std::max(0, -access_y_off) + access_f_offset,
-                                                     std::min(width_ + access_x_off, width_ - access_x_off),
-                                                     std::min(height_ + access_y_off, height_ - access_y_off));
+                                                     std::min(width_out_ + access_x_off, width_out_ - access_x_off),
+                                                     std::min(height_out_ + access_y_off, height_out_ - access_y_off));
 
 
+                                    if (top_roi.width > 0 && top_roi.height > 0 && interm_roi.width > 0 && interm_roi.height > 0) {
 
-                                    output_data[param_output_offset] += top_mat(top_roi).dot(interpol_w * interm_mat(interm_roi));
+                                        output_data[param_output_offset] += top_mat(top_roi).dot(interpol_w * interm_mat(interm_roi));
 
-                                    /*for (int jj = 0; jj < height_out_; ++jj) {
-                                        for (int ii = 0; ii < width_out_; ++ii) {
-                                            if (0 <= jj + access_y_off && jj + access_y_off < height_ &&
-                                                0 <= ii + access_x_off && ii + access_x_off < width_) {
-
-                                                int in_offset = OFFSET(n, s, jj + access_y_off, ii + access_x_off, num_, conv_in_channels_, height_, width_);
-                                                int out_offset = OFFSET(n, f, jj, ii, num_, conv_out_channels_, height_out_, width_out_);
-
-                                                output_data[out_offset] += interpol_w * input_data[in_offset];
-                                            }
-                                        }
-                                    }*/
+                                        /*if (f == 0 && s == 0 && g == 0)
+                                        {
+                                            printf("sum of f,s,g=%d,%d,%d, n=%d from ", f,s,g, n);
+                                            std::cout << "sum " << output_data[param_output_offset] << " and top " << top_mat(top_roi) << " with top roi: " << top_roi  << " and inter roi: " << interm_roi << " and inter val " << interm_mat(interm_roi) << " and w: " << interpol_w << std::endl;
+                                        }*/
+                                    }
                                 }
                             }
                         }
@@ -1116,16 +1129,22 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>&
 
             Dtype* col_buff = this->col_buffer_.mutable_cpu_data();
 
+            int border_x = this->width_/2 - this->width_out_/2;
+            int border_y = this->height_/2 - this->height_out_/2;
+
+            border_x = border_x > 0 ? border_x : 0;
+            border_y = border_y > 0 ? border_y : 0;
+
             // over all top errors where each output channel is considered individual sample as well
             for (int n = 0; n < this->num_ * this->num_output_; ++n) {
 
                 im2col_cpu(top_error + n * (this->height_out_* this->width_out_), 1, this->height_out_, this->width_out_,
                            this->prefilter_h_, this->prefilter_w_,
-                           this->prefilter_pad_h_, this->prefilter_pad_w_,
+                           this->prefilter_pad_h_ + border_y, this->prefilter_pad_w_ + border_x,
                            this->prefilter_stride_h_, this->prefilter_stride_w_,
                            1,1, col_buff);
 
-                caffe_cpu_gemm<Dtype>(CblasNoTrans, CblasNoTrans, 1 , this->height_out_ * this->width_out_, this->prefilter_h_ * this->prefilter_w_,
+                caffe_cpu_gemm<Dtype>(CblasNoTrans, CblasNoTrans, 1 , this->height_ * this->width_, this->prefilter_h_ * this->prefilter_w_,
                                       (Dtype)1., deriv_error_kernel, col_buff,
                                       (Dtype)0., interm_data + n * this->width_ * this->height_ );
             }
@@ -1154,7 +1173,7 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>&
                                   filter_weights, param_mu1_backprop, param_mu2_backprop,
                                   bottom_error,
                                   this->num_, this->num_output_, this->NUM_GAUSS, this->channels_,
-                                  this->width_out_, this->height_out_,
+                                  this->width_, this->height_,
                                   this->width_, this->height_, this->kernel_w_, this->kernel_h_, FastGaussForward<float>::FGS);
 
 
@@ -1172,7 +1191,7 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>&
         if (this->param_propagate_down_[0]) {
 
             // first pre-filter input data with appropriate derivative filters
-            int size_batch_k = this->num_ * this->channels_ * this->width_out_ * this->height_out_;
+            int size_batch_k = this->num_ * this->channels_ * this->width_ * this->height_;
 
             // make sure col_buffer is big enough
             this->col_buffer_.Reshape(this->prefilter_h_, this->prefilter_w_, this->height_, this->width_);
@@ -1190,8 +1209,37 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>&
                 for (int k = 0; k < this->NUM_K; ++k) {
                     caffe_cpu_gemm<Dtype>(CblasNoTrans, CblasNoTrans, 1 , this->height_ * this->width_, this->prefilter_h_ * this->prefilter_w_,
                                           (Dtype)1., deriv_kernels_data + k * (this->prefilter_h_ * this->prefilter_w_) , col_buff,
-                                          (Dtype)0., interm_data + n * this->width_out_ * this->height_out_ + k * size_batch_k);
+                                          (Dtype)0., interm_data + n * this->width_ * this->height_ + k * size_batch_k);
                 }
+            }
+            Blob<Dtype> top_error_expended;
+            Dtype* top_error_ex = (Dtype*)top_error;
+
+            if (this->width_out_ != this->width_ && this->height_out_ != this->height_) {
+                // extend top data if we have top data of not the same size
+
+                int border_x = this->width_/2 - this->width_out_/2;
+                int border_y = this->height_/2 - this->height_out_/2;
+
+                border_x = border_x > 0 ? border_x : 0;
+                border_y = border_y > 0 ? border_y : 0;
+
+                top_error_expended.Reshape(top[i]->num(), top[i]->channels(), top[i]->height() + 2*border_y, top[i]->width() + 2*border_x);
+
+                top_error_ex = top_error_expended.mutable_cpu_data();
+
+                memset(top_error_ex, 0, sizeof(Dtype) * top_error_expended.count());
+
+                for (int n = 0; n < top_error_expended.num(); ++n) {
+                    for (int c = 0; c < top_error_expended.channels(); ++c) {
+                        for (int h = 0; h < top[i]->height(); ++h) {
+                            for (int w = 0; w < top[i]->width(); ++w) {
+                                top_error_ex[top_error_expended.offset(n,c,border_y+h,border_x+w)] = top_error[top[i]->offset(n,c,h,w)];
+                            }
+                        }
+                    }
+                }
+
             }
 
             // then collect gradients by shifting convolved bottom input data and multiplying it with the top error data
@@ -1199,12 +1247,12 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>&
                 //printf("k=%d\n",k);
 
                 offset_and_dot_opencv(interm_data + k * size_batch_k,
-                                      top_error,
+                                      top_error_ex,
                                       filter_weights, filter_offsets_float_mu1, filter_offsets_float_mu2,
                                       bwd_gradients_data + k * param_size,
                                       this->num_, this->conv_in_channels_, this->NUM_GAUSS, this->conv_out_channels_,
                                       this->width_, this->height_,
-                                      this->width_out_, this->height_out_, this->kernel_w_, this->kernel_h_, this->ignore_edge_gradients_);
+                                      this->width_, this->height_, this->kernel_w_, this->kernel_h_, this->ignore_edge_gradients_);
 
             }
         }

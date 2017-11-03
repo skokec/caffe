@@ -313,7 +313,6 @@ class FastAproxGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
     int prefilter_stride_h_;
     int prefilter_stride_w_;
 
-
     bool handles_setup_;
 	cudaStream_t*  stream_;
 
@@ -402,11 +401,13 @@ class FastAproxGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
 		Dtype* filtered_images;
 		Dtype* filter_weights;
 		int* filter_offsets;
+		Dtype* resized_top_for_bwd;
 
 		size_t error_image_sizes_;
 		size_t filtered_images_sizes_;
 		size_t filter_weights_sizes_;
 		size_t filter_offsets_sizes_;
+		size_t resized_top_for_bwd_sizes_;
 	} buffer_bwd_;
 
 };

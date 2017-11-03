@@ -1,5 +1,6 @@
 #include <vector>
 #include <memory>
+#include <caffe/layers/gauss_conv_layer.hpp>
 
 #include "caffe/layers/gauss_conv_layer.hpp"
 
@@ -290,13 +291,28 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 									   this->buffer_bwd_.error_images,
 									   this->buffer_bwd_.filter_weights,
 									   this->buffer_bwd_.filter_offsets,
-									   this->ignore_edge_gradients_, stream_[0]);
+									   //this->ignore_edge_gradients_, stream_[0]);
+                                       this->ignore_edge_gradients_, 0);
 
 		}
 
 
 		// finally perform back-propagation of the error values
 		if (propagate_down[i]) {
+
+            Dtype const* top_error_for_bwd = top_error;
+
+            // if size top_error (input) is smaller then interm_data (output)  (i.e. expected input should be the same size as output)
+			// then we need to copy top_error to bigger buffer i.e. with padded zeros
+			if (buffer_bwd_.resized_top_for_bwd_sizes_ > 0) {
+				// set zeros
+				caffe_gpu_set_async<Dtype>(buffer_bwd_.resized_top_for_bwd_sizes_ / sizeof(float), (Dtype)0, buffer_bwd_.resized_top_for_bwd, stream_[0]);
+
+				// then copy but with appropriate padding
+				caffe_gpu_pad2d(this->num_ * this->num_output_, this->height_out_, this->width_out_, this->width_/2 - this->width_out_/2, top_error, buffer_bwd_.resized_top_for_bwd, stream_[0]);
+
+                top_error_for_bwd = buffer_bwd_.resized_top_for_bwd;
+			}
 			if (gmm_use_cudnn_in_fast_aproximation_ == false) {
 
                 // NOTE: memory buffer is shared with gradient compute so make sure not to zero it before backward_grad_obj->backward_pass is done
@@ -307,16 +323,20 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
                 CUDA_CHECK(cudaEventRecord(memset_top, paralel_streams[0]));
                 CUDA_CHECK(cudaEventRecord(memset_filter, paralel_streams[1]));
 
-				conv2_data_desc sig_desc(1, this->num_output_* this->num_, this->height_out_, this->width_out_,
-										 this->num_output_* this->num_*this->height_out_*this->width_out_, this->height_out_*this->width_out_, this->width_out_, 1);
+				int max_width = std::max(this->width_out_,this->width_);
+				int max_height = std::max(this->height_out_,this->height_);
+
+				conv2_data_desc sig_desc(1, this->num_output_* this->num_, max_height, max_width,
+										 this->num_output_* this->num_*max_height*max_width, max_height*max_width, max_width, 1);
 
 				conv2_data_desc filt_desc(1,1,this->prefilter_h_,this->prefilter_w_,
 										  this->prefilter_h_ * this->prefilter_w_, this->prefilter_h_ * this->prefilter_w_, this->prefilter_w_, 1);
 
 				conv2_data_desc out_desc = sig_desc;
 
+
 				caffe_gpu_convolve2(interm_data, out_desc,
-									top_error, sig_desc,
+                                    top_error_for_bwd, sig_desc,
 									deriv_error_kernel, filt_desc, stream_[0]);
 
                 CUDA_CHECK(cudaStreamWaitEvent(stream_[0], memset_top, 0));
@@ -327,7 +347,7 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 				// we need to do pre-filtering of the error values
 				CUDNN_CHECK(cudnnConvolutionForward(handle_[0],
 													cudnn::dataType<Dtype>::one,
-													top_descs_[i], top_error,
+													top_descs_[i], top_error_for_bwd,
 													fwd_prefilter_kernel_desc_, deriv_error_kernel,
 													bwd_conv_error_descs_[i],
 													bwd_error_algo_[i], workspace[0], workspace_bwd_error_sizes_[i],

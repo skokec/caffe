@@ -10,17 +10,18 @@ namespace caffe {
 template <typename Dtype>
 class FastGaussForward {
 	// fixed params during construction
+	const int img_width_in, img_height_in;
 	const int img_width, img_height;
 	const int I, S, F, G;
 
 	// this parameters are used as template params for FastGaussBackwardCUDA
-	int patch_size_w, patch_size_h, max_offset, num_images, warp_pixel_size_x;
+	int patch_size_w, patch_size_h, max_offset, num_images, warp_pixel_size_x, warp_pixel_size_y;
 	bool single_feature, single_subfeature, use_interpolation;
 
 public:
 	enum PARAM_FORMAT { SGF, FGS}; // default should be SGF
 
-	FastGaussForward(const int img_width, const int img_height, const int I, const int S, const int F, const int G, const bool use_interpolation);
+	FastGaussForward(const int img_width_in, const int img_height_in, const int img_width, const int img_height, const int I, const int S, const int F, const int G, const bool use_interpolation);
 
 	void get_allocation_sizes(const int kernel_width, const int kernel_height,
 							  size_t* prepared_filtered_images_size,
@@ -39,6 +40,7 @@ public:
 	class CUDAParams {
 	public:
 		// fixed params during construction
+		const int img_width_in, img_height_in;
 		const int img_width, img_height;
 		const int I, S, F, G;
 
@@ -56,8 +58,8 @@ public:
 		cudaStream_t streamId;
 
 	public:
-		CUDAParams(const int img_width, const int img_height, const int I, const int S, const int F, const int G) :
-				img_width(img_width), img_height(img_height), I(I), S(S), F(F), G(G) {
+		CUDAParams(const int img_width_in, const int img_height_in, const int img_width, const int img_height, const int I, const int S, const int F, const int G) :
+				img_width_in(img_width_in), img_height_in(img_height_in), img_width(img_width), img_height(img_height), I(I), S(S), F(F), G(G) {
 		}
 
 		void set_params_for_allocation_call(size_t *alloc_img, size_t *alloc_w, size_t *alloc_off);
@@ -82,15 +84,15 @@ private:
 // we make explicit functions for different combinations of [OFFSET, USE_SINGLE_FEATURE, USE_SINGLE_SUBFEATURE]
 // each function is implemented in separate .cu file to allow for parallel compile
 // (there are 288 combination all-together so this way we can reduce compute time by a factor of 8 if enough CPU cores)
-void fast_gauss_forward_float_off_4_single_feat_0_single_subfeat_0(int IMG_PATCH_SIZE_W, int IMG_PATCH_SIZE_H, int MAX_OFFSET, int WARP_PIXELS_X, int BLOCK_IMAGES, int USE_INTERPOLATION, FastGaussForward<float>::CUDAParams& PARAMS);
-void fast_gauss_forward_float_off_4_single_feat_0_single_subfeat_1(int IMG_PATCH_SIZE_W, int IMG_PATCH_SIZE_H, int MAX_OFFSET, int WARP_PIXELS_X, int BLOCK_IMAGES, int USE_INTERPOLATION, FastGaussForward<float>::CUDAParams& PARAMS);
-void fast_gauss_forward_float_off_4_single_feat_1_single_subfeat_0(int IMG_PATCH_SIZE_W, int IMG_PATCH_SIZE_H, int MAX_OFFSET, int WARP_PIXELS_X, int BLOCK_IMAGES, int USE_INTERPOLATION, FastGaussForward<float>::CUDAParams& PARAMS);
-void fast_gauss_forward_float_off_4_single_feat_1_single_subfeat_1(int IMG_PATCH_SIZE_W, int IMG_PATCH_SIZE_H, int MAX_OFFSET, int WARP_PIXELS_X, int BLOCK_IMAGES, int USE_INTERPOLATION, FastGaussForward<float>::CUDAParams& PARAMS);
+void fast_gauss_forward_float_off_4_single_feat_0_single_subfeat_0(int IMG_PATCH_SIZE_W, int IMG_PATCH_SIZE_H, int MAX_OFFSET, int WARP_PIXELS_X, int WARP_PIXELS_Y, int BLOCK_IMAGES, int USE_INTERPOLATION, FastGaussForward<float>::CUDAParams& PARAMS);
+void fast_gauss_forward_float_off_4_single_feat_0_single_subfeat_1(int IMG_PATCH_SIZE_W, int IMG_PATCH_SIZE_H, int MAX_OFFSET, int WARP_PIXELS_X, int WARP_PIXELS_Y, int BLOCK_IMAGES, int USE_INTERPOLATION, FastGaussForward<float>::CUDAParams& PARAMS);
+void fast_gauss_forward_float_off_4_single_feat_1_single_subfeat_0(int IMG_PATCH_SIZE_W, int IMG_PATCH_SIZE_H, int MAX_OFFSET, int WARP_PIXELS_X, int WARP_PIXELS_Y, int BLOCK_IMAGES, int USE_INTERPOLATION, FastGaussForward<float>::CUDAParams& PARAMS);
+void fast_gauss_forward_float_off_4_single_feat_1_single_subfeat_1(int IMG_PATCH_SIZE_W, int IMG_PATCH_SIZE_H, int MAX_OFFSET, int WARP_PIXELS_X, int WARP_PIXELS_Y, int BLOCK_IMAGES, int USE_INTERPOLATION, FastGaussForward<float>::CUDAParams& PARAMS);
 
-void fast_gauss_forward_float_off_8_single_feat_0_single_subfeat_0(int IMG_PATCH_SIZE_W, int IMG_PATCH_SIZE_H, int MAX_OFFSET, int WARP_PIXELS_X, int BLOCK_IMAGES, int USE_INTERPOLATION, FastGaussForward<float>::CUDAParams& PARAMS);
-void fast_gauss_forward_float_off_8_single_feat_0_single_subfeat_1(int IMG_PATCH_SIZE_W, int IMG_PATCH_SIZE_H, int MAX_OFFSET, int WARP_PIXELS_X, int BLOCK_IMAGES, int USE_INTERPOLATION, FastGaussForward<float>::CUDAParams& PARAMS);
-void fast_gauss_forward_float_off_8_single_feat_1_single_subfeat_0(int IMG_PATCH_SIZE_W, int IMG_PATCH_SIZE_H, int MAX_OFFSET, int WARP_PIXELS_X, int BLOCK_IMAGES, int USE_INTERPOLATION, FastGaussForward<float>::CUDAParams& PARAMS);
-void fast_gauss_forward_float_off_8_single_feat_1_single_subfeat_1(int IMG_PATCH_SIZE_W, int IMG_PATCH_SIZE_H, int MAX_OFFSET, int WARP_PIXELS_X, int BLOCK_IMAGES, int USE_INTERPOLATION, FastGaussForward<float>::CUDAParams& PARAMS);
+void fast_gauss_forward_float_off_8_single_feat_0_single_subfeat_0(int IMG_PATCH_SIZE_W, int IMG_PATCH_SIZE_H, int MAX_OFFSET, int WARP_PIXELS_X, int WARP_PIXELS_Y, int BLOCK_IMAGES, int USE_INTERPOLATION, FastGaussForward<float>::CUDAParams& PARAMS);
+void fast_gauss_forward_float_off_8_single_feat_0_single_subfeat_1(int IMG_PATCH_SIZE_W, int IMG_PATCH_SIZE_H, int MAX_OFFSET, int WARP_PIXELS_X, int WARP_PIXELS_Y, int BLOCK_IMAGES, int USE_INTERPOLATION, FastGaussForward<float>::CUDAParams& PARAMS);
+void fast_gauss_forward_float_off_8_single_feat_1_single_subfeat_0(int IMG_PATCH_SIZE_W, int IMG_PATCH_SIZE_H, int MAX_OFFSET, int WARP_PIXELS_X, int WARP_PIXELS_Y, int BLOCK_IMAGES, int USE_INTERPOLATION, FastGaussForward<float>::CUDAParams& PARAMS);
+void fast_gauss_forward_float_off_8_single_feat_1_single_subfeat_1(int IMG_PATCH_SIZE_W, int IMG_PATCH_SIZE_H, int MAX_OFFSET, int WARP_PIXELS_X, int WARP_PIXELS_Y, int BLOCK_IMAGES, int USE_INTERPOLATION, FastGaussForward<float>::CUDAParams& PARAMS);
 
 #endif  // !CPU_ONLY
 

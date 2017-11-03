@@ -394,7 +394,25 @@ void caffe_gpu_transpose(const int I, const int J, const int K, const int L, con
 template void caffe_gpu_transpose<float>(const int I, const int J, const int K, const int L, const float* X, float* Y, cudaStream_t streamId);
 template void caffe_gpu_transpose<double>(const int I, const int J, const int K, const int L, const double* X, double* Y, cudaStream_t streamId);
 
+template <typename Dtype>
+__global__ void pad2d_kernel(const int N, const int H, const int W, const int pad, const Dtype* x, Dtype* y) {
+	CUDA_KERNEL_LOOP(index, N*H*W) {
+		int w = (index % W) ;
+		int nh = index / W;
+		int h = (nh % H);
+		int n = nh / H;
+
+		y[OFFSET4(0,n,h + pad,w+pad, 1, N, H+2*pad,W+2*pad)] = x[index];
+	}
+}
 
 
+template <typename Dtype>
+void caffe_gpu_pad2d(const int I, const int H, const int W, int pad_size, const Dtype* X, Dtype* Y, cudaStream_t streamId) {
+    pad2d_kernel<Dtype><<<CAFFE_GET_BLOCKS(I*H*W), CAFFE_CUDA_NUM_THREADS, 0, streamId>>>(I, H, W, pad_size, X, Y);
+}
+
+template void caffe_gpu_pad2d(const int I, const int H, const int W, int pad_size, const float* X, float* Y, cudaStream_t streamId);
+template void caffe_gpu_pad2d(const int I, const int H, const int W, int pad_size, const double* X, double* Y, cudaStream_t streamId);
 
 }  // namespace caffe

@@ -1047,7 +1047,7 @@ TYPED_TEST(GaussConvolutionLayerTest, TestFastGaussForward) {
     gauss_convolution_param->mutable_sigma_filler()->set_type("constant");
     gauss_convolution_param->mutable_sigma_filler()->set_value(0.8);
 
-    gauss_convolution_param->set_gmm_component_border_bound(100);
+    gauss_convolution_param->set_gmm_component_border_bound(0);
     gauss_convolution_param->set_gmm_sigma_lower_bound(0.5);
 
     gauss_convolution_param->set_gmm_weight_normalization(false);
@@ -1957,7 +1957,7 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussConvolution) {
     gauss_convolution_param->mutable_sigma_filler()->set_type("constant");
     gauss_convolution_param->mutable_sigma_filler()->set_value(0.8);
 
-    gauss_convolution_param->set_gmm_component_border_bound(100);
+    gauss_convolution_param->set_gmm_component_border_bound(0);
     gauss_convolution_param->set_gmm_sigma_lower_bound(0.5);
 
     gauss_convolution_param->set_gmm_weight_normalization(false);
@@ -2107,7 +2107,7 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussBackward) {
 
     typedef typename TypeParam::Dtype Dtype;
 
-    Caffe::SetDevice(0);
+    Caffe::SetDevice(1);
 
     if (Caffe::mode() == Caffe::CPU)
         return;
@@ -2603,7 +2603,7 @@ TYPED_TEST(GaussConvolutionLayerTest, ProfileFastGaussConvolution) {
     gauss_convolution_param->mutable_sigma_filler()->set_type("constant");
     gauss_convolution_param->mutable_sigma_filler()->set_value(0.8);
 
-    gauss_convolution_param->set_gmm_component_border_bound(100);
+    gauss_convolution_param->set_gmm_component_border_bound(0);
     gauss_convolution_param->set_gmm_sigma_lower_bound(0.5);
 
     gauss_convolution_param->set_gmm_weight_normalization(false);
@@ -2765,6 +2765,706 @@ TYPED_TEST(GaussConvolutionLayerTest, ProfileFastGaussBackward) {
             clock_t end_t = clock();
 
             std::cout << "fast_gauss_backward in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
+        }
+    }
+}
+
+TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussConvolution1x1) {
+
+    Caffe::SetDevice(1);
+
+    typedef typename TypeParam::Dtype Dtype;
+
+
+    if (Caffe::mode() == Caffe::CPU)
+        return;
+
+    if (sizeof(Dtype) > 4)
+        return;
+
+    // evaluate size settings
+    const int N = 32;
+    const int F = 64;
+    const int S = 16;
+    const int G = 4;
+    const int W_in = 7;
+    const int H_in = 7;
+
+    const int kernel_size = 7;
+
+    //const int pad = kernel_size/2;
+    const int pad = 0;
+    //const int pad = kernel_size/2  * 2;
+
+    const int W = (W_in + 2 * pad - kernel_size) + 1;
+    const int H = (H_in + 2 * pad - kernel_size) + 1;
+
+    const bool use_interpolation = true;
+
+    Blob<float> blob_input(N,S,H_in,W_in);
+    Blob<int> blob_offsets_x(1, S, G, F);
+    Blob<int> blob_offsets_y(1, S, G, F);
+    Blob<float> blob_offsets_float_x(1, S, G, F);
+    Blob<float> blob_offsets_float_y(1, S, G, F);
+    Blob<float> blob_weights(1, S, G, F);
+    Blob<float> blob_output(N,F,H,W);
+    Blob<float> blob_output_cpu(N,F,H,W);
+    Blob<float> blob_output_cudnn(N,F,H,W);
+
+    FillerParameter const_one_filler_param;
+    const_one_filler_param.set_value(1);
+    ConstantFiller<float> const_one_filer(const_one_filler_param);
+
+    FillerParameter const_zero_filler_param;
+    const_zero_filler_param.set_value(0);
+    ConstantFiller<int> const_zero_filer(const_zero_filler_param);
+    ConstantFiller<float> const_zero_float_filer(const_zero_filler_param);
+
+    FillerParameter rand_filler_param;
+    rand_filler_param.set_std(0.1);
+    GaussianFiller<float> input_filler(rand_filler_param);
+
+    //input_filler.Fill(&blob_input);
+    //input_filler.Fill(&blob_weights);
+
+    const_one_filer.Fill(&blob_input);
+    const_one_filer.Fill(&blob_weights);
+
+
+    input_filler.Fill(&blob_input);
+
+    float* data = blob_input.mutable_cpu_data();
+    for (int n = 0; n < N; ++n){
+        for (int s = 0; s < S; ++s) {
+            for (int i = 0; i < H_in * W_in; ++i) {
+                data[(n * S + s )* H_in * W_in + i] = 1;
+                //data[(n * S + s )* H * W + i] = 2;
+                //data[(n * S + s )* H * W + i] = n + (i % W + 1);
+                //data[(n * S + s )* H * W + i] = n + (i / W + 1);
+                //data[(n * S + s )* H * W + i] = (i % W);
+
+            }
+        }
+    }
+
+    FillerParameter offset_filler_param;
+    offset_filler_param.set_min(2);
+    offset_filler_param.set_max(kernel_size-2);
+    UniformFiller<float> offset_filler(offset_filler_param);
+
+    //offset_filler.Fill(&blob_offsets);
+    const_zero_filer.Fill(&blob_offsets_x);
+    const_zero_filer.Fill(&blob_offsets_y);
+
+    const_zero_float_filer.Fill(&blob_offsets_float_x);
+    const_zero_float_filer.Fill(&blob_offsets_float_y);
+
+    const_zero_float_filer.Fill(&blob_output);
+
+    float* output = Caffe::mode() == Caffe::CPU ? blob_output.mutable_cpu_data() : blob_output.mutable_gpu_data();
+
+    LayerParameter layer_param;
+
+    ConvolutionParameter* gauss_convolution_param = layer_param.mutable_convolution_param();
+
+    gauss_convolution_param->add_kernel_size(kernel_size);
+    gauss_convolution_param->add_stride(1);
+    gauss_convolution_param->add_pad(pad);
+
+    gauss_convolution_param->add_number_gauss(G);
+    gauss_convolution_param->add_number_gauss(1);
+
+    gauss_convolution_param->set_num_output(F);
+
+    //gauss_convolution_param->mutable_weight_filler()->set_type("constant");
+    //gauss_convolution_param->mutable_weight_filler()->set_value(2);
+
+    gauss_convolution_param->mutable_weight_filler()->set_type("gaussian");
+    gauss_convolution_param->mutable_weight_filler()->set_std(0.1);
+
+    gauss_convolution_param->mutable_bias_filler()->set_type("constant");
+    gauss_convolution_param->mutable_bias_filler()->set_value(0);
+
+    gauss_convolution_param->mutable_mu_filler()->set_type("constant");
+    gauss_convolution_param->mutable_mu_filler()->set_value(0);
+
+    gauss_convolution_param->mutable_sigma_filler()->set_type("constant");
+    gauss_convolution_param->mutable_sigma_filler()->set_value(0.8);
+
+    gauss_convolution_param->set_gmm_component_border_bound(0);
+    gauss_convolution_param->set_gmm_sigma_lower_bound(0.5);
+
+    gauss_convolution_param->set_gmm_weight_normalization(false);
+    gauss_convolution_param->set_gmm_gauss_normalization(true);
+    gauss_convolution_param->set_gmm_square_gauss_normalization(false);
+
+    FastAproxGaussianConvLayer<float> layer(layer_param);
+
+
+    LayerParameter cudnn_layer_param;
+
+    ConvolutionParameter* convolution_param =
+            cudnn_layer_param.mutable_convolution_param();
+
+    convolution_param->add_kernel_size(3);
+    convolution_param->add_stride(1);
+    convolution_param->add_pad(1);
+
+    convolution_param->set_num_output(F);
+
+    convolution_param->mutable_weight_filler()->set_type("gaussian");
+    convolution_param->mutable_weight_filler()->set_std(0.1);
+
+    shared_ptr<CuDNNConvolutionLayer<float> > cudnn_layer(new CuDNNConvolutionLayer<float>(cudnn_layer_param));
+
+
+    std::vector<Blob<float>* > blob_bottom_vec;
+    std::vector<Blob<float>* > blob_top_vec;
+    std::vector<Blob<float>* > blob_top_vec_cudnn;
+    std::vector<Blob<float>* > blob_top_vec_cpu;
+
+
+    blob_bottom_vec.push_back(&blob_input);
+
+    blob_top_vec.push_back(&blob_output);
+    blob_top_vec_cudnn.push_back(&blob_output_cudnn);
+    blob_top_vec_cpu.push_back(&blob_output_cpu);
+
+    cudnn_layer->SetUp(blob_bottom_vec, blob_top_vec_cudnn);
+/*
+for (int i = 0; i < 1; ++i) {
+    clock_t start_t = clock();
+    cudnn_layer->Forward(blob_bottom_vec, blob_top_vec_cudnn);
+    cudaDeviceSynchronize();
+    clock_t end_t = clock();
+    std::cout << "CuDNNConvolutionLayer forward pass in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
+}*/
+    std::cout << std::endl;
+    for (int ii = 0; ii < 1; ++ii) {
+
+        layer.SetUp(blob_bottom_vec, blob_top_vec);
+
+        // override offset data with zeros
+        float* filter_offsets_float_mu1 = layer.param_buffer_mu1_->mutable_gpu_data();
+        float* filter_offsets_float_mu2 = layer.param_buffer_mu2_->mutable_gpu_data();
+
+        cudaMemset(filter_offsets_float_mu1, 0, layer.param_buffer_mu1_->count() * sizeof(float));
+        cudaMemset(filter_offsets_float_mu2, 0, layer.param_buffer_mu2_->count() * sizeof(float));
+
+        offset_filler.Fill(layer.param_buffer_mu1_.get());
+        offset_filler.Fill(layer.param_buffer_mu2_.get());
+
+        float* mu1_data = layer.param_buffer_mu1_->mutable_cpu_data();
+        float* mu2_data = layer.param_buffer_mu2_->mutable_cpu_data();
+        float* w_data = layer.param_buffer_w_->mutable_cpu_data();
+
+
+        for (int s = 0; s < S; s++) {
+            for (int g = 0; g < G; g++) {
+                for (int f = 0; f < F; f++) {
+                    //w_data[OFFSET(0,s,g,f, 1, S,G,F)] = floor(w_data[OFFSET(0,s,g,f, 1, S,G,F)] * 100) / 100.0f ;
+                    //w_data[OFFSET(0,s,g,f, 1, S,G,F)] = s;
+                    w_data[OFFSET(0,s,g,f, 1, S,G,F)] = 1;
+                    //mu1_data[OFFSET(0,s,g,f, 1, S,G,F)] = -2.2 + ((f+1)*(1+s)*(g+1)) % 5 ;
+                    //mu2_data[OFFSET(0,s,g,f, 1, S,G,F)] = 3.1 - ((f+1)*(1+s)*(g+1)) % 5 ;
+                    mu1_data[OFFSET(0,s,g,f, 1, S,G,F)] = kernel_size/2;
+                    mu2_data[OFFSET(0,s,g,f, 1, S,G,F)] = kernel_size/2;
+                }
+            }
+        }
+
+        layer.Forward_cpu(blob_bottom_vec, blob_top_vec_cpu);
+
+        layer.Forward_gpu(blob_bottom_vec, blob_top_vec);
+
+        float* output_cpu = blob_top_vec_cpu[0]->mutable_cpu_data();
+        float* output_gpu = blob_top_vec[0]->mutable_cpu_data();
+
+
+        // verify data - since we use 1 for input and wights and 0 for offsets we should get S as output value for all
+
+        const bool compare_by_cpu = true;
+        int found_invalid = 0;
+        //double valid_value = S *G;
+        double valid_value = (S-1) * (S)/2 * G;
+        double diff = 0;
+        double max_diff = 0;
+
+        for (int n = 0; n < N; ++n){
+            for (int f = 0; f < F; ++f) {
+                for (int i = 0; i < H * W; ++i) {
+                    int index = (n * F + f )* H * W + i;
+                    float val = output_gpu[index];
+                    float GT_VALUE = (n + i % W +1 )*G*S;  // for data[] = n + (i % W + 1)
+                    //float GT_VALUE = (n + i / W +1 )*G*S;  // for data[] = n + (i  / W + 1)
+                    //float GT_VALUE = (i % W  ) *G*S;       // for data[] = s
+                    //float GT_VALUE = n + (i % W + 1);      // for just copy
+
+                    if (compare_by_cpu) {
+                        GT_VALUE = output_cpu[index];
+                    }
+                    if (val != val) {
+                        printf("error: got NaN at loc (%d=%d,%d,%d,%d) - should be %f\n",  index, n, f, i / W, i % W, GT_VALUE);
+                    }
+                    // interpolation at the right edge excludes one pixel so ignore those pixels
+
+                    if (std::abs(val - GT_VALUE) / GT_VALUE > 1e-4 && std::abs(val - GT_VALUE) > 1e-7 && (i % W < (W -1) || (W == 1 && H == 1))) {
+                        if (found_invalid < 10)
+                            printf("found invalid output (%f) at loc (%d=%d,%d,%d,%d) - should be %f\n", val, index,  n, f, i / W, i % W, GT_VALUE);
+                        found_invalid++;
+
+                        double current_diff = std::abs(val - GT_VALUE) / GT_VALUE;
+
+                        diff += current_diff;
+
+                        max_diff = std::max(max_diff, current_diff);
+                    }
+                    //if (i % W == 0)
+                    //    std::cout << std::endl;
+                    //std::cout << val << " ";
+                    //std::cout << GT_VALUE << " ";
+                }
+                //std::cout << std::endl;
+            }
+        }
+        //std::cout << std::endl;
+        diff /= found_invalid;
+
+        if (found_invalid > 0)
+            printf("found num of invalid output vals: %d/%d with mean diff val %f and max diff val %f\n",found_invalid, blob_output.count(), diff, max_diff);
+    }
+}
+
+TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussBackward1x1) {
+
+
+    typedef typename TypeParam::Dtype Dtype;
+
+    Caffe::SetDevice(1);
+
+    if (Caffe::mode() == Caffe::CPU)
+        return;
+
+    if (sizeof(Dtype) > 4)
+        return;
+
+
+    const int N = 16;
+    const int F = 64;
+    const int S = 16;
+    const int G = 2;
+    const int W_in = 7;
+    const int H_in = 7;
+
+    const int kernel_size = 7;
+
+    //const int pad = kernel_size/2;
+    const int pad = 0;
+    //const int pad = kernel_size/2  * 2;
+
+    const int W = (W_in + 2 * pad - kernel_size) + 1;
+    const int H = (H_in + 2 * pad - kernel_size) + 1;
+
+    // number of Guassian learning parameters we have (w,mu1,mu2,sigma)
+    // for each parameter we need convolution of input data with specific kernel
+    const int K = 4;
+    const bool use_interpolation = true;
+    const bool ignore_edge_gradients = W*H > 1 ? true : false; // for cpu/gpu compatability (but not for 1x1 test)
+
+    Blob<float> blob_input(N,S,H_in,W_in);
+    //Blob<float> blob_input(N,S * K,H,W);
+    Blob<float> blob_error(N,F,H,W);
+    Blob<float> blob_error_gt(N,F,H,W);
+    Blob<int> blob_offsets_x(1, S, G, F);
+    Blob<int> blob_offsets_y(1, S, G, F);
+    Blob<float> blob_offsets_float_x(1, S, G, F);
+    Blob<float> blob_offsets_float_y(1, S, G, F);
+    Blob<float> blob_weights(1, S, G, F);
+    Blob<float> blob_output(K, S, G, F);
+    Blob<float> blob_output_cpu(K, S, G, F);
+    Blob<float> blob_output_gt(K, S, G, F);
+
+    Blob<float> blob_output_error_cpu(N,S,H_in,W_in);
+    Blob<float> blob_output_error_gt(N,S,H_in,W_in);
+
+    FillerParameter const_one_filler_param;
+    const_one_filler_param.set_value(1);
+    ConstantFiller<float> const_one_filer(const_one_filler_param);
+
+    FillerParameter const_zero_filler_param;
+    const_zero_filler_param.set_value(0);
+    ConstantFiller<int> const_zero_filer(const_zero_filler_param);
+    ConstantFiller<float> const_zero_float_filer(const_zero_filler_param);
+
+    FillerParameter rand_filler_param;
+    rand_filler_param.set_value(1);
+    GaussianFiller<float> input_filler(rand_filler_param);
+
+    input_filler.Fill(&blob_input);
+    input_filler.Fill(&blob_weights);
+    input_filler.Fill(&blob_error);
+    caffe_rng_gaussian<float>(blob_error.count(), float(0), float(0.1), blob_error.mutable_cpu_diff());
+
+
+    //const_one_filer.Fill(&blob_input);
+    //const_one_filer.Fill(&blob_error);
+    //const_one_filer.Fill(&blob_weights);
+
+    float* data = blob_input.mutable_cpu_data();
+    //for (int n = 0; n < N*S*K; ++n){
+    for (int n = 0; n < N; ++n){
+        for (int s = 0; s < S; ++s) {
+            for (int i = 0; i < H_in * W_in; ++i) {
+                //data[( n * S  +   s  )* H_in * W_in + i] = i % W_in + 1;
+                //data[( n * S  +   s  )* H_in * W_in + i] = (s ) +n*4;
+                data[( n * S  +   s  )* H_in * W_in + i] = 1;
+            }
+        }
+    }
+
+    float* error = blob_error.mutable_cpu_diff();
+    for (int n = 0; n < N*F; ++n){
+        for (int i = 0; i < H*W; ++i) {
+            error[n*H*W + i] = 1;
+            //error[n*H*W + i] = i % W + 2;
+            //error[n*H*W + i] = n % F;
+            //error[n*H*W + i] = (n+1);
+        }
+    }
+
+    float* error_gt = blob_error_gt.mutable_cpu_diff();
+    for (int n = 0; n < N*F; ++n){
+        for (int i = 0; i < H*W; ++i) {
+            // set error values at the bottom/right borders to zero for compatability with FastGPU version
+            error_gt[n*H*W + i] = i % W < W -1 && i / W < H-1 ? error[n*H*W + i] : 0;
+        }
+    }
+
+
+    FillerParameter offset_filler_param;
+    offset_filler_param.set_min(2);
+    offset_filler_param.set_max(kernel_size - 2);
+
+    UniformFiller<float> offset_filler(offset_filler_param);
+
+    //offset_filler.Fill(&blob_offsets);
+    const_zero_filer.Fill(&blob_offsets_x);
+    const_zero_filer.Fill(&blob_offsets_y);
+
+    const_zero_float_filer.Fill(&blob_offsets_float_x);
+    const_zero_float_filer.Fill(&blob_offsets_float_y);
+
+    const_zero_float_filer.Fill(&blob_output);
+
+    LayerParameter layer_param;
+    ConvolutionParameter* gauss_convolution_param = layer_param.mutable_convolution_param();
+
+    gauss_convolution_param->add_kernel_size(kernel_size);
+    gauss_convolution_param->add_stride(1);
+    gauss_convolution_param->add_pad(pad);
+
+    gauss_convolution_param->add_number_gauss(G);
+    gauss_convolution_param->add_number_gauss(1);
+
+    gauss_convolution_param->set_num_output(F);
+
+    //gauss_convolution_param->mutable_weight_filler()->set_type("constant");
+    //gauss_convolution_param->mutable_weight_filler()->set_value(1);
+
+    gauss_convolution_param->mutable_weight_filler()->set_type("gaussian");
+    gauss_convolution_param->mutable_weight_filler()->set_std(0.1);
+
+    gauss_convolution_param->mutable_bias_filler()->set_type("constant");
+    gauss_convolution_param->mutable_bias_filler()->set_value(0);
+
+    gauss_convolution_param->mutable_mu_filler()->set_type("constant");
+    gauss_convolution_param->mutable_mu_filler()->set_value(0);
+
+    gauss_convolution_param->mutable_sigma_filler()->set_type("constant");
+    gauss_convolution_param->mutable_sigma_filler()->set_value(0.8);
+
+    gauss_convolution_param->set_gmm_component_border_bound(0);
+    gauss_convolution_param->set_gmm_sigma_lower_bound(0.5);
+
+    gauss_convolution_param->set_gmm_weight_normalization(false);
+    gauss_convolution_param->set_gmm_gauss_normalization(true);
+    gauss_convolution_param->set_gmm_square_gauss_normalization(false);
+
+    FastAproxGaussianConvLayer<float> layer(layer_param);
+    CuDNNGaussianConvLayer<float> layer_gt(layer_param);
+
+    layer.ignore_edge_gradients_ = ignore_edge_gradients;
+
+    LayerParameter cudnn_layer_param;
+
+    ConvolutionParameter* convolution_param =
+            cudnn_layer_param.mutable_convolution_param();
+
+    convolution_param->add_kernel_size(7);
+    convolution_param->add_stride(1);
+    convolution_param->add_pad(2);
+
+    convolution_param->set_num_output(F);
+
+    convolution_param->mutable_weight_filler()->set_type("gaussian");
+    convolution_param->mutable_weight_filler()->set_std(0.01);
+
+    shared_ptr<CuDNNConvolutionLayer<float> > cudnn_layer(new CuDNNConvolutionLayer<float>(cudnn_layer_param));
+
+    std::vector<Blob<float>* > blob_bottom_vec;
+    std::vector<Blob<float>* > blob_top_vec;
+    std::vector<Blob<float>* > blob_top_vec_gt;
+    std::vector<bool > propagate_down;
+    propagate_down.push_back(true);
+
+    blob_bottom_vec.push_back(&blob_input);
+    blob_top_vec.push_back(&blob_error);
+    blob_top_vec_gt.push_back(&blob_error_gt);
+    /*{
+        std::vector<Blob<float>* > blob_bottom_vec_cudnn;
+        std::vector<Blob<float>* > blob_top_vec_cudnn;
+
+        Blob<float> blob_input(N,S,H,W);
+        Blob<float> blob_error(N,F,H,W);
+
+        blob_bottom_vec_cudnn.push_back(&blob_input);
+        blob_top_vec_cudnn.push_back(&blob_error);
+
+        cudnn_layer->SetUp(blob_bottom_vec_cudnn, blob_top_vec_cudnn);
+        cudaDeviceSynchronize();
+
+        for (int i = 0 ; i < 1; ++i) {
+            clock_t start_t = clock();
+            cudnn_layer->Backward(blob_top_vec_cudnn, propagate_down, blob_bottom_vec_cudnn);
+            cudaDeviceSynchronize();
+            clock_t end_t = clock();
+            std::cout << "CuDNNConvolutionLayer backward pass in " << (((float) (end_t - start_t)) / CLOCKS_PER_SEC) << std::endl;
+        }
+    }
+    std::cout << std::endl;*/
+    for (int ii = 0; ii < 1; ++ii) {
+
+        layer.SetUp(blob_bottom_vec, blob_top_vec);
+        layer_gt.SetUp(blob_bottom_vec, blob_top_vec);
+
+        // override offset data with zeros
+        float *filter_offsets_float_mu1 = layer.param_buffer_mu1_->mutable_gpu_data();
+        float *filter_offsets_float_mu2 = layer.param_buffer_mu2_->mutable_gpu_data();
+
+
+        cudaMemset(filter_offsets_float_mu1, 0, layer.param_buffer_mu1_->count() * sizeof(float));
+        cudaMemset(filter_offsets_float_mu2, 0, layer.param_buffer_mu2_->count() * sizeof(float));
+
+        offset_filler.Fill(layer.param_buffer_mu1_.get());
+        offset_filler.Fill(layer.param_buffer_mu2_.get());
+
+        float *w_data = layer.param_buffer_w_->mutable_cpu_data();
+        float *mu1_data = layer.param_buffer_mu1_->mutable_cpu_data();
+        float *mu2_data = layer.param_buffer_mu2_->mutable_cpu_data();
+        float *sigma_data = layer.param_buffer_sigma_->mutable_cpu_data();
+
+        float *filter_offsets_float_mu1_gt = layer_gt.param_buffer_mu1_->mutable_gpu_data();
+        float *filter_offsets_float_mu2_gt = layer_gt.param_buffer_mu2_->mutable_gpu_data();
+
+        cudaMemset(filter_offsets_float_mu1_gt, 0, layer_gt.param_buffer_mu1_->count() * sizeof(float));
+        cudaMemset(filter_offsets_float_mu2_gt, 0, layer_gt.param_buffer_mu2_->count() * sizeof(float));
+
+        float *w_data_gt = layer_gt.param_buffer_w_->mutable_cpu_data();
+        float *mu1_data_gt = layer_gt.param_buffer_mu1_->mutable_cpu_data();
+        float *mu2_data_gt = layer_gt.param_buffer_mu2_->mutable_cpu_data();
+        float *sigma_data_gt = layer_gt.param_buffer_sigma_->mutable_cpu_data();
+
+        for (int s = 0; s < S; s++) {
+            for (int g = 0; g < G; g++) {
+                for (int f = 0; f < F; f++) {
+                    w_data[OFFSET(0,s,g,f, 1, S,G,F)] = 1;
+                    //w_data[OFFSET(0,s,g,f, 1, S,G,F)] = s;
+                    //w_data[OFFSET(0,s,g,f, 1, S,G,F)] = (s+1)*(f+1)*0.01;
+                    //mu1_data[OFFSET(0, s, g, f, 1, S, G, F)] = -2.2 + ((f+1)*(1+s)*(g+1)) % 5 ;
+                    //mu1_data[OFFSET(0, s, g, f, 1, S, G, F)] = kernel_size/2;
+                    //mu2_data[OFFSET(0, s, g, f, 1, S, G, F)] = kernel_size/2;
+
+                    // discretize the weights
+                    //mu1_data[OFFSET(0, s, g, f, 1, S, G, F)] = floor(mu1_data[OFFSET(0, s, g, f, 1, S, G, F)]);
+                    //mu2_data[OFFSET(0, s, g, f, 1, S, G, F)] = floor(mu2_data[OFFSET(0, s, g, f, 1, S, G, F)]);
+/*
+                    w_data_gt[OFFSET(0, s, g, f, 1, S, G, F)] = w_data[OFFSET(0,s,g,f, 1, S,G,F)];
+                    // and set the same values for groundtruth layer
+                    mu1_data_gt[OFFSET(0, s, g, f, 1, S, G, F)] = mu1_data[OFFSET(0, s, g, f, 1, S, G, F)];
+                    mu2_data_gt[OFFSET(0, s, g, f, 1, S, G, F)] = mu2_data[OFFSET(0, s, g, f, 1, S, G, F)];
+                    //mu1_data_gt[OFFSET(0, s, g, f, 1, S, G, F)] = kernel_size/2;
+                    //mu2_data_gt[OFFSET(0, s, g, f, 1, S, G, F)] = kernel_size/2;
+
+                    // set fixed sigma for all components in groundtruth layer
+                    sigma_data_gt[OFFSET(0, s, g, f, 1, S, G, F)] = sigma_data[OFFSET(0, s, g, f, 1, S, G, F)];*/
+                }
+            }
+        }
+/*
+    layer_gt.Backward_gpu(blob_top_vec_gt, propagate_down, blob_bottom_vec);
+
+    // save backproped error values
+    float *backprop_error_gt = blob_output_error_gt.mutable_cpu_data();
+    {
+        caffe_copy(blob_output_error_gt.count(), blob_bottom_vec[0]->cpu_diff(), backprop_error_gt);
+    }
+
+    // save accumulated gradient values
+    float *gradients_gt = blob_output_gt.mutable_cpu_data();
+    {
+        int num_params = layer_gt.param_buffer_w_->count();
+        if (K > 0) caffe_copy(num_params, layer_gt.param_buffer_w_->cpu_diff(), gradients_gt + 0 * num_params );
+        if (K > 1) caffe_copy(num_params, layer_gt.param_buffer_mu1_->cpu_diff(), gradients_gt + 1 * num_params );
+        if (K > 2) caffe_copy(num_params, layer_gt.param_buffer_mu2_->cpu_diff(), gradients_gt + 2 * num_params );
+        if (K > 3) caffe_copy(num_params, layer_gt.param_buffer_sigma_->cpu_diff(), gradients_gt + 3 * num_params);
+    }
+*/
+        caffe_gpu_set(layer.param_buffer_w_->count(), (Dtype)0, (Dtype*)layer.param_buffer_w_->mutable_gpu_diff());
+        caffe_gpu_set(layer.param_buffer_mu1_->count(), (Dtype)0, (Dtype*)layer.param_buffer_mu1_->mutable_gpu_diff());
+        caffe_gpu_set(layer.param_buffer_mu2_->count(), (Dtype)0, (Dtype*)layer.param_buffer_mu2_->mutable_gpu_diff());
+        caffe_gpu_set(layer.param_buffer_sigma_->count(), (Dtype)0, (Dtype*)layer.param_buffer_sigma_->mutable_gpu_diff());
+
+        layer.Backward_cpu(blob_top_vec, propagate_down, blob_bottom_vec);
+
+        // save backproped error values
+        float *backprop_error_cpu = blob_output_error_cpu.mutable_cpu_data();
+        {
+            caffe_copy(blob_output_error_cpu.count(), blob_bottom_vec[0]->cpu_diff(), backprop_error_cpu);
+        }
+
+        // save accumulated gradient values
+        float *gradients_cpu = blob_output_cpu.mutable_cpu_data();
+        {
+            int num_params = layer.param_buffer_w_->count();
+            if (K > 0) caffe_copy(num_params, layer.param_buffer_w_->cpu_diff(), gradients_cpu + 0 * num_params );
+            if (K > 1) caffe_copy(num_params, layer.param_buffer_mu1_->cpu_diff(), gradients_cpu + 1 * num_params );
+            if (K > 2) caffe_copy(num_params, layer.param_buffer_mu2_->cpu_diff(), gradients_cpu + 2 * num_params );
+            if (K > 3) caffe_copy(num_params, layer.param_buffer_sigma_->cpu_diff(), gradients_cpu + 3 * num_params);
+        }
+
+        // reset values for GPU run
+        caffe_gpu_set(layer.param_buffer_w_->count(), (Dtype)0, (Dtype*)layer.param_buffer_w_->mutable_gpu_diff());
+        caffe_gpu_set(layer.param_buffer_mu1_->count(), (Dtype)0, (Dtype*)layer.param_buffer_mu1_->mutable_gpu_diff());
+        caffe_gpu_set(layer.param_buffer_mu2_->count(), (Dtype)0, (Dtype*)layer.param_buffer_mu2_->mutable_gpu_diff());
+        caffe_gpu_set(layer.param_buffer_sigma_->count(), (Dtype)0, (Dtype*)layer.param_buffer_sigma_->mutable_gpu_diff());
+
+
+        layer.Backward_gpu(blob_top_vec, propagate_down, blob_bottom_vec);
+
+        // get ptr to backproped error on gpu
+        const float *backprop_error_gpu = blob_bottom_vec[0]->cpu_diff();
+
+        // save accumulated gradient values
+        float *gradients_gpu_g = blob_output.mutable_gpu_data();
+
+        int num_params = layer.param_buffer_w_->count();
+        if (K > 0) caffe_gpu_memcpy(num_params * sizeof(float), layer.param_buffer_w_->gpu_diff(), gradients_gpu_g + 0 * num_params );
+        if (K > 1) caffe_gpu_memcpy(num_params * sizeof(float), layer.param_buffer_mu1_->gpu_diff(), gradients_gpu_g + 1 * num_params );
+        if (K > 2) caffe_gpu_memcpy(num_params * sizeof(float), layer.param_buffer_mu2_->gpu_diff(), gradients_gpu_g + 2 * num_params );
+        if (K > 3) caffe_gpu_memcpy(num_params * sizeof(float), layer.param_buffer_sigma_->gpu_diff(), gradients_gpu_g + 3 * num_params);
+
+        // get gradients from GPU, but read them on cpu
+        float *gradients_gpu = blob_output.mutable_cpu_data();
+
+        {
+            // verify accumulated gradients
+            int found_invalid = 0;
+
+            //double WH = (double)W*(double)H;
+            double WH = (double) W;
+
+            double GT_VALUE = (double)N*W*H;
+            //double GT_VALUE = N*((WH)*((WH-1))/2); // input x error <== [1..N] x [1 1 .. 1]
+            //double GT_VALUE = H*((WH)*((WH-1))/2); // input x error <== [1..N] x [1 1 .. 1]
+            //double GT_VALUE = N*(((WH-1)*((WH-1)+1)*(2*(WH-1)+1))/6);
+            //double GT_VALUE = H * N * (((WH - 1) * ((WH - 1) + 1) * (2 * (WH - 1) + 1)) / 6); // for i % W  using in data and error !!
+
+            double diff = 0;
+            double max_diff = 0;
+            for (int k = 0; k < K - 1; ++k) { // do not test last K since it is optional by default (i.e. it will not be computed unless there is no computation penalty)
+                //std::cout << "k=" << k << std::endl;
+                for (int s = 0; s < S; ++s) {
+                    for (int g = 0; g < G; ++g) {
+                        for (int f = 0; f < F; ++f) {
+                            int idx = OFFSET(k,s,g,f, K, S,  G, F);
+                            float val = gradients_gpu[idx];
+                            float GT_VALUE = gradients_cpu[idx];
+                            //float GT_VALUE = gradients_gt[idx];
+
+                            if (val != val) {
+                                printf("error: got NaN at loc (%d=%d,%d,%d,%d) - should be %f\n",  idx, k, s,g,f, GT_VALUE);
+                            }
+
+                            if (std::abs(val - GT_VALUE) / GT_VALUE > 1e-4 && std::abs(val - GT_VALUE) > 1e-7) {
+                                if (found_invalid < 10)
+                                    printf("found invalid output (%f) at loc (%d=%d,%d,%d,%d) - should be %f\n", val, idx, k, s,g,f, GT_VALUE);
+                                found_invalid++;
+                                double current_diff = std::abs(val - GT_VALUE) / GT_VALUE;
+
+                                diff += current_diff;
+
+                                max_diff = std::max(max_diff, current_diff);
+
+                            }
+                            //std::cout << val << " ";
+                            //std::cout << GT_VALUE << " ";
+                        }
+                        //std::cout << std::endl;
+                    }
+                }
+            }
+
+            diff /= found_invalid;
+
+            if (found_invalid > 0)
+                printf("found num of invalid accumulated gradient vals: %d/%d with mean diff val %f and max diff val %f\n", found_invalid, (K-1)*S*G*F, diff, max_diff);
+
+        }
+        {
+            // verify accumulated gradients
+            int found_invalid = 0;
+
+            double diff = 0;
+            double max_diff = 0;
+            for (int n = 0; n < N; ++n) {
+                for (int s = 0; s < S; ++s) {
+                    for (int i = 0; i < H_in * W_in; ++i) {
+                        int index = (n * S + s )* H_in * W_in + i;
+                        float val = backprop_error_gpu[index];
+                        float GT_VALUE = backprop_error_cpu[index];
+                        //float GT_VALUE = backprop_error_gt[index];
+
+                        if (val != val) {
+                            printf("error: got NaN at loc (%d=%d,%d,%d,%d) - should be %f\n",  index, n, s, i / W_in, i % W, GT_VALUE);
+                        }
+
+                        if (std::abs(val - GT_VALUE) / GT_VALUE > 1e-4 && std::abs(val - GT_VALUE) > 1e-7 && (i % W_in < (W_in -1) || (W_in == 1 && H_in == 1))) {
+                            if (found_invalid < 10)
+                                printf("found invalid output (%f) at loc (%d=%d,%d,%d,%d) - should be %f\n", val, index, n, s, i / W_in, i % W_in, GT_VALUE);
+                            found_invalid++;
+                            diff += std::abs(val - GT_VALUE) / GT_VALUE;
+
+                            double current_diff = std::abs(val - GT_VALUE) / GT_VALUE;
+
+                            diff += current_diff;
+
+                            max_diff = std::max(max_diff, current_diff);
+
+
+                        }
+                        //if (i % W == 0)
+                        //    std::cout << std::endl;
+                        //std::cout << val << " ";
+                        //std::cout << GT_VALUE << " ";
+                    }
+                    //std::cout << std::endl;
+                }
+            }
+
+            diff /= found_invalid;
+
+            if (found_invalid > 0)
+                printf("found num of invalid backproped-error vals: %d/%d with mean diff val %f and max diff val %f\n", found_invalid, N*S*H_in*W_in, diff, max_diff);
         }
     }
 }

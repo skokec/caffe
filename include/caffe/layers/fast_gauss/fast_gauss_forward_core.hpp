@@ -14,6 +14,7 @@ namespace caffe {
 // TODO: using hardcoded warp size may not be portable (should use warpSize) but this way allows compiler optimization and avoids using dynamic memory allocation
 #define WARP_SIZE 32
 
+#define MIN(x,y) (x < y ? x : y)
 #define MAX(x,y) (x > y ? x : y)
 
 
@@ -262,7 +263,7 @@ public:
         // distribute number  of threads per width and height
         // assign consecutive tid to adjecent memory elemnets where each id handled N-elements (N==BATCH_ELEMENTS)
         WIDTH_TRANSFER = PIXELS_X >= 64 ? PIXELS_X : ( PIXELS_X >= 32 ? 32 : (PIXELS_X >= 16 ? 16 : (PIXELS_X >= 8 ? 8 : 4))),
-        NUM_THREADS_WIDTH = WIDTH_TRANSFER / BATCH_ELEMENTS,
+        NUM_THREADS_WIDTH = MIN(NUM_THREADS, WIDTH_TRANSFER / BATCH_ELEMENTS),
         NUM_THREADS_HEIGHT = MAX(1, NUM_THREADS / NUM_THREADS_WIDTH),
 
         // number of iterations that will be performed during load/store by one thread
@@ -1606,16 +1607,34 @@ fast_gauss_forward_pipeline_kernel(const float* filtered_images,
 #endif
 }
 
-template <int TILE_DIM_YX, int TILE_DIM_S, int TILE_DIM_IMAGE, int BATCH_PIXELS_X, int BATCH_IMAGES, int BLOCK_IMAGES, int NEW_WIDTH, int NEW_HEIGHT, int BORDER_SIZE>
+template <int TILE_DIM_YX, int TILE_DIM_S, int TILE_DIM_IMAGE, int BATCH_PIXELS_X, int BATCH_IMAGES, int BLOCK_IMAGES, int NEW_WIDTH_, int NEW_HEIGHT_, int BORDER_SIZE_>
 __global__ void
-interleave_input_data_kernel(const float* input_data, float* output_data, const int N, const int S, const int img_width, const int img_height, const int num_img_patches_width, const int num_img_patches_height) {
+interleave_input_data_kernel(const float* input_data, float* output_data, const int N, const int S, const int img_width_in, const int img_height_in, const int img_width, const int img_height, const int num_img_patches_width, const int num_img_patches_height) {
 
 // INPUT: input_data  	[ N x S x H x W]
 // OUTPUT output  		[ N/BATCH_N x S x H x BATCH_PIXELS_X x (W / BATCH_PIXELS_X) x BATCH_N]
 
 #ifndef CUBIN_EMBEDDING
-    //static const int BLOCK_COLUMNS = 1;
+    int in_border_y = img_height_in/2 - img_height/2;
+    int in_border_x = img_width_in/2 - img_width/2;
 
+    int NEW_WIDTH = NEW_WIDTH_;
+    int NEW_HEIGHT = NEW_HEIGHT_;
+    int BORDER_SIZE_X = BORDER_SIZE_;
+    int BORDER_SIZE_Y = BORDER_SIZE_;
+
+    // adjust new witdh/height and border size based on difference between input and output sizes
+    // this will allow us to copy border pixels as well
+    if (in_border_y > 0) {
+        int max_height = NEW_HEIGHT + 2*BORDER_SIZE_Y;
+        NEW_HEIGHT = min(max_height,NEW_HEIGHT + in_border_y*2);
+        BORDER_SIZE_Y = max(0,BORDER_SIZE_Y - in_border_y);
+    }
+    if (in_border_x > 0) {
+        int max_width = NEW_WIDTH + 2*BORDER_SIZE_X;
+        NEW_WIDTH = min(max_width,NEW_WIDTH + in_border_x*2);
+        BORDER_SIZE_X = max(0,BORDER_SIZE_X - in_border_x);
+    }
     // TILE_DIM_X <= 256 (NUM threads)
 
     __shared__ float tile[TILE_DIM_IMAGE][TILE_DIM_YX+1];
@@ -1629,10 +1648,13 @@ interleave_input_data_kernel(const float* input_data, float* output_data, const 
     int s = blockIdx.y * TILE_DIM_S + threadIdx.y;
     int n = blockIdx.z * TILE_DIM_IMAGE + threadIdx.z;
 
-    if (yx < img_height * img_width)
+    int x = yx % img_width_in;
+    int y = yx / img_width_in;
+
+    if (yx < img_height_in * img_width_in)
 #pragma unroll
         for (int i = 0; i < TILE_DIM_IMAGE; ++i)
-            tile[i][thread_yx] = input_data[OFFSET(0,n+i,s,yx, 1,N,S,(img_height * img_width))];
+            tile[i][thread_yx] = input_data[OFFSET(n+i,s,y,x, N,S,img_height_in,img_width_in)];
 
     // transpose block offset
     int tid = threadIdx.x +
@@ -1644,8 +1666,8 @@ interleave_input_data_kernel(const float* input_data, float* output_data, const 
     int transposed_yx = blockIdx.x * TILE_DIM_YX + transposed_thread_yx;
 
     // convert to x,y location in transposed output image
-    int transposed_y = transposed_yx / img_width;
-    int transposed_x = transposed_yx % img_width;
+    int transposed_y = transposed_yx / img_width_in;
+    int transposed_x = transposed_yx % img_width_in;
 
     // then split img into patches of uniform size [NEW_HEIGHT, NEW_WIDTH]
     // get index of patch that this pixel will belong to
@@ -1655,7 +1677,7 @@ interleave_input_data_kernel(const float* input_data, float* output_data, const 
 
     __syncthreads();
 
-    if (transposed_yx < img_height * img_width)
+    if (transposed_yx < img_height_in * img_width_in)
         //int dy = 0;
 #pragma unroll
         for (int dy = -1; dy <= 1; ++dy)
@@ -1674,8 +1696,8 @@ interleave_input_data_kernel(const float* input_data, float* output_data, const 
                 transposed_patch_y -= dy * NEW_HEIGHT;
 
                 // add border to output offset, i.e., border is added to width and height on both sides
-                transposed_patch_x += BORDER_SIZE;
-                transposed_patch_y += BORDER_SIZE;
+                transposed_patch_x += BORDER_SIZE_X;
+                transposed_patch_y += BORDER_SIZE_Y;
 
                 int transposed_patch_x_outer = transposed_patch_x % BATCH_PIXELS_X;
                 int transposed_patch_x_inner = transposed_patch_x / BATCH_PIXELS_X;
@@ -1685,8 +1707,8 @@ interleave_input_data_kernel(const float* input_data, float* output_data, const 
 
                 // we write only if x,y values inside valid patch index
                 // this notation works both for main patch as well as for neigbooring patches that need pixels as its border values
-                if (0 <= transposed_patch_x && transposed_patch_x < NEW_WIDTH+2*BORDER_SIZE &&
-                    0 <= transposed_patch_y && transposed_patch_y < NEW_HEIGHT+2*BORDER_SIZE &&
+                if (0 <= transposed_patch_x && transposed_patch_x < NEW_WIDTH+2*BORDER_SIZE_X &&
+                    0 <= transposed_patch_y && transposed_patch_y < NEW_HEIGHT+2*BORDER_SIZE_Y &&
                     0 <= current_patch_x && current_patch_x < num_img_patches_width	&&
                     0 <= current_patch_y && current_patch_y < num_img_patches_height)
                 {
@@ -1697,7 +1719,7 @@ interleave_input_data_kernel(const float* input_data, float* output_data, const 
                         for (int i2 = 0; i2 < (BATCH_IMAGES*BLOCK_IMAGES); ++i2) {
 
                             int output_index = OFFSET8(current_patch_y, current_patch_x, (n+i)/(BATCH_IMAGES*BLOCK_IMAGES), s, transposed_patch_y,transposed_patch_x_outer, transposed_patch_x_inner, i2,
-                                                       num_img_patches_height, num_img_patches_width, N/(BATCH_IMAGES*BLOCK_IMAGES), S, NEW_HEIGHT + 2*BORDER_SIZE, BATCH_PIXELS_X, (NEW_WIDTH + 2*BORDER_SIZE)/ BATCH_PIXELS_X,  BATCH_IMAGES*BLOCK_IMAGES);
+                                                       num_img_patches_height, num_img_patches_width, N/(BATCH_IMAGES*BLOCK_IMAGES), S, NEW_HEIGHT + 2*BORDER_SIZE_Y, BATCH_PIXELS_X, (NEW_WIDTH + 2*BORDER_SIZE_X)/ BATCH_PIXELS_X,  BATCH_IMAGES*BLOCK_IMAGES);
 
                             /*if (transposed_yx == 0)
                                 printf("writing value %f to position %d at patch j,i=%d,%d,  transposed_patch y,x=%d,%d  (transposed y,x=(%d,%d)) img=%d,patch_y=%d,patch_x_outer=%d,k_outer=%d,patch_x_inner=%d,k_inner=%d\n",
@@ -1731,12 +1753,17 @@ private:
         // TILE_DIM_X * TILE_DIM_Y * TILE_DIM_IMAGE gets us to 512 of shared data per block (i.e. 2 kB)
         TILE_DIM_XY = CUDA_THREADS,
         TILE_DIM_S = 1,
-        TILE_DIM_IMAGE = 4	// TODO: check if we have less then 4 images !!
+        TILE_DIM_IMAGE_HUGE = 32,
+        TILE_DIM_IMAGE_BIG = 16,
+        TILE_DIM_IMAGE_SMALL = 4
     };
+    const int img_width_in, img_height_in;
     const int img_width;
     const int img_height;
     const int N;
     const int S;
+
+    int TILE_DIM_IMAGE;
 
     int new_img_parts_width;
     int new_img_parts_height;
@@ -1745,8 +1772,8 @@ private:
     dim3 numBlocks;
 
 public:
-    FastForwardInputImage(const int img_width, const int img_height, const int N, const int S, int new_img_parts_width, int new_img_parts_height) :
-            img_width(img_width), img_height(img_height), N(N), S(S), new_img_parts_width(new_img_parts_width), new_img_parts_height(new_img_parts_height) {
+    FastForwardInputImage(const int img_width_in, const int img_height_in, const int img_width, const int img_height, const int N, const int S, int new_img_parts_width, int new_img_parts_height) :
+            img_width_in(img_width_in), img_height_in(img_height_in), img_width(img_width), img_height(img_height), N(N), S(S), new_img_parts_width(new_img_parts_width), new_img_parts_height(new_img_parts_height) {
 
         threadsPerBlock = dim3 (TILE_DIM_XY, 1, 1);
 
@@ -1754,29 +1781,35 @@ public:
             printf("Invalid number of images: %d. Min allowed %d due to BLOCK_IMAGES=%d and BATCH_IMAGES=%d.\n", N, BLOCK_IMAGES * BATCH_IMAGES, BLOCK_IMAGES, BATCH_IMAGES);
             throw std::exception();
         }
-
-        if (N >= 4 && BLOCK_IMAGES * BATCH_IMAGES <= 4)
-            numBlocks = dim3( ((int)ceil(img_width*img_height) + threadsPerBlock.x - 1) / threadsPerBlock.x,	// over image width and height
-                              ((int)ceil(S/(float)TILE_DIM_S) + threadsPerBlock.z - 1) / threadsPerBlock.z, // over S
-                              ((int)ceil(N/(float)TILE_DIM_IMAGE) + threadsPerBlock.z - 1) / threadsPerBlock.z);					// over N
+        if (N >= TILE_DIM_IMAGE_HUGE && BLOCK_IMAGES * BATCH_IMAGES <= TILE_DIM_IMAGE_HUGE)
+            TILE_DIM_IMAGE = TILE_DIM_IMAGE_HUGE;
+        else if (N >= TILE_DIM_IMAGE_BIG && BLOCK_IMAGES * BATCH_IMAGES <= TILE_DIM_IMAGE_BIG)
+            TILE_DIM_IMAGE = TILE_DIM_IMAGE_BIG;
+        else if (N >= TILE_DIM_IMAGE_SMALL && BLOCK_IMAGES * BATCH_IMAGES <= TILE_DIM_IMAGE_SMALL)
+            TILE_DIM_IMAGE = TILE_DIM_IMAGE_SMALL;
         else if (BLOCK_IMAGES * BATCH_IMAGES <= 1)
-            numBlocks = dim3( ((int)ceil(img_width*img_height) + threadsPerBlock.x - 1) / threadsPerBlock.x,	// over image width and height
-                              ((int)ceil(S/(float)TILE_DIM_S) + threadsPerBlock.z - 1) / threadsPerBlock.z, // over S
-                              ((int)ceil(N/(float)1) + threadsPerBlock.z - 1) / threadsPerBlock.z);					// over N
+            TILE_DIM_IMAGE = 1;
         else {
-            printf("Invalid number of images %d due to incompatability with TILE_DIM_IMAGE=4 or 1, and (BLOCK_IMAGES=%d,BATCH_IMAGES=%d).\n", N, BLOCK_IMAGES, BATCH_IMAGES);
+            printf("Invalid number of images %d due to incompatability with TILE_DIM_IMAGE=[32,16,4 or 1], and (BLOCK_IMAGES=%d,BATCH_IMAGES=%d).\n", N, BLOCK_IMAGES, BATCH_IMAGES);
             throw std::exception();
         }
+        numBlocks = dim3( ((int)ceil(img_width_in*img_height_in) + threadsPerBlock.x - 1) / threadsPerBlock.x,	// over image width and height
+                          ((int)ceil(S/(float)TILE_DIM_S) + threadsPerBlock.z - 1) / threadsPerBlock.z, // over S
+                          ((int)ceil(N/(float)TILE_DIM_IMAGE) + threadsPerBlock.z - 1) / threadsPerBlock.z);					// over N
     }
     size_t get_allocation_size() {
         return sizeof(float) * (NEW_WIDTH + 2*BORDER_SIZE) * (NEW_HEIGHT + 2*BORDER_SIZE) * S *  (N+1) * new_img_parts_width * new_img_parts_height;
     }
     float* create_input(float* interleaved_images_output, const float* filtered_images, cudaStream_t streamId = NULL) {
 
-        if (N >= 4)
-            interleave_input_data_kernel<TILE_DIM_XY,TILE_DIM_S,TILE_DIM_IMAGE, BATCH_PIXELS_X, BATCH_IMAGES, BLOCK_IMAGES, NEW_WIDTH, NEW_HEIGHT, BORDER_SIZE><<<numBlocks,threadsPerBlock, 0, streamId>>>(filtered_images, interleaved_images_output, N,S, img_width, img_height, new_img_parts_width, new_img_parts_height);
+        if (TILE_DIM_IMAGE >= TILE_DIM_IMAGE_HUGE)
+            interleave_input_data_kernel<TILE_DIM_XY,TILE_DIM_S,TILE_DIM_IMAGE_HUGE, BATCH_PIXELS_X, BATCH_IMAGES, BLOCK_IMAGES, NEW_WIDTH, NEW_HEIGHT, BORDER_SIZE><<<numBlocks,threadsPerBlock, 0, streamId>>>(filtered_images, interleaved_images_output, N,S, img_width_in, img_height_in, img_width, img_height, new_img_parts_width, new_img_parts_height);
+        else if (TILE_DIM_IMAGE >= TILE_DIM_IMAGE_BIG)
+            interleave_input_data_kernel<TILE_DIM_XY,TILE_DIM_S,TILE_DIM_IMAGE_BIG, BATCH_PIXELS_X, BATCH_IMAGES, BLOCK_IMAGES, NEW_WIDTH, NEW_HEIGHT, BORDER_SIZE><<<numBlocks,threadsPerBlock, 0, streamId>>>(filtered_images, interleaved_images_output, N,S, img_width_in, img_height_in, img_width, img_height, new_img_parts_width, new_img_parts_height);
+        else if (TILE_DIM_IMAGE >= TILE_DIM_IMAGE_SMALL)
+            interleave_input_data_kernel<TILE_DIM_XY,TILE_DIM_S,TILE_DIM_IMAGE_SMALL, BATCH_PIXELS_X, BATCH_IMAGES, BLOCK_IMAGES, NEW_WIDTH, NEW_HEIGHT, BORDER_SIZE><<<numBlocks,threadsPerBlock, 0, streamId>>>(filtered_images, interleaved_images_output, N,S, img_width_in, img_height_in, img_width, img_height, new_img_parts_width, new_img_parts_height);
         else
-        interleave_input_data_kernel<TILE_DIM_XY,TILE_DIM_S,1, BATCH_PIXELS_X, BATCH_IMAGES, BLOCK_IMAGES, NEW_WIDTH, NEW_HEIGHT, BORDER_SIZE><<<numBlocks,threadsPerBlock, 0, streamId>>>(filtered_images, interleaved_images_output, N,S, img_width, img_height, new_img_parts_width, new_img_parts_height);
+            interleave_input_data_kernel<TILE_DIM_XY,TILE_DIM_S,1, BATCH_PIXELS_X, BATCH_IMAGES, BLOCK_IMAGES, NEW_WIDTH, NEW_HEIGHT, BORDER_SIZE><<<numBlocks,threadsPerBlock, 0, streamId>>>(filtered_images, interleaved_images_output, N,S, img_width_in, img_height_in, img_width, img_height, new_img_parts_width, new_img_parts_height);
 
         if (0) {
             float* filtered_images_cpu = new float[(NEW_WIDTH + 2*BORDER_SIZE)*( NEW_HEIGHT + 2*BORDER_SIZE)* N*S * new_img_parts_width*new_img_parts_height];
@@ -1786,6 +1819,13 @@ public:
 
             cudaMemcpy(filtered_images_cpu, interleaved_images_output, sizeof(float)* (NEW_WIDTH + 2*BORDER_SIZE)*( NEW_HEIGHT + 2*BORDER_SIZE)* N*S*new_img_parts_width*new_img_parts_height, cudaMemcpyDeviceToHost);
             cudaDeviceSynchronize();
+
+            int BATCH_PIXELS_X_ =BATCH_PIXELS_X;
+            int BATCH_IMAGES_ = BATCH_IMAGES;
+            int BLOCK_IMAGES_ = BLOCK_IMAGES;
+            int NEW_WIDTH_ = NEW_WIDTH;
+            int NEW_HEIGHT_ = NEW_HEIGHT;
+            int BORDER_SIZE_ = BORDER_SIZE;
 
             //for (int i = 0; i < (img_width + 2*MAX_OFFSET)*( img_height + 2*MAX_OFFSET)* I*S; ++i) {
             int index =0;
@@ -2217,7 +2257,7 @@ public:
         else if (NUM_BATCH_FEATURES == 2)
             perpare_weights_and_offsets<BlockIndexingT, float2, int2><<<numBlocks,threadsPerBlock, 0, streamId>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, prepared_filter_offsets_and_weights, S, G, F, kernel_w, kernel_h, param_format);
         else
-        perpare_weights_and_offsets<BlockIndexingT, float, int><<<numBlocks,threadsPerBlock, 0, streamId>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, prepared_filter_offsets_and_weights, S, G, F, kernel_w, kernel_h, param_format);
+            perpare_weights_and_offsets<BlockIndexingT, float, int><<<numBlocks,threadsPerBlock, 0, streamId>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, prepared_filter_offsets_and_weights, S, G, F, kernel_w, kernel_h, param_format);
 
         if (0) {
 
@@ -2296,7 +2336,7 @@ public:
     }
 };
 
-template<int _IMG_SIZE_W, int _IMG_SIZE_H, int _MAX_OFFSET, int _WARP_PIXELS_X, int _BLOCK_IMAGES, bool _USE_INTERPOLATION, bool _SINGLE_FEATURE, bool _SINGLE_SUBFEATURE>
+template<int _IMG_SIZE_W, int _IMG_SIZE_H, int _MAX_OFFSET, int _WARP_PIXELS_X, int _WARP_PIXELS_Y, int _BLOCK_IMAGES, bool _USE_INTERPOLATION, bool _SINGLE_FEATURE, bool _SINGLE_SUBFEATURE>
 class FastGaussForwardCUDA {
     enum {
         // Variable parameters
@@ -2323,8 +2363,9 @@ class FastGaussForwardCUDA {
         BLOCK_IMAGES = _BLOCK_IMAGES,
 
         // make use of 32 pixels per WARP but we can split them per multiple images to handle 16px wide images or smaller - decision to use 16px x 2 BATCH_IMGs is done by caller
-        WARP_PIXELS_X = _WARP_PIXELS_X, // this should be only 16 or 32 !!
-        WARP_PIXELS_Y = 8,
+        // in case we have 1x1 image then use 1x1 for _WARP_PIXELS_X x _WARP_PIXELS_X and adjust batching of images and features acordingly
+        WARP_PIXELS_X = _WARP_PIXELS_X, // this should be only 1, 16 or 32 !!
+        WARP_PIXELS_Y = _WARP_PIXELS_Y, // this should be only 1 or 8
 
         IMG_WIDTH = MAX(WARP_PIXELS_X,_IMG_SIZE_W), // NOTE: 32 <= BLOCK_X * BATCH_PIXELS_SIZE_X
         IMG_HEIGHT = MAX(WARP_PIXELS_Y,_IMG_SIZE_H), // NOTE:  8 <= BLOCK_Y * BATCH_PIXELS_SIZE_Y
@@ -2364,13 +2405,13 @@ class FastGaussForwardCUDA {
         NUM_SM = 1, // number of streaming multiprocessors (not used)
 
         BATCH_PIXELS_SIZE_X = 1,
-        BATCH_PIXELS_SIZE_Y = 8,
+        BATCH_PIXELS_SIZE_Y = WARP_PIXELS_Y,
 
-        BLOCK_X = WARP_PIXELS_X/BATCH_PIXELS_SIZE_X,
-        BLOCK_Y = WARP_PIXELS_Y/BATCH_PIXELS_SIZE_Y,
+        BLOCK_X = MAX(1,WARP_PIXELS_X/BATCH_PIXELS_SIZE_X),
+        BLOCK_Y = MAX(1,WARP_PIXELS_Y/BATCH_PIXELS_SIZE_Y),
         BLOCK_FEATURES = _SINGLE_FEATURE ? 1 : 8,
 
-        BATCH_FEATURES_SIZE = _SINGLE_FEATURE ? 1 : (_USE_INTERPOLATION ? 2 : 4),
+        BATCH_FEATURES_SIZE = _SINGLE_FEATURE ? 1 : ( (_USE_INTERPOLATION ? 2 : 4) * (WARP_PIXELS_Y == 1 ? 1 : 1) ),
         BATCH_COMPUTE_FEATURES_SIZE = _SINGLE_FEATURE ? 1 : 2,
 
         BATCH_COMPUTE_SUBFEATURES_SIZE = 1,
@@ -2417,7 +2458,7 @@ public:
             new_img_parts_height((int)ceil((float)img_height / IMG_HEIGHT)),
 
             // initialize classes that will generate inputs
-            image_cuda_prepare(img_width, img_height, I, S, new_img_parts_width,new_img_parts_height),
+            image_cuda_prepare(p.img_width_in, p.img_height_in, img_width, img_height, I, S, new_img_parts_width,new_img_parts_height),
             weight_and_offsets_cuda_prepare(img_width, img_height, I, F, S, G) {
 
         class BlockIndexingPipelineT::Launch block_indexing;
@@ -2511,9 +2552,9 @@ for (int jj = 0; jj < 1; ++jj) {
 };
 
 
-#define RUN_KERNEL_R0(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, ...) \
+#define RUN_KERNEL_R0(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, WARP_PIXELS_Y, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, ...) \
     { \
-        CLASS_NAME<IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE> _kernel_class(PARAMS); \
+        CLASS_NAME<IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, WARP_PIXELS_Y, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE> _kernel_class(PARAMS); \
 		if (PARAMS.alloc_img != NULL || 	\
 			PARAMS.alloc_w != NULL ||	 	\
 			PARAMS.alloc_off != NULL) { 	\
@@ -2523,54 +2564,76 @@ for (int jj = 0; jj < 1; ++jj) {
 		} \
 	}
 
-#define RUN_KERNEL_R1(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS,  ...) \
+#define RUN_KERNEL_R1(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, WARP_PIXELS_Y, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS,  ...) \
 	if (USE_INTERPOLATION) { \
-		RUN_KERNEL_R0(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, true, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
+		RUN_KERNEL_R0(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, WARP_PIXELS_Y, BLOCK_IMAGES, true, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
 	} else { \
 		/*RUN_KERNEL_R0(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, false, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__)*/ \
 		printf("Support for non-interpolation currently disabled. Non-interpolation has not been extensivly tested so disabling support.\n"); \
         throw std::exception(); \
 	}
 
-#define RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, ...) \
+#define RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, WARP_PIXELS_Y, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, ...) \
     if (IMG_PATCH_SIZE_W >= 64) { \
-		RUN_KERNEL_R1(CLASS_NAME, 64, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
+		RUN_KERNEL_R1(CLASS_NAME, 64, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, WARP_PIXELS_Y, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
 	} else if (IMG_PATCH_SIZE_W >= 32) { \
-		RUN_KERNEL_R1(CLASS_NAME, 32, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
+		RUN_KERNEL_R1(CLASS_NAME, 32, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, WARP_PIXELS_Y, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
 	} else { \
-        RUN_KERNEL_R1(CLASS_NAME, 16, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__)  \
+        RUN_KERNEL_R1(CLASS_NAME, 16, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, WARP_PIXELS_Y, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__)  \
 	}
 
 
-#define RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, ...) \
+#define RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, WARP_PIXELS_Y, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, ...) \
 	if (IMG_PATCH_SIZE_H >= 64) { \
-		RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE_W, 64, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
+		RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE_W, 64, MAX_OFFSET, WARP_PIXELS_X, WARP_PIXELS_Y, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
 	} else if (IMG_PATCH_SIZE_H >= 32) { \
-		RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE_W, 32, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
+		RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE_W, 32, MAX_OFFSET, WARP_PIXELS_X, WARP_PIXELS_Y, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
 	} else if (IMG_PATCH_SIZE_H >= 16) { \
-        RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE_W, 16, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
+        RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE_W, 16, MAX_OFFSET, WARP_PIXELS_X, WARP_PIXELS_Y, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
 	} else { \
-        RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE_W, 8, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
+        RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE_W, 8, MAX_OFFSET, WARP_PIXELS_X, WARP_PIXELS_Y, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
 	}
 
-
-#define RUN_KERNEL_R4(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, ...) \
-	if (WARP_PIXELS_X == 16) { \
-		if (BLOCK_IMAGES % 2 == 0) { \
-		    RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, 16, 2, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
-	    } else { \
-		    RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, 16, 1, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
-        } \
-    } else if (WARP_PIXELS_X == 32)  { \
-        RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, 32, 1, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
-	} else { \
-		printf("Unsupported WARP_PIXELS_X: %d. Supported only 16 or 32 at the moment\n", WARP_PIXELS_X); \
+#define RUN_KERNEL_R4_2(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, WARP_PIXELS_Y, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, ...) \
+    if (WARP_PIXELS_X == 1 && WARP_PIXELS_Y == 1) { \
+        /* just pass through if 1x1 since it was defined by RUN_KERNEL_R4 call*/ \
+        RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, WARP_PIXELS_Y, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
+    } else if (WARP_PIXELS_Y == 8) { \
+        RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, 8, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
+    } else { \
+		printf("Unsupported WARP_PIXELS_Y: %d. Supported only 8 at the moment (or 1 when WARP_PIXELS_X==1 as well) \n", WARP_PIXELS_Y); \
         throw std::exception(); \
 	}
 
-#define RUN_KERNEL_R5(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, ...) \
+#define RUN_KERNEL_R4(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, WARP_PIXELS_Y, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, ...) \
+    if (IMG_PATCH_SIZE_W == 1 && IMG_PATCH_SIZE_H == 1 && WARP_PIXELS_X == 1 && WARP_PIXELS_Y == 1) { \
+        /* We need to use 2x1 instead of 1x1 to ensure proper calculation for interpolated values (due to current implmenetation that may not work properly on right edges) */ \
+        if (BLOCK_IMAGES % 16 == 0 && MAX_OFFSET <= 4) { \
+            RUN_KERNEL_R1(CLASS_NAME, 2, 1, 4, 2, 1, 16, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
+        } else if (BLOCK_IMAGES % 8 == 0 && MAX_OFFSET <= 8) { \
+		    RUN_KERNEL_R1(CLASS_NAME, 2, 1, MAX_OFFSET, 2, 1, 8, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
+        } else if (BLOCK_IMAGES % 4 == 0) { \
+		    RUN_KERNEL_R1(CLASS_NAME, 2, 1, MAX_OFFSET, 2, 1, 4, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
+        } else { \
+		    printf("Unsupported BATCH SIZE for 1x1 pixels: Supported only a multiple of 16 (at MAX_OFFSET<=4), 8 (at MAX_OFFSET<=8) or 4 images at the moment\n"); \
+            throw std::exception(); \
+        } \
+    } else if (WARP_PIXELS_X == 16) { \
+		if (BLOCK_IMAGES % 2 == 0) { \
+		    RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, 16, 8, 2, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
+	    } else { \
+		    RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, 16, 8, 1, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
+        } \
+    } else if (WARP_PIXELS_X == 32)  { \
+        RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, 32, 8, 1, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
+	} else { \
+		printf("Unsupported WARP_PIXELS_X: %d. Supported only 16 or 32 at the moment (or 1 when WARP_PIXELS_Y==1 as well) \n", WARP_PIXELS_X); \
+        throw std::exception(); \
+	}
+// NOTE: RUN_KERNEL_R5, RUN_KERNEL_R6 and RUN_KERNEL_R7 below are not called directly - instead they are implemented in seperate files to allow for parallel computation
+#define RUN_KERNEL_R5(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, WARP_PIXELS_Y, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, ...) \
 	if (MAX_OFFSET <= 4) { \
-		RUN_KERNEL_R4(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, 4, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
+		RUN_KERNEL_R4(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, 4, WARP_PIXELS_X, WARP_PIXELS_Y, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
 	} else if (MAX_OFFSET <= 8) { \
         RUN_KERNEL_R4(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, 8, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
 	} else { \
@@ -2581,18 +2644,18 @@ for (int jj = 0; jj < 1; ++jj) {
         RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE, 16, BATCH_IMAGES, USE_INTERPOLATION, __VA_ARGS__) \
     */
 
-#define RUN_KERNEL_R6(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS,  ...) \
+#define RUN_KERNEL_R6(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, WARP_PIXELS_Y, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS,  ...) \
 	if (SINGLE_SUBFEATURE) { \
-		RUN_KERNEL_R5(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, true, PARAMS, __VA_ARGS__) \
+		RUN_KERNEL_R5(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, WARP_PIXELS_Y, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, true, PARAMS, __VA_ARGS__) \
 	} else { \
-		RUN_KERNEL_R5(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, false, PARAMS, __VA_ARGS__) \
+		RUN_KERNEL_R5(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, WARP_PIXELS_Y, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, false, PARAMS, __VA_ARGS__) \
 	}
 
-#define RUN_KERNEL_R7(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS,  ...) \
+#define RUN_KERNEL_R7(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, WARP_PIXELS_Y, BLOCK_IMAGES, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS,  ...) \
 	if (SINGLE_FEATURE) { \
-		RUN_KERNEL_R6(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, true, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
+		RUN_KERNEL_R6(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, WARP_PIXELS_Y, BLOCK_IMAGES, USE_INTERPOLATION, true, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
 	} else { \
-		RUN_KERNEL_R6(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, BLOCK_IMAGES, USE_INTERPOLATION, false, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
+		RUN_KERNEL_R6(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, WARP_PIXELS_X, WARP_PIXELS_Y, BLOCK_IMAGES, USE_INTERPOLATION, false, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
 	}
 
 }

@@ -78,6 +78,9 @@ void caffe_gpu_round(const int N, const Dtype* x, Dtype* y, cudaStream_t streamI
 template <typename Dtype>
 void caffe_gpu_transpose(const int I, const int J, const int K, const int L, const Dtype* X, Dtype* Y, cudaStream_t streamId = 0);
 
+template <typename Dtype>
+void caffe_gpu_pad2d(const int I, const int H, const int W, int pad_size, const Dtype* X, Dtype* Y, cudaStream_t streamId = 0);
+
 
 #define CUDNN_CALL_WITH_STREAM(streamId, CALL) \
 { \

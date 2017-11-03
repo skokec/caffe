@@ -23,6 +23,7 @@ class FastGaussBackward {
 
 public:
 	// fixed params during construction
+	const int img_width_in, img_height_in;
 	const int img_width, img_height;
 	const int I, S, F, G, IN_K;
 	int OUT_K; // this is const but is calculated in constructor
@@ -35,7 +36,7 @@ private:
 
 
 public:
-	FastGaussBackward(const int img_width, const int img_height, const int I, const int S, const int F, const int G, const int K, const bool last_k_optional, const bool use_interpolation);
+	FastGaussBackward(const int img_width_in, const int img_height_in, const int img_width, const int img_height, const int I, const int S, const int F, const int G, const int K, const bool last_k_optional, const bool use_interpolation);
 
 	void get_allocation_sizes(const int kernel_width, const int kernel_height,
                               size_t* prepared_filtered_images_size, size_t* prepared_error_images_size, size_t* prepared_filter_weights_size, size_t* prepared_filter_offsets_size);
@@ -54,6 +55,7 @@ public:
 	class CUDAParams {
 	public:
 		// fixed params during construction
+		const int img_width_in, img_height_in;
 		const int img_width, img_height;
 		const int I, S, F, G, K, IN_K;
 
@@ -70,8 +72,8 @@ public:
 		bool ignore_edge_gradients;
 		cudaStream_t streamId;
 
-		CUDAParams(const int img_width, const int img_height, const int I, const int S, const int F, const int G, const int K, const int IN_K) :
-				img_width(img_width), img_height(img_height), I(I), S(S), F(F), G(G), K(K), IN_K(IN_K){
+		CUDAParams(const int img_width_in, const int img_height_in, const int img_width, const int img_height, const int I, const int S, const int F, const int G, const int K, const int IN_K) :
+				img_width_in(img_width_in), img_height_in(img_height_in), img_width(img_width), img_height(img_height), I(I), S(S), F(F), G(G), K(K), IN_K(IN_K){
 
 		}
 		void set_params_for_allocation_call(size_t* alloc_img, size_t* alloc_err, size_t* alloc_w, size_t* alloc_off);
@@ -100,7 +102,7 @@ private:
 // we make explicit functions for different combinations of
 // each function is implemented in separate .cu file to allow for parallel compile
 // (there are 288 combination all-together so this way we can reduce compute time by a factor of 8 if enough CPU cores)
-
+void fast_gauss_backward_multi_subfeatures_patch_1x1(int IMG_PATCH_SIZE_W, int IMG_PATCH_SIZE_H, int MAX_OFFSET, bool SMALLER_WARP_AND_GROUP_K, int BATCH_IMAGES, bool USE_INTERPOLATION, bool SINGLE_SUBFEATURE, FastGaussBackward<float>::CUDAParams& PARAMS);
 void fast_gauss_backward_multi_subfeatures_patch_16x8(int IMG_PATCH_SIZE_W, int IMG_PATCH_SIZE_H, int MAX_OFFSET, bool SMALLER_WARP_AND_GROUP_K, int BATCH_IMAGES, bool USE_INTERPOLATION, bool SINGLE_SUBFEATURE, FastGaussBackward<float>::CUDAParams& PARAMS);
 void fast_gauss_backward_multi_subfeatures_patch_16x16(int IMG_PATCH_SIZE_W, int IMG_PATCH_SIZE_H, int MAX_OFFSET, bool SMALLER_WARP_AND_GROUP_K, int BATCH_IMAGES, bool USE_INTERPOLATION, bool SINGLE_SUBFEATURE, FastGaussBackward<float>::CUDAParams& PARAMS);
 void fast_gauss_backward_multi_subfeatures_patch_16x32(int IMG_PATCH_SIZE_W, int IMG_PATCH_SIZE_H, int MAX_OFFSET, bool SMALLER_WARP_AND_GROUP_K, int BATCH_IMAGES, bool USE_INTERPOLATION, bool SINGLE_SUBFEATURE, FastGaussBackward<float>::CUDAParams& PARAMS);

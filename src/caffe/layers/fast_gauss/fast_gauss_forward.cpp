@@ -24,17 +24,21 @@ int select_optimal_block_size(int img_size, int min_power, int max_power) {
 }
 
 template <typename Dtype>
-FastGaussForward<Dtype>::FastGaussForward(const int img_width, const int img_height, const int I, const int S, const int F, const int G, const bool use_interpolation)  :
-        img_width(img_width), img_height(img_height), I(I), S(S), F(F), G(G), use_interpolation(use_interpolation) {
+FastGaussForward<Dtype>::FastGaussForward(const int img_width_in, const int img_height_in, const int img_width, const int img_height, const int I, const int S, const int F, const int G, const bool use_interpolation)  :
+		img_width_in(img_width_in), img_height_in(img_height_in), img_width(img_width), img_height(img_height), I(I), S(S), F(F), G(G), use_interpolation(use_interpolation) {
 
     // calls either FastGaussForwardCUDA->run_kernel() or FastGaussForwardCUDA->get_allocation_sizes()
     // if prepared_filtered_images_size, prepared_filter_weights_size OR prepared_filter_offsets_size are not NULL
 
     // decide which size of patch to use to minimize wasted memory/processing
-    patch_size_w = img_width <= 16 ? 16 : select_optimal_block_size(img_width, 5, 6); // allowed patch sizes = 2^[5,6] i.e, [32,64]
-    patch_size_h = img_height <= 8 ? 8 :
-                       (img_height <= 16 ? 16 : select_optimal_block_size(img_height, 5, 6)); // allowed patch sizes = 2^[5,6] i.e, [32,64]
-
+	if (img_width == 1 && img_height == 1) {
+		patch_size_w = 1;
+		patch_size_h = 1;
+	} else {
+		patch_size_w = img_width <= 16 ? 16 : select_optimal_block_size(img_width, 5, 6); // allowed patch sizes = 2^[5,6] i.e, [32,64]
+		patch_size_h = img_height <= 8 ? 8 :
+						   (img_height <= 16 ? 16 : select_optimal_block_size(img_height, 5, 6)); // allowed patch sizes = 2^[5,6] i.e, [32,64]
+	}
 
     // decide wheather to use:
     //  - 32 pixels per warp
@@ -42,10 +46,15 @@ FastGaussForward<Dtype>::FastGaussForward(const int img_width, const int img_hei
     //  - 16 pixels per warp
     // 		- if 16x8 pixels and 2 images per block (full utilization)
     // 		- if 16x8 pixels and 1 images per block (half utilization)
+	//	- 1 pixel per warp
+	//		- if 1x1 pixels and 16 images per block (half utilization) (32 images uses too much shared memory so we cannot have full utilization)
 
     int boundry_img_width = img_width - floor(img_width/patch_size_w) * patch_size_w;
 
-    warp_pixel_size_x = std::min(patch_size_w, select_optimal_block_size(boundry_img_width, 4,5)); // allowed warp pixels sizes = 2^[4,5] ie, [16,32]
+
+	// use warp size 1x1 if patch size only 1x1 otherwise use [16,32]x8
+	warp_pixel_size_x = patch_size_w == 1 ? 1 : std::min(patch_size_w, select_optimal_block_size(boundry_img_width, 4,5)); // allowed warp pixels sizes = 2^[4,5] ie, [16,32]
+	warp_pixel_size_y = patch_size_h == 1 ? 1 : 8;
 
     int new_img_parts_width = (int)ceil((float)img_width / patch_size_w);
     int new_img_parts_height = (int)ceil((float)img_height / patch_size_h);
@@ -96,7 +105,7 @@ void FastGaussForward<Dtype>::get_allocation_sizes(const int kernel_width, const
                                                    size_t* prepared_filter_weights_size,
                                                    size_t* prepared_filter_offsets_size) {
 
-    CUDAParams params(img_width, img_height, I, S, F, G);
+    CUDAParams params(img_width_in, img_height_in, img_width, img_height, I, S, F, G);
 
     params.set_params_for_allocation_call(prepared_filtered_images_size, prepared_filter_weights_size, prepared_filter_offsets_size);
 
@@ -117,7 +126,7 @@ void FastGaussForward<Dtype>::forward_pass(const Dtype* filtered_images,
                                            int* prepared_filter_offsets,
                                            Dtype* prepared_filter_offsets_and_weights, cudaStream_t streamId) {
 
-	CUDAParams params(img_width, img_height, I, S, F, G);
+	CUDAParams params(img_width_in, img_height_in, img_width, img_height, I, S, F, G);
 
 	params.set_params_for_allocation_call(NULL, NULL, NULL);
 	params.set_params_for_kernel_call(filtered_images, filter_offsets_float_x, filter_offsets_float_y, filter_weights, param_format, kernel_width, kernel_height, output,
@@ -135,36 +144,36 @@ void FastGaussForward<float>::call_cuda_kernel(CUDAParams& params) {
 	if (max_offset <= 4) {
 		if (single_feature == false && single_subfeature == false) {
 			// version where single_feature is false and single_subfeature false
-			fast_gauss_forward_float_off_4_single_feat_0_single_subfeat_0(patch_size_w, patch_size_h, max_offset, warp_pixel_size_x, num_images, use_interpolation, params);
+			fast_gauss_forward_float_off_4_single_feat_0_single_subfeat_0(patch_size_w, patch_size_h, max_offset, warp_pixel_size_x, warp_pixel_size_y, num_images, use_interpolation, params);
 
 		} else if (single_feature == false && single_subfeature == true) {
 			// version where single_feature is false and single_subfeature true
-			fast_gauss_forward_float_off_4_single_feat_0_single_subfeat_1(patch_size_w, patch_size_h, max_offset, warp_pixel_size_x, num_images, use_interpolation, params);
+			fast_gauss_forward_float_off_4_single_feat_0_single_subfeat_1(patch_size_w, patch_size_h, max_offset, warp_pixel_size_x, warp_pixel_size_y, num_images, use_interpolation, params);
 
 		} else if (single_feature == true && single_subfeature == false) {
 			// version where single_feature is true and single_subfeature false
-			fast_gauss_forward_float_off_4_single_feat_1_single_subfeat_0(patch_size_w, patch_size_h, max_offset, warp_pixel_size_x, num_images, use_interpolation, params);
+			fast_gauss_forward_float_off_4_single_feat_1_single_subfeat_0(patch_size_w, patch_size_h, max_offset, warp_pixel_size_x, warp_pixel_size_y, num_images, use_interpolation, params);
 
 		} else {
 			// version where single_feature is true and single_subfeature true
-			fast_gauss_forward_float_off_4_single_feat_1_single_subfeat_1(patch_size_w, patch_size_h, max_offset, warp_pixel_size_x, num_images, use_interpolation, params);
+			fast_gauss_forward_float_off_4_single_feat_1_single_subfeat_1(patch_size_w, patch_size_h, max_offset, warp_pixel_size_x, warp_pixel_size_y, num_images, use_interpolation, params);
 		}
 	} else if (max_offset <= 8) {
 		if (single_feature == false && single_subfeature == false) {
 			// version where single_feature is false and single_subfeature false
-			fast_gauss_forward_float_off_8_single_feat_0_single_subfeat_0(patch_size_w, patch_size_h, max_offset, warp_pixel_size_x, num_images, use_interpolation, params);
+			fast_gauss_forward_float_off_8_single_feat_0_single_subfeat_0(patch_size_w, patch_size_h, max_offset, warp_pixel_size_x, warp_pixel_size_y, num_images, use_interpolation, params);
 
 		} else if (single_feature == false && single_subfeature == true) {
 			// version where single_feature is false and single_subfeature true
-			fast_gauss_forward_float_off_8_single_feat_0_single_subfeat_1(patch_size_w, patch_size_h, max_offset, warp_pixel_size_x, num_images, use_interpolation, params);
+			fast_gauss_forward_float_off_8_single_feat_0_single_subfeat_1(patch_size_w, patch_size_h, max_offset, warp_pixel_size_x, warp_pixel_size_y, num_images, use_interpolation, params);
 
 		} else if (single_feature == true && single_subfeature == false) {
 			// version where single_feature is true and single_subfeature false
-			fast_gauss_forward_float_off_8_single_feat_1_single_subfeat_0(patch_size_w, patch_size_h, max_offset, warp_pixel_size_x, num_images, use_interpolation, params);
+			fast_gauss_forward_float_off_8_single_feat_1_single_subfeat_0(patch_size_w, patch_size_h, max_offset, warp_pixel_size_x, warp_pixel_size_y, num_images, use_interpolation, params);
 
 		} else {
 			// version where single_feature is true and single_subfeature true
-			fast_gauss_forward_float_off_8_single_feat_1_single_subfeat_1(patch_size_w, patch_size_h, max_offset, warp_pixel_size_x, num_images, use_interpolation, params);
+			fast_gauss_forward_float_off_8_single_feat_1_single_subfeat_1(patch_size_w, patch_size_h, max_offset, warp_pixel_size_x, warp_pixel_size_y, num_images, use_interpolation, params);
 		}
 	} else {
 		printf("Unsupported filter size: %d. Supported only max up to 9x9 and 17x17 at the moment\n", max_offset);
@@ -189,8 +198,8 @@ void FastGaussForward<double>::call_cuda_kernel(CUDAParams& params) {
     throw std::exception();
 }
 
-template FastGaussForward<float>::FastGaussForward(const int img_width, const int img_height, const int I, const int S, const int F, const int G, const bool use_interpolation);
-template FastGaussForward<double>::FastGaussForward(const int img_width, const int img_height, const int I, const int S, const int F, const int G, const bool use_interpolation);
+template FastGaussForward<float>::FastGaussForward(const int img_width_in, const int img_height_in, const int img_width, const int img_height, const int I, const int S, const int F, const int G, const bool use_interpolation);
+template FastGaussForward<double>::FastGaussForward(const int img_width_in, const int img_height_in, const int img_width, const int img_height, const int I, const int S, const int F, const int G, const bool use_interpolation);
 
 template void FastGaussForward<float>::get_allocation_sizes(const int kernel_width, const int kernel_height, size_t* prepared_filtered_images_size, size_t* prepared_filter_weights_size, size_t* prepared_filter_offsets_size);
 template void FastGaussForward<double>::get_allocation_sizes(const int kernel_width, const int kernel_height, size_t* prepared_filtered_images_size, size_t* prepared_filter_weights_size, size_t* prepared_filter_offsets_size);

@@ -289,12 +289,14 @@ namespace caffe {
 
             // distribute number  of threads per width and height
             // assign consecutive tid to adjecent memory elemnets where each id handled N-elements (N==BATCH_ELEMENTS)
-            NUM_THREADS_WIDTH = WIDTH / BATCH_ELEMENTS,
-            NUM_THREADS_HEIGHT = NUM_THREADS / NUM_THREADS_WIDTH,
+            WIDTH_TRANSFER = PIXELS_X >= 64 ? PIXELS_X : ( PIXELS_X >= 32 ? 32 : (PIXELS_X >= 16 ? 16 : (PIXELS_X >= 8 ? 8 : 4))),
+            NUM_THREADS_WIDTH = MIN(NUM_THREADS,WIDTH_TRANSFER / BATCH_ELEMENTS),
+            NUM_THREADS_HEIGHT = MAX(1, NUM_THREADS / NUM_THREADS_WIDTH),
 
             // number of iterations that will be performed during load/store by one thread
-            NUM_ITERATION_Y = MAX(1,CEILING((HEIGHT + 2*_APRON_SIZE_Y) , NUM_THREADS_HEIGHT)),
-            NUM_ITERATION_X = MAX(1, CEILING(WIDTH + 2*_APRON_SIZE_X,NUM_THREADS_WIDTH * BATCH_ELEMENTS))
+            NUM_ITERATION_Y = MAX(1,CEILING((HEIGHT + 2*APRON_SIZE_Y), NUM_THREADS_HEIGHT)),
+            NUM_ITERATION_X = MAX(1, CEILING(WIDTH + 2*APRON_SIZE_X,NUM_THREADS_WIDTH * BATCH_ELEMENTS))
+
         };
 
     private:
@@ -564,10 +566,16 @@ namespace caffe {
         __device__
         void print() {
             __syncthreads();
-            if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0 /*&& blockIdx.x == 0 && blockIdx.y && blockIdx.z == 0*/)
+            if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0)
             {
 
                 printf("printing shared memory:\n");
+                printf("using following settings:\n");
+                printf("WIDTH_TRANSFER: %d\n",WIDTH_TRANSFER);
+                printf("NUM_THREADS_WIDTH: %d\n",NUM_THREADS_WIDTH);
+                printf("NUM_THREADS_HEIGHT: %d\n",NUM_THREADS_HEIGHT);
+                printf("NUM_ITERATION_Y: %d\n",NUM_ITERATION_Y);
+                printf("NUM_ITERATION_X: %d\n",NUM_ITERATION_X);
 
                 for (int s = 0; s < NUM_BUFFER_REPEAT; ++s) {
                     for (int j = 0; j < ALLOC_HEIGHT; ++j){
@@ -929,7 +937,27 @@ namespace caffe {
                     int data_address_index = f_quad_index;
                     int data_quad_index = f % NUM_READ_FEATURES;
 
-                    load_data.output[data_in_index].x = reinterpret_cast<float2*>(load_data.address[data_address_index].quad[data_quad_index] + load_offset)[0].x;
+                    if (BATCH_K_SIZE % 4 == 0) {
+
+                        float4 tmp = reinterpret_cast<float4*>(load_data.address[data_address_index].quad[data_quad_index] + load_offset)[0];
+
+                        if (load_offset % 4 == 0)
+                            load_data.output[data_in_index].x = tmp.x;
+                        else if (load_offset % 4 == 1)
+                            load_data.output[data_in_index].x = tmp.x;
+                        else if (load_offset % 4 == 2)
+                            load_data.output[data_in_index].x = tmp.x;
+                        else if (load_offset % 4 == 3)
+                            load_data.output[data_in_index].x = tmp.x;
+
+                    } else if (BATCH_K_SIZE % 2 == 0) {
+                        float2 tmp = reinterpret_cast<float2*>(load_data.address[data_address_index].quad[data_quad_index] + load_offset)[0];
+
+                        load_data.output[data_in_index].x = (load_offset % 2 == 0) ? tmp.x : tmp.x;
+
+                    } else {
+                        load_data.output[data_in_index].x = reinterpret_cast<float*>(load_data.address[data_address_index].quad[data_quad_index] + load_offset)[0];
+                    }
                 }
 
                 // compute for current loop
@@ -950,8 +978,17 @@ namespace caffe {
                     else if (f % NUM_READ_FEATURES == 3)
                         compute.output[data_out_index].w += computed_value;
 
-                    /*if (f == 0 && f_index == 0 && thread_x == 0 && thread_y == 0 &&  k == 0 && block_x == 0 && block_y == 0 && g_index == 0 && px == 0) {
-                        printf("computed sum %f from current value from error %f * data %f = computed_value %f at position j,i=%d,%d and k=%d, block y,x=%d,%d and image index:%d and s=%d\n", compute.output[data_out_index].x, weighted_errors[f][px], compute.data[data_in_index].x, computed_value, px / BATCH_PIXELS_SIZE_X, px % BATCH_PIXELS_SIZE_X, k, block_y, block_x,image_index, s_index);
+                    /*if (f + f_index == 15 && thread_x == 0 && thread_y == 0 &&  k == 0 && block_x == 0 && block_y == 0 && g_index == 0 && px == 0) {
+                        float vv = -1;
+                        if (f % NUM_READ_FEATURES == 0)
+                            vv = compute.output[data_out_index].x;
+                        else if (f % NUM_READ_FEATURES == 1)
+                            vv = compute.output[data_out_index].y;
+                        else if (f % NUM_READ_FEATURES == 2)
+                            vv = compute.output[data_out_index].z;
+                        else if (f % NUM_READ_FEATURES == 3)
+                            vv = compute.output[data_out_index].w;
+                        printf("computed sum %f from current value from error %f * data %f = computed_value %f at position j,i=%d,%d and k=%d, block y,x=%d,%d and image index:%d and s=%d\n",vv , weighted_errors[f][px], compute.data[data_in_index].x, computed_value, px / BATCH_PIXELS_SIZE_X, px % BATCH_PIXELS_SIZE_X, k, block_y, block_x,image_index, s_index);
                     }*/
 
                     /*if (g_index == 0 && (f_index +f== 0 || f_index +f == 0 || f_index +f== 0) && s_index == 0 && k == 0)
@@ -1676,14 +1713,14 @@ namespace caffe {
                                 printf("iter: %d, sycned\n", index);
                             printf("pipeline n=%d, s,f=(%d+%d,%d+%d) index %d "
                                            "gl %d (s:%d, f:%d, buff:%d, read addr=%p, write addr=%p, next_img=%d), "
-                                           "off %d (s:%d, f:%d, reg:%d, buff:%d, base_addr=%p, offset_addr=%d), "
-                                           "data %d (s:%d, g:%d, f:%d, buff:%d, reg:%d, w_addr=%d), "
+                                           "off %d (s:%d, f:%d, reg:%d, buff:%d, base_addr=%p, offset_addr=%p (index %d)), "
+                                           "data %d (s:%d, g:%d, f:%d, buff:%d, reg:%d, w_addr=%p (index %d)), "
                                            "compute %d (s:%d, g:%d f:%d, reg:%d)\n",
                                     n, s_offset, s_outer_index, f_offset, 0,
                                     index,
                                     (int)load_global_enabled, load_global.s, load_global.f, global_d, global_load_reading_ptr,global_load_writing_ptr, global_is_next_img,
-                                    pipeline.load_offset.enabled ? 1 : 0 , load_offset_index.s, load_offset_index.f, (int)load_offset_reg_A, shared_d_off, pipeline.load_offset.base_address, off_addr,
-                                    pipeline.load_data.enabled ? 1 : 0 , load_data_index.s, load_data_index.g, load_data_index.f, shared_d_current, (int)load_data_reg_A, w_addr,
+                                    pipeline.load_offset.enabled ? 1 : 0 , load_offset_index.s, load_offset_index.f, (int)load_offset_reg_A, shared_d_off, pipeline.load_offset.base_address, pipeline.load_offset.offset_address, off_addr,
+                                    pipeline.load_data.enabled ? 1 : 0 , load_data_index.s, load_data_index.g, load_data_index.f, shared_d_current, (int)load_data_reg_A, pipeline.load_weights.address, w_addr,
                                     pipeline.compute.enabled ? 1 : 0 , compute_index.s, compute_index.g, compute_index.f, (int)compute_reg_A);
 
 
@@ -1719,6 +1756,11 @@ namespace caffe {
         int warp_id = block_indexing.getWarpId();
         WarpReduce warp_reduce(warp_reduce_storage[warp_id]);
 
+        int s_offset_org = s_offset;
+        int f_offset_org = f_offset;
+
+        float4 out_val_sum[BATCH_GAUSS_SIZE][BATCH_MEM_SUBFEATURES_SIZE * BLOCK_SUBFEATURES][BATCH_FEATURES_SIZE/NUM_READ_FEATURES][NUM_K];
+
         // if one warp handles multiple features then we need to perform warp reduce for each feature individually
         for (int i = 0; i < WARP_SIZE; i+=Bx) {
             // for each feature we will pass values from threads responsible for that feature back to first N threads
@@ -1728,8 +1770,8 @@ namespace caffe {
             //   copy data from [16-32] threads/lane ids back to [0-16] threads/lane ids
             //   (this code can be repeated even smaller Bx)
 
-            s_offset = __shfl_down(s_offset, i);
-            f_offset = __shfl_down(f_offset, i);
+            s_offset = __shfl_down(s_offset_org, i);
+            f_offset = __shfl_down(f_offset_org, i);
 
 #pragma unroll
             for (int g = 0; g < BATCH_GAUSS_SIZE; ++g) {
@@ -1739,10 +1781,14 @@ namespace caffe {
                     for (int f = 0; f < BATCH_FEATURES_SIZE / NUM_READ_FEATURES; ++f) {
 #pragma unroll
                         for (int k = 0; k < NUM_K; ++k) {
-                            if (NUM_READ_FEATURES > 0) out_val[g][s][f][k].x = warp_reduce.Sum(__shfl_down(out_val[g][s][f][k].x,i),Bx);
-                            if (NUM_READ_FEATURES > 1) out_val[g][s][f][k].y = warp_reduce.Sum(__shfl_down(out_val[g][s][f][k].y,i),Bx);
-                            if (NUM_READ_FEATURES > 2) out_val[g][s][f][k].z = warp_reduce.Sum(__shfl_down(out_val[g][s][f][k].z,i),Bx);
-                            if (NUM_READ_FEATURES > 3) out_val[g][s][f][k].w = warp_reduce.Sum(__shfl_down(out_val[g][s][f][k].w,i),Bx);
+                            //if (n_offset == 1)
+                            //    printf("added %f from s,g,f: %d,%d,%d, block: %d,%d and img: %d\n",
+                            //           out_val[g][s][f][k].x, s_offset + s , g_offset + g , f_offset + f * NUM_READ_FEATURES + 0, block_y, block_x, n_offset);
+
+                            if (NUM_READ_FEATURES > 0) out_val_sum[g][s][f][k].x = warp_reduce.Sum(__shfl_down(out_val[g][s][f][k].x,i),Bx);
+                            if (NUM_READ_FEATURES > 1) out_val_sum[g][s][f][k].y = warp_reduce.Sum(__shfl_down(out_val[g][s][f][k].y,i),Bx);
+                            if (NUM_READ_FEATURES > 2) out_val_sum[g][s][f][k].z = warp_reduce.Sum(__shfl_down(out_val[g][s][f][k].z,i),Bx);
+                            if (NUM_READ_FEATURES > 3) out_val_sum[g][s][f][k].w = warp_reduce.Sum(__shfl_down(out_val[g][s][f][k].w,i),Bx);
                         }
                     }
                 }
@@ -1760,13 +1806,13 @@ namespace caffe {
                         for (int f = 0; f < BATCH_FEATURES_SIZE/NUM_READ_FEATURES; ++f) {
 #pragma unroll
                             for (int k = 0; k < NUM_K; ++k) {
-                                /*if (s_offset + s == 0 && g_offset + g == 0 && f_offset + f * NUM_READ_FEATURES + 0 == 0 && k == 0) {
-                                    printf("added %f from block: %d,%d and img: %d\n", out_val[g][s][f][k].x, block_y, block_x, n_offset);
-                                }*/
-                                if (NUM_READ_FEATURES > 0) atomicAdd(&(output[OFFSET(k, s_offset + s, g_offset + g, f_offset + f * NUM_READ_FEATURES + 0, NUM_K, S, G, F)]), out_val[g][s][f][k].x);
-                                if (NUM_READ_FEATURES > 1) atomicAdd(&(output[OFFSET(k, s_offset + s, g_offset + g, f_offset + f * NUM_READ_FEATURES + 1, NUM_K, S, G, F)]), out_val[g][s][f][k].y);
-                                if (NUM_READ_FEATURES > 2) atomicAdd(&(output[OFFSET(k, s_offset + s, g_offset + g, f_offset + f * NUM_READ_FEATURES + 2, NUM_K, S, G, F)]), out_val[g][s][f][k].z);
-                                if (NUM_READ_FEATURES > 3) atomicAdd(&(output[OFFSET(k, s_offset + s, g_offset + g, f_offset + f * NUM_READ_FEATURES + 3, NUM_K, S, G, F)]), out_val[g][s][f][k].w);
+                                //if (s_offset + s == 0 && g_offset + g == 0 && f_offset + f * NUM_READ_FEATURES + 0 == 15 && k == 0) {
+                                //    printf("added %f from s,g,f: %d,%d,%d, block: %d,%d and img: %d\n", out_val_sum[g][s][f][k].x, s_offset + s , g_offset + g , f_offset + f * NUM_READ_FEATURES + 0, block_y, block_x, n_offset);
+                                //}
+                                if (NUM_READ_FEATURES > 0) atomicAdd(&(output[OFFSET(k, s_offset + s, g_offset + g, f_offset + f * NUM_READ_FEATURES + 0, NUM_K, S, G, F)]), out_val_sum[g][s][f][k].x);
+                                if (NUM_READ_FEATURES > 1) atomicAdd(&(output[OFFSET(k, s_offset + s, g_offset + g, f_offset + f * NUM_READ_FEATURES + 1, NUM_K, S, G, F)]), out_val_sum[g][s][f][k].y);
+                                if (NUM_READ_FEATURES > 2) atomicAdd(&(output[OFFSET(k, s_offset + s, g_offset + g, f_offset + f * NUM_READ_FEATURES + 2, NUM_K, S, G, F)]), out_val_sum[g][s][f][k].z);
+                                if (NUM_READ_FEATURES > 3) atomicAdd(&(output[OFFSET(k, s_offset + s, g_offset + g, f_offset + f * NUM_READ_FEATURES + 3, NUM_K, S, G, F)]), out_val_sum[g][s][f][k].w);
                             }
                         }
                     }
@@ -2195,16 +2241,35 @@ namespace caffe {
 #endif
     }
 
-    template <int TILE_DIM_YX, int TILE_DIM_K, int TILE_DIM_IMAGE, int BATCH_PIXELS_X, int BATCH_K, int NEW_WIDTH, int NEW_HEIGHT, int BORDER_SIZE>
+    template <int TILE_DIM_YX, int TILE_DIM_K, int TILE_DIM_IMAGE, int BATCH_PIXELS_X, int BATCH_K, int NEW_WIDTH_, int NEW_HEIGHT_, int BORDER_SIZE_>
     __global__ void
-    interleave_input_data_kernel(const float* input_data, float* output_data, const int N, const int K, const int IN_K, const int img_width, const int img_height, const int num_img_patches_width, const int num_img_patches_height) {
+    interleave_input_data_kernel(const float* input_data, float* output_data, const int N, const int K, const int IN_K, const int img_width_in, const int img_height_in, const int img_width, const int img_height, const int num_img_patches_width, const int num_img_patches_height) {
 
 // INPUT: input_data  	[(N*S) x K x H x W]
 // OUTPUT output  		[(N*S) x H x BATCH_PIXELS_X x (K / BATCH_K) x (W / BATCH_PIXELS_X) x BATCH_K]
         // NOTE: N <= N*S
 
 #ifndef CUBIN_EMBEDDING
-        //static const int BLOCK_COLUMNS = 1;
+        int in_border_y = img_height_in/2 - img_height/2;
+        int in_border_x = img_width_in/2 - img_width/2;
+
+        int NEW_WIDTH = NEW_WIDTH_;
+        int NEW_HEIGHT = NEW_HEIGHT_;
+        int BORDER_SIZE_X = BORDER_SIZE_;
+        int BORDER_SIZE_Y = BORDER_SIZE_;
+
+        // adjust new witdh/height and border size based on difference between input and output sizes
+        // this will allow us to copy border pixels as well
+        if (in_border_y > 0) {
+            int max_height = NEW_HEIGHT + 2*BORDER_SIZE_Y;
+            NEW_HEIGHT = min(max_height,NEW_HEIGHT + in_border_y*2);
+            BORDER_SIZE_Y = max(0,BORDER_SIZE_Y - in_border_y);
+        }
+        if (in_border_x > 0) {
+            int max_width = NEW_WIDTH + 2*BORDER_SIZE_X;
+            NEW_WIDTH = min(max_width,NEW_WIDTH + in_border_x*2);
+            BORDER_SIZE_X = max(0,BORDER_SIZE_X - in_border_x);
+        }
 
         // TILE_DIM_X <= 256 (NUM threads) / K = 64
         // TILE_DIM_Y <= K
@@ -2222,11 +2287,13 @@ namespace caffe {
         int k = blockIdx.y * TILE_DIM_K + thread_k;
         int n = blockIdx.z * TILE_DIM_IMAGE + threadIdx.z;
 
+        int x = yx % img_width_in;
+        int y = yx / img_width_in;
 
-        if (yx < img_height * img_width)
+        if (yx < img_height_in * img_width_in)
 #pragma unroll
             for (int i = 0; i < TILE_DIM_IMAGE; ++i)
-                tile[i][thread_k][thread_yx] = input_data[OFFSET(0,n+i,k,yx, 1,N,IN_K,(img_height * img_width))];
+                tile[i][thread_k][thread_yx] = input_data[OFFSET(n+i,k,y,x, N,IN_K,img_height_in, img_width_in)];
 
         // transpose block offset
         int tid = threadIdx.x +
@@ -2240,8 +2307,8 @@ namespace caffe {
         int transposed_yx = blockIdx.x * TILE_DIM_YX + transposed_thread_yx;
 
         // convert to x,y location in transposed output image
-        int transposed_y = transposed_yx / img_width;
-        int transposed_x = transposed_yx % img_width;
+        int transposed_y = transposed_yx / img_width_in;
+        int transposed_x = transposed_yx % img_width_in;
 
         // then split img into patches of uniform size [NEW_HEIGHT, NEW_WIDTH]
         // get index of patch that this pixel will belong to
@@ -2251,7 +2318,7 @@ namespace caffe {
 
         __syncthreads();
 
-        if (transposed_yx < img_height * img_width)
+        if (transposed_yx < img_height_in * img_width_in)
             //int dy = 0;
 #pragma unroll
             for (int dy = -1; dy <= 1; ++dy)
@@ -2270,8 +2337,8 @@ namespace caffe {
                     transposed_patch_y -= dy * NEW_HEIGHT;
 
                     // add border to output offset, i.e., border is added to width and height on both sides
-                    transposed_patch_x += BORDER_SIZE;
-                    transposed_patch_y += BORDER_SIZE;
+                    transposed_patch_x += BORDER_SIZE_X;
+                    transposed_patch_y += BORDER_SIZE_Y;
 
                     int transposed_patch_x_outer = transposed_patch_x % BATCH_PIXELS_X;
                     int transposed_patch_x_inner = transposed_patch_x / BATCH_PIXELS_X;
@@ -2284,8 +2351,8 @@ namespace caffe {
 
                     // we write only if x,y values inside valid patch index
                     // this notation works both for main patch as well as for neigbooring patches that need pixels as its border values
-                    if (0 <= transposed_patch_x && transposed_patch_x < NEW_WIDTH+2*BORDER_SIZE &&
-                        0 <= transposed_patch_y && transposed_patch_y < NEW_HEIGHT+2*BORDER_SIZE &&
+                    if (0 <= transposed_patch_x && transposed_patch_x < NEW_WIDTH+2*BORDER_SIZE_X &&
+                        0 <= transposed_patch_y && transposed_patch_y < NEW_HEIGHT+2*BORDER_SIZE_Y &&
                         0 <= current_patch_x && current_patch_x < num_img_patches_width	&&
                         0 <= current_patch_y && current_patch_y < num_img_patches_height)
                     {
@@ -2294,7 +2361,7 @@ namespace caffe {
                         for (int i = 0; i < TILE_DIM_IMAGE; ++i) {
 
                             int output_index = OFFSET8(current_patch_y, current_patch_x, n+i,transposed_patch_y,transposed_patch_x_outer, transposed_k_outer, transposed_patch_x_inner, transposed_k_inner,
-                                                       num_img_patches_height, num_img_patches_width, N, NEW_HEIGHT + 2*BORDER_SIZE, BATCH_PIXELS_X, K / BATCH_K, (NEW_WIDTH + 2*BORDER_SIZE)/ BATCH_PIXELS_X,  BATCH_K);
+                                                       num_img_patches_height, num_img_patches_width, N, NEW_HEIGHT + 2*BORDER_SIZE_X, BATCH_PIXELS_X, K / BATCH_K, (NEW_WIDTH + 2*BORDER_SIZE_Y)/ BATCH_PIXELS_X,  BATCH_K);
 
                             //if (transposed_k == 0 && transposed_yx == 35)
                             //	printf("writing value %f to position %d at patch j,i=%d,%d,  transposed_patch y,x=%d,%d  (transposed y,x=(%d,%d)) img=%d,patch_y=%d,patch_x_outer=%d,k_outer=%d,patch_x_inner=%d,k_inner=%d\n",
@@ -2328,6 +2395,7 @@ namespace caffe {
             TILE_DIM_Y = NUM_K,
             TILE_DIM_IMAGE = BlockIndexingT::BATCH_IMAGES >= 4 ? 4 : 1	//
         };
+        const int img_width_in, img_height_in;
         const int img_width;
         const int img_height;
         const int N;
@@ -2342,12 +2410,12 @@ namespace caffe {
         dim3 numBlocks;
 
     public:
-        FastBackwardInputImage(const int img_width, const int img_height, const int N, const int S, const int K, const int IN_K, int new_img_parts_width, int new_img_parts_height) :
-                img_width(img_width), img_height(img_height), N(N), S(S), K(K), IN_K(IN_K), new_img_parts_width(new_img_parts_width), new_img_parts_height(new_img_parts_height) {
+        FastBackwardInputImage(const int img_width_in, const int img_height_in, const int img_width, const int img_height, const int N, const int S, const int K, const int IN_K, int new_img_parts_width, int new_img_parts_height) :
+                img_width_in(img_width_in), img_height_in(img_height_in), img_width(img_width), img_height(img_height), N(N), S(S), K(K), IN_K(IN_K), new_img_parts_width(new_img_parts_width), new_img_parts_height(new_img_parts_height) {
 
             threadsPerBlock = dim3 (TILE_DIM_X, TILE_DIM_Y, 1);
 
-            numBlocks = dim3( ((int)ceil(img_width*img_height) + threadsPerBlock.x - 1) / threadsPerBlock.x,	// over image width and height
+            numBlocks = dim3( ((int)ceil(img_width_in*img_height_in) + threadsPerBlock.x - 1) / threadsPerBlock.x,	// over image width and height
                               ((int)ceil(K) + threadsPerBlock.y - 1) / threadsPerBlock.y,												// over K
                               ((int)ceil(N*S/(float)TILE_DIM_IMAGE) + threadsPerBlock.z - 1) / threadsPerBlock.z);					// over N * S
 
@@ -2358,7 +2426,7 @@ namespace caffe {
         float* create_input(float* interleaved_images_output, const float* filtered_images, cudaStream_t streamId = NULL) {
 
 
-            interleave_input_data_kernel<TILE_DIM_X,TILE_DIM_Y,TILE_DIM_IMAGE, BATCH_PIXELS_X, BATCH_K, NEW_WIDTH, NEW_HEIGHT, BORDER_SIZE><<<numBlocks,threadsPerBlock, 0, streamId>>>(filtered_images, interleaved_images_output, N*S, K, IN_K, img_width, img_height, new_img_parts_width, new_img_parts_height);
+            interleave_input_data_kernel<TILE_DIM_X,TILE_DIM_Y,TILE_DIM_IMAGE, BATCH_PIXELS_X, BATCH_K, NEW_WIDTH, NEW_HEIGHT, BORDER_SIZE><<<numBlocks,threadsPerBlock, 0, streamId>>>(filtered_images, interleaved_images_output, N*S, K, IN_K, img_width_in, img_height_in, img_width, img_height, new_img_parts_width, new_img_parts_height);
 
 
             if (0){
@@ -2376,6 +2444,7 @@ namespace caffe {
                     for (int s = 0; s < S; ++s)
                     {
                         //int s = 0;
+                        printf("s index: %d\n" ,s);
                         for (int y = 0; y < NEW_HEIGHT + 2*BORDER_SIZE; ++y) {
                             for (int k2 = 0; k2 < NUM_K/BATCH_K; ++k2) {
                                 for (int x = 0; x < NEW_WIDTH+ 2*BORDER_SIZE; ++x) {
@@ -2404,18 +2473,18 @@ namespace caffe {
     class FastBackwardInputError {
         enum {
             // values from main block indexing sizes
-                    BATCH_FEATURES_SIZE = BlockIndexingT::BATCH_FEATURES_SIZE,
+            BATCH_FEATURES_SIZE = BlockIndexingT::BATCH_FEATURES_SIZE,
             NEW_WIDTH = BlockIndexingT::IMG_WIDTH,
             NEW_HEIGHT = BlockIndexingT::IMG_HEIGHT,
 
             PIXELS_INTERPOLATION_Dx = BlockIndexingT::PIXELS_INTERPOLATION_Dx,
             PIXELS_INTERPOLATION_Dy = BlockIndexingT::PIXELS_INTERPOLATION_Dy,
 
-            // values specific for this kernel
-                    CUDA_THREADS = 256,
+            // values specific for this kerne
+            CUDA_THREADS = 256,
 
             // TILE_DIM_X * TILE_DIM_Y * TILE_DIM_IMAGE gets us to 512 of shared data per block (i.e. 2 kB)
-                    TILE_DIM_X = CUDA_THREADS/8,
+            TILE_DIM_X = CUDA_THREADS/8,
             TILE_DIM_Y = BATCH_FEATURES_SIZE,
             TILE_DIM_IMAGE = BlockIndexingT::BATCH_IMAGES >= 8 ? 8 : 1
         };
@@ -2542,11 +2611,11 @@ namespace caffe {
                           const int kernel_w, const int kernel_h, cudaStream_t streamId = NULL) {
 
             if (NUM_BATCH_FEATURES == 4)
-                perpare_weights_and_offsets_bw_multi<BlockIndexingT, float4, int4><<<numBlocks,threadsPerBlock>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, S, G, F, kernel_w, kernel_h);
+                perpare_weights_and_offsets_bw_multi<BlockIndexingT, float4, int4><<<numBlocks,threadsPerBlock, 0, streamId>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, S, G, F, kernel_w, kernel_h);
             else if (NUM_BATCH_FEATURES == 2)
-                perpare_weights_and_offsets_bw_multi<BlockIndexingT, float2, int2><<<numBlocks,threadsPerBlock>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, S, G, F, kernel_w, kernel_h);
+                perpare_weights_and_offsets_bw_multi<BlockIndexingT, float2, int2><<<numBlocks,threadsPerBlock, 0, streamId>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, S, G, F, kernel_w, kernel_h);
             else
-            perpare_weights_and_offsets_bw_multi<BlockIndexingT, float, int><<<numBlocks,threadsPerBlock>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, S, G, F, kernel_w, kernel_h);
+                perpare_weights_and_offsets_bw_multi<BlockIndexingT, float, int><<<numBlocks,threadsPerBlock, 0, streamId>>>(filter_weights, filter_offsets_float_x, filter_offsets_float_y, prepared_filter_weights, prepared_filter_offsets, S, G, F, kernel_w, kernel_h);
 
             if (0) {
                 // DEBUG ONLY
@@ -2605,7 +2674,7 @@ namespace caffe {
                 for (int f_main_idx = 0; f_main_idx < dim8_size; ++f_main_idx) {
                     for (int s_main_idx = 0; s_main_idx < dim7_size; ++s_main_idx) {
                         for (int g_main_idx = 0; g_main_idx < dim6_size; ++g_main_idx) {
-                            printf("weights:\n");
+                            printf("weights: (s,g,f=%d,%d,%d)\n", s_main_idx, g_main_idx, f_main_idx);
                             for (int sh_mem_idx = 0; sh_mem_idx < dim5_size; ++sh_mem_idx) {
                                 for (int g = 0; g < dim4_size; ++g) {
                                     printf("sh=%d, g=%d: \n", sh_mem_idx, g);
@@ -2636,7 +2705,7 @@ namespace caffe {
         }
     };
 
-    template<int _IMG_SIZE_W, int _IMG_SIZE_H, int _MAX_OFFSET, int _NUM_K, int _BATCH_K_SIZE, int _WARP_PIXELS_X, int _BATCH_IMAGES, bool _USE_INTERPOLATION, bool _SINGLE_SUBFEATURE>
+    template<int _IMG_SIZE_W, int _IMG_SIZE_H, int _MAX_OFFSET, int _NUM_K, int _BATCH_K_SIZE, int _WARP_PIXELS_X, int _WARP_PIXELS_Y, int _BATCH_IMAGES, bool _USE_INTERPOLATION, bool _SINGLE_SUBFEATURE>
     class FastGaussBackwardCUDA {
         enum {
             // Variable parameters
@@ -2665,7 +2734,7 @@ namespace caffe {
             //	- INTERPOLATION == false
 
             WARP_PIXELS_X = _WARP_PIXELS_X,
-            WARP_PIXELS_Y = 8,
+            WARP_PIXELS_Y = _WARP_PIXELS_Y,
 
             IMG_WIDTH = MAX(WARP_PIXELS_X,_IMG_SIZE_W), // NOTE: 32 <= BLOCK_X * BATCH_PIXELS_SIZE_X
             IMG_HEIGHT = MAX(WARP_PIXELS_Y,_IMG_SIZE_H), // NOTE:  8 <= BLOCK_Y * BATCH_PIXELS_SIZE_Y
@@ -2702,13 +2771,13 @@ namespace caffe {
             BATCH_K_SIZE = _BATCH_K_SIZE,
 
             BATCH_PIXELS_SIZE_X = 1,
-            BATCH_PIXELS_SIZE_Y = 8,
+            BATCH_PIXELS_SIZE_Y = _WARP_PIXELS_Y,
 
             BLOCK_X = WARP_PIXELS_X / BATCH_PIXELS_SIZE_X,
             BLOCK_Y = WARP_PIXELS_Y / BATCH_PIXELS_SIZE_Y,
 
-            BLOCK_FEATURES = 8 * (WARP_PIXELS_X > 16 ? 1 : 2), // increase number of BLOCK_FEATURES if WARP_PIXELS_X is 16
-            BLOCK_SUBFEATURES = _SINGLE_SUBFEATURE ? 1 : 2,
+            BLOCK_FEATURES = 8 * MAX(1,MIN(4,WARP_SIZE / WARP_PIXELS_X)), // increase number of BLOCK_FEATURES to match WARP_PIXELS to WARP_SIZE
+            BLOCK_SUBFEATURES = _SINGLE_SUBFEATURE ? 1 : 2  ,
 
             BATCH_FEATURES_SIZE = 2,
             BATCH_COMPUTE_FEATURES_SIZE = 2,
@@ -2754,7 +2823,7 @@ namespace caffe {
                 new_img_parts_height((int)ceil((float)img_height / IMG_HEIGHT)),
 
                 // initialize classes that will generate inputs
-                image_cuda_prepare(img_width, img_height, I, S, K, IN_K, new_img_parts_width,new_img_parts_height),
+                image_cuda_prepare(p.img_width_in, p.img_height_in, img_width, img_height, I, S, K, IN_K, new_img_parts_width,new_img_parts_height),
                 error_cuda_prepare(img_width, img_height, I, F, new_img_parts_width,new_img_parts_height),
                 weight_and_offsets_cuda_prepare(img_width, img_height, I, F, S, G) {
 
@@ -2788,7 +2857,7 @@ namespace caffe {
 
 			clock_t start_t = clock();
 #endif
-                p.prepared_filtered_images = image_cuda_prepare.create_input(p.prepared_filtered_images, p.filtered_images);
+                p.prepared_filtered_images = image_cuda_prepare.create_input(p.prepared_filtered_images, p.filtered_images, p.streamId);
 #ifdef PROFILE_CUDA
                 cudaDeviceSynchronize();
 
@@ -2802,7 +2871,7 @@ namespace caffe {
 #ifdef PROFILE_CUDA
                 clock_t start_t = clock();
 #endif
-                p.prepared_error_images = error_cuda_prepare.create_input(p.prepared_error_images, p.error_images, p.ignore_edge_gradients);
+                p.prepared_error_images = error_cuda_prepare.create_input(p.prepared_error_images, p.error_images, p.ignore_edge_gradients, p.streamId);
 #ifdef PROFILE_CUDA
                 cudaDeviceSynchronize();
 
@@ -2818,7 +2887,7 @@ namespace caffe {
 
 			clock_t start_t = clock();
 #endif
-                weight_and_offsets_cuda_prepare.create_input(p.prepared_filter_weights, p.prepared_filter_offsets, p.filter_weights, p.filter_offsets_float_x, p.filter_offsets_float_y, p.kernel_w, p.kernel_h);
+                weight_and_offsets_cuda_prepare.create_input(p.prepared_filter_weights, p.prepared_filter_offsets, p.filter_weights, p.filter_offsets_float_x, p.filter_offsets_float_y, p.kernel_w, p.kernel_h, p.streamId);
 #ifdef PROFILE_CUDA
                 cudaDeviceSynchronize();
 
@@ -2851,9 +2920,9 @@ namespace caffe {
         }
     };
 
-#define RUN_KERNEL_R0(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, BATCH_IMAGES, USE_INTERPOLATION, SINGLE_SUBFEATURE, PARAMS, ...) \
+#define RUN_KERNEL_R0(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, WARP_PIXELS_Y, BATCH_IMAGES, USE_INTERPOLATION, SINGLE_SUBFEATURE, PARAMS, ...) \
     { \
-        CLASS_NAME<IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, BATCH_IMAGES, USE_INTERPOLATION, SINGLE_SUBFEATURE> _kernel_class(PARAMS); \
+        CLASS_NAME<IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, WARP_PIXELS_Y, BATCH_IMAGES, USE_INTERPOLATION, SINGLE_SUBFEATURE> _kernel_class(PARAMS); \
         if (PARAMS.alloc_img != NULL ||    \
             PARAMS.alloc_err != NULL ||        \
             PARAMS.alloc_w != NULL ||        \
@@ -2864,21 +2933,21 @@ namespace caffe {
         } \
     }
 
-#define RUN_KERNEL_R1(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, BATCH_IMAGES, USE_INTERPOLATION, SINGLE_SUBFEATURE, PARAMS, ...) \
+#define RUN_KERNEL_R1(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, WARP_PIXELS_Y, BATCH_IMAGES, USE_INTERPOLATION, SINGLE_SUBFEATURE, PARAMS, ...) \
     if (USE_INTERPOLATION) { \
-        RUN_KERNEL_R0(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, BATCH_IMAGES, true, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
+        RUN_KERNEL_R0(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, WARP_PIXELS_Y, BATCH_IMAGES, true, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
     } else { \
-        /*RUN_KERNEL_R0(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, BATCH_IMAGES, false, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__)*/ \
+        /*RUN_KERNEL_R0(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, WARP_PIXELS_Y, BATCH_IMAGES, false, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__)*/ \
 		printf("Support for non-interpolation currently disabled. Non-interpolation has not been extensivly tested so disabling support.\n"); \
         throw std::exception(); \
     }
 
 
-#define RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, BATCH_IMAGES, USE_INTERPOLATION, SINGLE_SUBFEATURE, PARAMS, ...) \
+#define RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, WARP_PIXELS_Y, BATCH_IMAGES, USE_INTERPOLATION, SINGLE_SUBFEATURE, PARAMS, ...) \
 	if (MAX_OFFSET <= 9) { \
-		RUN_KERNEL_R1(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, 4, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, BATCH_IMAGES, USE_INTERPOLATION, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
+		RUN_KERNEL_R1(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, 4, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, WARP_PIXELS_Y, BATCH_IMAGES, USE_INTERPOLATION, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
 	} else if (MAX_OFFSET <= 17) { \
-        RUN_KERNEL_R1(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, 8, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, BATCH_IMAGES, USE_INTERPOLATION, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
+        RUN_KERNEL_R1(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, 8, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, WARP_PIXELS_Y, BATCH_IMAGES, USE_INTERPOLATION, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
 	} else { \
         printf("Unsupported filter size: %d. Supported only max up to 9x9 and 17x17 at the moment\n", MAX_OFFSET); \
         throw std::exception(); \
@@ -2887,32 +2956,32 @@ namespace caffe {
         RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE, 16, BATCH_IMAGES, USE_INTERPOLATION, __VA_ARGS__) \
     */
 
-#define RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, BATCH_IMAGES, USE_INTERPOLATION, SINGLE_SUBFEATURE, PARAMS, ...) \
+#define RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, WARP_PIXELS_Y, BATCH_IMAGES, USE_INTERPOLATION, SINGLE_SUBFEATURE, PARAMS, ...) \
 	if (BATCH_IMAGES >= 128) { \
-        RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, 128, USE_INTERPOLATION, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
+        RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, WARP_PIXELS_Y, 128, USE_INTERPOLATION, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
 	} else if (BATCH_IMAGES >= 16) { \
-        RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, 16, USE_INTERPOLATION, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
+        RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, WARP_PIXELS_Y, 16, USE_INTERPOLATION, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
 	} else { \
-        RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, 1, USE_INTERPOLATION, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
+        RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, WARP_PIXELS_Y, 1, USE_INTERPOLATION, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
 	}
     /*else if (BATCH_IMAGES >= 32) { \
         RUN_KERNEL_R2(CLASS_NAME, IMG_PATCH_SIZE, MAX_OFFSET, 32, USE_INTERPOLATION, IMG_WIDTH, IMG_HEIGHT, I, S, F, G, K, __VA_ARGS__) \
     }*/
 
-#define RUN_KERNEL_R4(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, BATCH_IMAGES, USE_INTERPOLATION, SINGLE_SUBFEATURE, PARAMS, ...) \
+#define RUN_KERNEL_R4(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, WARP_PIXELS_Y, BATCH_IMAGES, USE_INTERPOLATION, SINGLE_SUBFEATURE, PARAMS, ...) \
     if (SINGLE_SUBFEATURE) { \
-        RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, BATCH_IMAGES, USE_INTERPOLATION, true, PARAMS, __VA_ARGS__) \
+        RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, WARP_PIXELS_Y, BATCH_IMAGES, USE_INTERPOLATION, true, PARAMS, __VA_ARGS__) \
     } else { \
-        RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, BATCH_IMAGES, USE_INTERPOLATION, false, PARAMS, __VA_ARGS__) \
+        RUN_KERNEL_R3(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, NUM_K, BATCH_K_SIZE, WARP_PIXELS_X, WARP_PIXELS_Y, BATCH_IMAGES, USE_INTERPOLATION, false, PARAMS, __VA_ARGS__) \
     }
 
 #define RUN_KERNEL_R5(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, SMALLER_WARP_AND_GROUP_K, BATCH_IMAGES, USE_INTERPOLATION, SINGLE_SUBFEATURE, PARAMS, ...) \
     if (SMALLER_WARP_AND_GROUP_K) { \
-        RUN_KERNEL_R4(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, 4, 2, 16, BATCH_IMAGES, USE_INTERPOLATION, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
+        RUN_KERNEL_R4(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, 4, 2, 16, 8, BATCH_IMAGES, USE_INTERPOLATION, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
     } else { \
-        RUN_KERNEL_R4(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, 3, 1, 32, BATCH_IMAGES, USE_INTERPOLATION, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
+        RUN_KERNEL_R4(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, 3, 1, 32, 8, BATCH_IMAGES, USE_INTERPOLATION, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
     }
-
+// NOTE: RUN_KERNEL_R6 and RUN_KERNEL_R7 below are not called directly - instead they are implemented in seperate files to allow for parallel computation
 #define RUN_KERNEL_R6(CLASS_NAME, IMG_PATCH_SIZE_W, IMG_PATCH_SIZE_H, MAX_OFFSET, SMALLER_WARP_AND_GROUP_K, BATCH_IMAGES, USE_INTERPOLATION, SINGLE_SUBFEATURE, PARAMS, ...) \
 	if (IMG_PATCH_SIZE_W >= 64) { \
 		RUN_KERNEL_R5(CLASS_NAME, 64, IMG_PATCH_SIZE_H, MAX_OFFSET, SMALLER_WARP_AND_GROUP_K, BATCH_IMAGES, USE_INTERPOLATION, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
