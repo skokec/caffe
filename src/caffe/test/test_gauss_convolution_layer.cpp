@@ -2783,7 +2783,7 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussConvolution1x1) {
         return;
 
     // evaluate size settings
-    const int N = 32;
+    const int N = 22;
     const int F = 64;
     const int S = 16;
     const int G = 4;
