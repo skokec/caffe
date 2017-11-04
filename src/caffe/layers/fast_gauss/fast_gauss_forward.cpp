@@ -59,7 +59,7 @@ FastGaussForward<Dtype>::FastGaussForward(const int img_width_in, const int img_
 
 	// use warp size 1x1 if patch size only 1x1 otherwise use [16,32]x8 (if patch_size_w==8 then use 8x8 but do not prefer it)
 	warp_pixel_size_x = patch_size_w == 1 ? 1 :
-							(patch_size_w <= 8 ? 8 : std::min(patch_size_w, select_optimal_block_size(boundry_img_width, 2,5))); // allowed warp pixels sizes = 2^[3,4,5] i.e. [8,16,32]
+							(patch_size_w <= 8 ? 8 : std::min(patch_size_w, select_optimal_block_size(boundry_img_width, 4,5))); // allowed warp pixels sizes = 2^[3,4,5] i.e. [8,16,32]
 	warp_pixel_size_y = patch_size_h == 1 ? 1 : 8;
 
     int new_img_parts_width = (int)ceil((float)img_width / patch_size_w);
