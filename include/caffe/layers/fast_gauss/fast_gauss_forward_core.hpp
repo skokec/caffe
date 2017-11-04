@@ -2617,8 +2617,9 @@ for (int jj = 0; jj < 1; ++jj) {
         } else if (BLOCK_IMAGES % 4 == 0) { \
 		    RUN_KERNEL_R1(CLASS_NAME, 2, 1, MAX_OFFSET, 2, 1, 4, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
         } else { \
-		    printf("Unsupported BATCH SIZE for 1x1 pixels: Supported only a multiple of 16 (at MAX_OFFSET<=4), 8 (at MAX_OFFSET<=8) or 4 images at the moment\n"); \
-            throw std::exception(); \
+            RUN_KERNEL_R1(CLASS_NAME, 2, 1, MAX_OFFSET, 2, 1, 1, USE_INTERPOLATION, SINGLE_FEATURE, SINGLE_SUBFEATURE, PARAMS, __VA_ARGS__) \
+		    /*printf("Unsupported BATCH SIZE for 1x1 pixels: Supported only a multiple of 16 (at MAX_OFFSET<=4), 8 (at MAX_OFFSET<=8) or 4 images at the moment\n"); */ \
+            /*throw std::exception();*/ \
         } \
     } else if (IMG_PATCH_SIZE_W == 8 && WARP_PIXELS_X == 8) { \
         /* We have 8px WARP_PIXELS_X sizes only for smaller patch sizes - but check just in case (fixing IMG_PATCH_SIZE_W avoids unneeded computation as well) */ \
