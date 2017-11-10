@@ -17,7 +17,7 @@ template <typename Dtype>
 class BaseGaussianConvLayer : public BaseConvolutionLayer<Dtype> {
  public:
 	explicit BaseGaussianConvLayer(const LayerParameter& param)
-		: BaseConvolutionLayer<Dtype>(param), using_gpu(false) {}
+		: BaseConvolutionLayer<Dtype>(param), using_gpu(false), allowed_gauss_div(1), num_gauss_ignore(0) {}
 
 	virtual ~BaseGaussianConvLayer() {}
 
@@ -114,6 +114,10 @@ class BaseGaussianConvLayer : public BaseConvolutionLayer<Dtype> {
 	bool gmm_discretize_mean;
 
 	int NUM_GAUSS;
+
+	// due to fast_forward/backward impl we allow only factor of 2 num gauss
+	int allowed_gauss_div;
+	int num_gauss_ignore;
 
 	// parameters to learn
 	shared_ptr<Blob<Dtype> > param_buffer_w_;
@@ -290,6 +294,7 @@ class FastAproxGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
   Blob<Dtype>* get_deriv_kernel_sigma(cudaStream_t stream = 0);
   Blob<Dtype>* get_deriv_kernel_error(cudaStream_t stream = 0);
 
+  void set_last_n_gauss_to_zero(Dtype* array, int num_gauss_zero);
 
 	// TODO: add support for K=4 as well
 	const int NUM_K = 4;

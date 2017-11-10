@@ -28,6 +28,20 @@ void BaseGaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom
 	int NUM_GAUSS_PER_AXIS_Y = this->layer_param_.convolution_param().number_gauss_size() > 1? this->layer_param_.convolution_param().number_gauss(1) : NUM_GAUSS_PER_AXIS_X;
 	NUM_GAUSS =  NUM_GAUSS_PER_AXIS_X * NUM_GAUSS_PER_AXIS_Y;
 
+	// make sure we have at leas this->min_gauss (this is requested so for fast version that can handle only factor of 2)
+	if (NUM_GAUSS % allowed_gauss_div != 0) {
+		int new_num_gauss = ceil(NUM_GAUSS / (float)allowed_gauss_div) * allowed_gauss_div;
+		num_gauss_ignore = new_num_gauss - NUM_GAUSS;
+
+		if (NUM_GAUSS_PER_AXIS_X < NUM_GAUSS_PER_AXIS_Y) {
+			NUM_GAUSS_PER_AXIS_X += num_gauss_ignore;
+		} else {
+			NUM_GAUSS_PER_AXIS_Y += num_gauss_ignore;
+		}
+
+		NUM_GAUSS = new_num_gauss;
+	}
+
 	// TODO: with new changes in master kernel_size, pad and stripe are repeated fields
 	//       and this code needs to be changes to use that
 	CHECK_EQ(4, bottom[0]->num_axes()) << "Input must have 4 axes, "
@@ -244,6 +258,8 @@ void BaseGaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom
 		weight_filler->Fill(&tmp_w);
 		sigma_filler->Fill(&tmp_sigma);
 
+		Dtype* w_buf = tmp_w.mutable_cpu_data();
+
 		Dtype* mu1_buf = tmp_mu1.mutable_cpu_data();
 		Dtype* mu2_buf = tmp_mu2.mutable_cpu_data();
 
@@ -290,6 +306,11 @@ void BaseGaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom
 					const int offset_idx = (i1 * middle_size + i2 )* inner_size + i3;
 					mu1_buf[offset_idx] = offset_x[gauss_idx / NUM_GAUSS_PER_AXIS_Y] - kernel_center_w;
 					mu2_buf[offset_idx] = offset_y[gauss_idx %  NUM_GAUSS_PER_AXIS_Y] - kernel_center_h;
+
+					// if we need to ignore last few values then set weights to zero
+					if (i2 >= NUM_GAUSS - num_gauss_ignore) {
+						w_buf[offset_idx] = 0;
+					}
 				}
 			}
 		}

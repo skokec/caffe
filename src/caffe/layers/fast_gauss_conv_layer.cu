@@ -410,6 +410,27 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 	}
 }
 
+template <typename Dtype>
+__global__ void set_last_n_gauss_to_zero_kernel(const int S, const int G, const int F, Dtype* x, int num_gauss_zero) {
+    CUDA_KERNEL_LOOP(index, S*G*F) {
+        int f = (index % F) ;
+        int sg = index / F;
+        int g = (sg % G);
+        int s = sg / G;
+
+        if (g  >= G - num_gauss_zero)
+            x[index] = 0;
+    }
+}
+
+template <typename Dtype>
+void FastAproxGaussianConvLayer<Dtype>::set_last_n_gauss_to_zero(Dtype* array, int num_gauss_zero){
+    set_last_n_gauss_to_zero_kernel<Dtype><<<CAFFE_GET_BLOCKS(this->conv_in_channels_ * this->NUM_GAUSS * this->conv_out_channels_), CAFFE_CUDA_NUM_THREADS>>>(this->conv_in_channels_, this->NUM_GAUSS, this->conv_out_channels_, array, num_gauss_zero);
+}
+
+template void FastAproxGaussianConvLayer<double>::set_last_n_gauss_to_zero(double* array, int num_gauss_zero);
+template void FastAproxGaussianConvLayer<float>::set_last_n_gauss_to_zero(float* array, int num_gauss_zero);
+
 INSTANTIATE_LAYER_GPU_FUNCS(FastAproxGaussianConvLayer);
 
 
