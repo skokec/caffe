@@ -407,6 +407,14 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
 		if (NUM_K > 1) caffe_gpu_axpy(param_size, (Dtype)1, bwd_gradients_data + 1 * param_size, param_mu1_diff); // mu1
 		if (NUM_K > 2) caffe_gpu_axpy(param_size, (Dtype)1, bwd_gradients_data + 2 * param_size, param_mu2_diff); // mu2
 		if (NUM_K > 3) caffe_gpu_axpy(param_size, (Dtype)1, bwd_gradients_data + 3 * param_size, param_sigma_diff); // sigma
+
+        // if we need to ignore last few gauss then make sure we do not update their parameters
+        if (this->num_gauss_ignore > 0) {
+            this->set_last_n_gauss_to_zero(param_weights_diff, this->num_gauss_ignore);
+            this->set_last_n_gauss_to_zero(param_mu1_diff, this->num_gauss_ignore);
+            this->set_last_n_gauss_to_zero(param_mu2_diff, this->num_gauss_ignore);
+            this->set_last_n_gauss_to_zero(param_sigma_diff, this->num_gauss_ignore);
+        }
 	}
 }
 
