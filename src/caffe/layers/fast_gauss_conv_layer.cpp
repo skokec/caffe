@@ -18,6 +18,10 @@ template <typename Dtype>
 void FastAproxGaussianConvLayer<Dtype>::LayerSetUp(
     const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top) {
 
+    // we setup with allowing num of gauss only as a factor of two (due to CUDA implementation)
+    // (when computing gradinets we neet to make sure we ignore last one)
+    this->allowed_gauss_div = 2;
+
     BaseGaussianConvLayer<Dtype>::LayerSetUp(bottom, top);
 
     CHECK_EQ(1, this->group_) << "CuDNNGaussianConvLayer does not support group parameter at the moment";
