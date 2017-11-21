@@ -176,11 +176,18 @@ function(detect_cuDNN)
             PATHS ${CUDNN_ROOT} $ENV{CUDNN_ROOT} ${CUDA_TOOLKIT_INCLUDE}
             DOC "Path to cuDNN include directory." )
 
-  get_filename_component(__libpath_hist ${CUDA_CUDART_LIBRARY} PATH)
-  find_library(CUDNN_LIBRARY NAMES libcudnn.so # libcudnn_static.a
-                             PATHS ${CUDNN_ROOT} $ENV{CUDNN_ROOT} ${CUDNN_INCLUDE} ${__libpath_hist}
-                             DOC "Path to cuDNN library.")
+  # dynamic libs have different suffix in mac and linux
+  if(APPLE)
+    set(CUDNN_LIB_NAME "libcudnn.dylib")
+  else()
+    set(CUDNN_LIB_NAME "libcudnn.so")
+  endif()
 
+  get_filename_component(__libpath_hist ${CUDA_CUDART_LIBRARY} PATH)
+  find_library(CUDNN_LIBRARY NAMES ${CUDNN_LIB_NAME}
+   PATHS ${CUDNN_ROOT} $ENV{CUDNN_ROOT} ${CUDNN_INCLUDE} ${__libpath_hist} ${__libpath_hist}/../lib
+   DOC "Path to cuDNN library.")
+  
   if(CUDNN_INCLUDE AND CUDNN_LIBRARY)
     set(HAVE_CUDNN  TRUE PARENT_SCOPE)
     set(CUDNN_FOUND TRUE PARENT_SCOPE)
@@ -233,17 +240,17 @@ endif()
 
 set(HAVE_CUDA TRUE)
 message(STATUS "CUDA detected: " ${CUDA_VERSION})
-include_directories(SYSTEM ${CUDA_INCLUDE_DIRS})
-list(APPEND Caffe_LINKER_LIBS ${CUDA_CUDART_LIBRARY}
-                              ${CUDA_curand_LIBRARY} ${CUDA_CUBLAS_LIBRARIES})
+list(APPEND Caffe_INCLUDE_DIRS PUBLIC ${CUDA_INCLUDE_DIRS})
+list(APPEND Caffe_LINKER_LIBS PUBLIC ${CUDA_CUDART_LIBRARY}
+                                     ${CUDA_curand_LIBRARY} ${CUDA_CUBLAS_LIBRARIES})
 
 # cudnn detection
 if(USE_CUDNN)
   detect_cuDNN()
   if(HAVE_CUDNN)
-    add_definitions(-DUSE_CUDNN)
-    include_directories(SYSTEM ${CUDNN_INCLUDE})
-    list(APPEND Caffe_LINKER_LIBS ${CUDNN_LIBRARY})
+    list(APPEND Caffe_DEFINITIONS PUBLIC -DUSE_CUDNN)
+    list(APPEND Caffe_INCLUDE_DIRS PUBLIC ${CUDNN_INCLUDE})
+    list(APPEND Caffe_LINKER_LIBS PUBLIC ${CUDNN_LIBRARY})
   endif()
 endif()
 
@@ -277,7 +284,7 @@ mark_as_advanced(CUDA_SDK_ROOT_DIR CUDA_SEPARABLE_COMPILATION)
 if(APPLE)
   caffe_detect_darwin_version(OSX_VERSION)
 
-  # OSX 10.9 and higher uses clang/libc++ by default which is incompartible with old CUDA toolkits
+  # OSX 10.9 and higher uses clang/libc++ by default which is incompatible with old CUDA toolkits
   if(OSX_VERSION VERSION_GREATER 10.8)
     # enabled by default if and only if CUDA version is less than 7.0
     caffe_option(USE_libstdcpp "Use libstdc++ instead of libc++" (CUDA_VERSION VERSION_LESS 7.0))

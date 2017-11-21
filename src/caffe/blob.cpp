@@ -82,73 +82,73 @@ const int* Blob<Dtype>::gpu_shape() const {
 
 template <typename Dtype>
 const Dtype* Blob<Dtype>::cpu_data() const {
-#ifdef NDEBUG
   CHECK(data_);
-#endif
   return (const Dtype*)data_->cpu_data();
 }
 
 template <typename Dtype>
 void Blob<Dtype>::set_cpu_data(Dtype* data) {
-#ifdef NDEBUG
   CHECK(data);
-#endif
+  // Make sure CPU and GPU sizes remain equal
+  size_t size = count_ * sizeof(Dtype);
+  if (data_->size() != size) {
+    data_.reset(new SyncedMemory(size));
+    diff_.reset(new SyncedMemory(size));
+  }
   data_->set_cpu_data(data);
 }
 
 template <typename Dtype>
 const Dtype* Blob<Dtype>::gpu_data() const {
-#ifdef NDEBUG
   CHECK(data_);
-#endif
   return (const Dtype*)data_->gpu_data();
 }
 
 template <typename Dtype>
+void Blob<Dtype>::set_gpu_data(Dtype* data) {
+  CHECK(data);
+  // Make sure CPU and GPU sizes remain equal
+  size_t size = count_ * sizeof(Dtype);
+  if (data_->size() != size) {
+    data_.reset(new SyncedMemory(size));
+    diff_.reset(new SyncedMemory(size));
+  }
+  data_->set_gpu_data(data);
+}
+
+template <typename Dtype>
 const Dtype* Blob<Dtype>::cpu_diff() const {
-#ifdef NDEBUG
   CHECK(diff_);
-#endif
   return (const Dtype*)diff_->cpu_data();
 }
 
 template <typename Dtype>
 const Dtype* Blob<Dtype>::gpu_diff() const {
-#ifdef NDEBUG
   CHECK(diff_);
-#endif
   return (const Dtype*)diff_->gpu_data();
 }
 
 template <typename Dtype>
 Dtype* Blob<Dtype>::mutable_cpu_data() {
-#ifdef NDEBUG
   CHECK(data_);
-#endif
   return static_cast<Dtype*>(data_->mutable_cpu_data());
 }
 
 template <typename Dtype>
 Dtype* Blob<Dtype>::mutable_gpu_data() {
-#ifdef NDEBUG
   CHECK(data_);
-#endif
   return static_cast<Dtype*>(data_->mutable_gpu_data());
 }
 
 template <typename Dtype>
 Dtype* Blob<Dtype>::mutable_cpu_diff() {
-#ifdef NDEBUG
   CHECK(diff_);
-#endif
   return static_cast<Dtype*>(diff_->mutable_cpu_data());
 }
 
 template <typename Dtype>
 Dtype* Blob<Dtype>::mutable_gpu_diff() {
-#ifdef NDEBUG
   CHECK(diff_);
-#endif
   return static_cast<Dtype*>(diff_->mutable_gpu_data());
 }
 
