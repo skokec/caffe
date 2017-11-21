@@ -6,6 +6,7 @@
 
 #include "caffe/util/math_functions_extra.hpp"
 #include "caffe/util/custom_cub.cuh"
+#include "caffe/layers/fast_gauss/fast_gauss_forward.hpp"
 
 namespace caffe {
 
@@ -112,10 +113,12 @@ void CuDNNGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top
 	Dtype* param_sigma_diff = this->param_buffer_sigma_->mutable_gpu_diff();
 
 	if (this->param_propagate_down_[0]) {
-		caffe_gpu_set_async(this->param_buffer_w_->count(), (Dtype)0, param_w_diff, paralel_streams[0]);
+		// WARNING: we should NOT zero gradient buffer since this will prevent accumulation over multiple iterations !!!
+		// zeroing should be done by solver
+		/*caffe_gpu_set_async(this->param_buffer_w_->count(), (Dtype)0, param_w_diff, paralel_streams[0]);
 		caffe_gpu_set_async(this->param_buffer_mu1_->count(), (Dtype)0, param_mu1_diff, paralel_streams[1]);
 		caffe_gpu_set_async(this->param_buffer_mu2_->count(), (Dtype)0, param_mu2_diff, paralel_streams[2]);
-		caffe_gpu_set_async(this->param_buffer_sigma_->count(), (Dtype)0, param_sigma_diff, paralel_streams[3]);
+		caffe_gpu_set_async(this->param_buffer_sigma_->count(), (Dtype)0, param_sigma_diff, paralel_streams[3]);*/
 	}
 
 	// ensure all work from previous kernel and from caffe_gpu_set_async is done
@@ -351,7 +354,7 @@ __global__ void scal_kernel_batched(const int n, const Dtype* a, const Dtype* x,
 }
 
 template <typename Dtype>
-__global__ void conv_gauss_distributions_kernel(const int N, const int k_w, int k_h,
+__global__ void conv_gauss_distributions_kernel(const int N, const int k_w, const int k_h, const bool gmm_discretize_mean,
 												const Dtype* W, const Dtype* MU1, const Dtype* MU2, const Dtype* SIGMA_2_INV_HALF,
 												Dtype* guass_dist) {
 
@@ -364,8 +367,8 @@ __global__ void conv_gauss_distributions_kernel(const int N, const int k_w, int 
 
 		// read w, mu1, mu2, sigma and other data needed to compute gaussian Distributions
 		//const Dtype w = W[n];
-		const Dtype mu1 = MU1[n];
-		const Dtype mu2 = MU2[n];
+		const Dtype mu1 = gmm_discretize_mean ? round(MU1[n]) : MU1[n];
+		const Dtype mu2 = gmm_discretize_mean ? round(MU2[n]) : MU2[n];
 		const Dtype sigma_square_inv_half = SIGMA_2_INV_HALF[n];
 
 		const int ptr_offset =  n * filter_size + y * k_w + x;
@@ -437,7 +440,8 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_gauss_distribution_b
 		// calulate distribution and its normalization values
 		dim3 threadsPerBlock(CAFFE_CUDA_NUM_THREADS/(K_w * K_h), K_w, K_h);
 		dim3 numBlocks((S*G*F + threadsPerBlock.z - 1) / threadsPerBlock.z, 1, 1);
-		conv_gauss_distributions_kernel<Dtype><<<numBlocks,threadsPerBlock, 0, streamId>>>(S*G*F, K_w, K_h, gauss_params_w, gauss_params_mu1, gauss_params_mu2, gauss_params_sigma_square_inv_half, gauss_dist); CUDA_POST_KERNEL_CHECK;
+		conv_gauss_distributions_kernel<Dtype><<<numBlocks,threadsPerBlock, 0, streamId>>>(S*G*F, K_w, K_h, this->gmm_discretize_mean, gauss_params_w, gauss_params_mu1, gauss_params_mu2, gauss_params_sigma_square_inv_half, gauss_dist); CUDA_POST_KERNEL_CHECK;
+
 	}
 
 	this->dirty_gauss_dist_buffer = false;
@@ -474,16 +478,18 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_gauss_normalization_
 		const Dtype* gauss_dist = this->get_gauss_distribution_buffer()->gpu_data();
 		Dtype* guass_norm = this->tmp_buf.norm->mutable_gpu_data();
 
+        int* tmp_precomp_index_gpu = this->tmp_precomp_index_.mutable_gpu_data();
+
 		if (this->use_gmm_gauss_normalization == false) {
 			// set guass_norm to 1 if we sould NOT normalize to sum of 1
 			caffe_gpu_set_async((S*F*G), (Dtype)1, guass_norm, streamId); CUDA_POST_KERNEL_CHECK;
 
 		} else if (this->use_gmm_square_gauss_normalization) {
 			// we need to normalize to sum of squares to 1
-			caffe_gpu_dot_batched((S*F*G) * (K_w*K_h), gauss_dist, gauss_dist, guass_norm, S*F*G, this->tmp_precomp_index_gpu, streamId);
+			caffe_gpu_dot_batched((S*F*G) * (K_w*K_h), gauss_dist, gauss_dist, guass_norm, S*F*G, tmp_precomp_index_gpu, streamId);
 		} else {
 			// we need to normalize to sum of 1
-			caffe_gpu_sum((S*F*G) * (K_w*K_h), gauss_dist, guass_norm, S*F*G, this->tmp_precomp_index_gpu, false, streamId);
+			caffe_gpu_sum((S*F*G) * (K_w*K_h), gauss_dist, guass_norm, S*F*G, tmp_precomp_index_gpu, streamId);
 		}
 
 		// invert guass_norm i.e. guass_norm = 1/guass_norm
@@ -638,7 +644,7 @@ __global__ void axpby_kernel_batched(const int n, const Dtype a_factor, const Dt
 }
 
 template <typename Dtype>
-__global__ void conv_gauss_mu1_deriv_kernel(const int N, const int k_w, int k_h,
+__global__ void conv_gauss_mu1_deriv_kernel(const int N, const int k_w, const int k_h, const bool gmm_discretize_mean,
 												const Dtype* MU1, const Dtype* SIGMA_2_INV, const Dtype* guass_dist,
 												Dtype* guass_deriv_mu1) {
 
@@ -654,7 +660,7 @@ __global__ void conv_gauss_mu1_deriv_kernel(const int N, const int k_w, int k_h,
 		const int ptr_offset =  n * filter_size + y * k_w + x;
 
 		// read w, mu1, mu2, sigma and other data needed to compute gaussian Distributions
-		const Dtype mu1 = MU1[n];
+		const Dtype mu1 = gmm_discretize_mean ? round(MU1[n]) : MU1[n];
 		const Dtype sigma_square_inv = SIGMA_2_INV[n];
 
 		const Dtype gauss_value = guass_dist[ptr_offset];
@@ -698,6 +704,8 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_mu1_derivative_filte
 		// output buffer
 		Dtype* deriv_mu1 = output_buffer->mutable_gpu_data();
 
+        int* tmp_precomp_index_gpu = this->tmp_precomp_index_.mutable_gpu_data();
+
 		const int S = this->conv_in_channels_;
 		const int F = this->conv_out_channels_;
 		const int G = this->NUM_GAUSS;
@@ -710,7 +718,7 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_mu1_derivative_filte
 		dim3 numBlocks = dim3((S*F*G + threadsPerBlock.y - 1) / threadsPerBlock.y, 1, 1);
 
 		// computer derivative kernel
-		conv_gauss_mu1_deriv_kernel<Dtype><<<numBlocks,threadsPerBlock,0, streamId>>>(S*G*F, K_w, K_h, gauss_params_mu1, gauss_params_sigma_square_inv, gauss_dist, deriv_mu1); CUDA_POST_KERNEL_CHECK;
+		conv_gauss_mu1_deriv_kernel<Dtype><<<numBlocks,threadsPerBlock,0, streamId>>>(S*G*F, K_w, K_h, this->gmm_discretize_mean, gauss_params_mu1, gauss_params_sigma_square_inv, gauss_dist, deriv_mu1); CUDA_POST_KERNEL_CHECK;
 
 
 		// compute sum of derivative with
@@ -721,14 +729,14 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_mu1_derivative_filte
 		} else if (this->use_gmm_square_gauss_normalization) {
 
 			// deriv_mu1_sums = 2 * sum(gauss_dist * deriv_mu1);
-			caffe_gpu_dot_batched((S*F*G) * (K_w*K_h), gauss_dist, deriv_mu1, deriv_mu1_sums, S*F*G, this->tmp_precomp_index_gpu, false, streamId);
+			caffe_gpu_dot_batched((S*F*G) * (K_w*K_h), gauss_dist, deriv_mu1, deriv_mu1_sums, S*F*G, tmp_precomp_index_gpu, false, streamId);
 
 			CUDNN_CALL_WITH_STREAM(streamId,
 					caffe_gpu_scal((S*F*G), (Dtype)2, deriv_mu1_sums)
 			);
 		} else {
 			// deriv_mu1_sums = sum(deriv_mu1);
-			caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_mu1, deriv_mu1_sums, S*F*G, this->tmp_precomp_index_gpu, false, streamId);
+			caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_mu1, deriv_mu1_sums, S*F*G, tmp_precomp_index_gpu, streamId);
 		}
 		// gauss_mu1_sum = abs(gauss_mu1_sum) > 1e-10 ? gauss_mu1_sum : 0;
 		caffe_gpu_clip_eps(this->deriv_mu1_sums_buffer_.count(), SUM_MIN_BOUND, deriv_mu1_sums, deriv_mu1_sums, streamId); CUDA_POST_KERNEL_CHECK;
@@ -751,7 +759,7 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_mu1_derivative_filte
 
 
 template <typename Dtype>
-__global__ void conv_gauss_mu2_deriv_kernel(const int N, const int k_w, int k_h,
+__global__ void conv_gauss_mu2_deriv_kernel(const int N, const int k_w, const int k_h, const bool gmm_discretize_mean,
 												const Dtype* MU2, const Dtype* SIGMA_2_INV, const Dtype* guass_dist,
 												Dtype* guass_deriv_mu2) {
 
@@ -766,7 +774,7 @@ __global__ void conv_gauss_mu2_deriv_kernel(const int N, const int k_w, int k_h,
 		const int ptr_offset =  n * filter_size + y * k_w + x;
 
 		// read w, mu1, mu2, sigma and other data needed to compute gaussian Distributions
-		const Dtype mu2 = MU2[n];
+		const Dtype mu2 = gmm_discretize_mean ? round(MU2[n]) : MU2[n];
 		const Dtype sigma_square_inv = SIGMA_2_INV[n];
 
 		const Dtype gauss_value = guass_dist[ptr_offset];
@@ -806,6 +814,8 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_mu2_derivative_filte
 
 		Dtype* deriv_mu2 = output_buffer->mutable_gpu_data();
 
+        int* tmp_precomp_index_gpu = this->tmp_precomp_index_.mutable_gpu_data();
+
 		const int S = this->conv_in_channels_;
 		const int F = this->conv_out_channels_;
 		const int G = this->NUM_GAUSS;
@@ -817,7 +827,7 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_mu2_derivative_filte
 		dim3 threadsPerBlock = dim3(CAFFE_CUDA_NUM_THREADS/(K_w * K_h), K_w, K_h);
 		dim3 numBlocks = dim3((S*F*G + threadsPerBlock.y - 1) / threadsPerBlock.y, 1, 1);
 
-		conv_gauss_mu2_deriv_kernel<Dtype><<<numBlocks,threadsPerBlock,0,streamId>>>(S*G*F, K_w, K_h, gauss_params_mu2, gauss_params_sigma_square_inv, gauss_dist, deriv_mu2); CUDA_POST_KERNEL_CHECK;
+		conv_gauss_mu2_deriv_kernel<Dtype><<<numBlocks,threadsPerBlock,0,streamId>>>(S*G*F, K_w, K_h, this->gmm_discretize_mean, gauss_params_mu2, gauss_params_sigma_square_inv, gauss_dist, deriv_mu2); CUDA_POST_KERNEL_CHECK;
 
 		// compute sum of derivative with
 		if (this->use_gmm_gauss_normalization == false) {
@@ -826,14 +836,14 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_mu2_derivative_filte
 
 		} else if (this->use_gmm_square_gauss_normalization) {
 			// deriv_mu2_sums = 2 * sum(gauss_dist * deriv_mu2);
-			caffe_gpu_dot_batched((S*F*G) * (K_w*K_h), gauss_dist, deriv_mu2, deriv_mu2_sums, S*F*G, this->tmp_precomp_index_gpu, false, streamId);
+			caffe_gpu_dot_batched((S*F*G) * (K_w*K_h), gauss_dist, deriv_mu2, deriv_mu2_sums, S*F*G, tmp_precomp_index_gpu, false, streamId);
 
 			CUDNN_CALL_WITH_STREAM(streamId,
 					caffe_gpu_scal((S*F*G), (Dtype)2, deriv_mu2_sums)
 			);
 		} else {
 			// deriv_mu2_sums = sum(deriv_mu2);
-			caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_mu2, deriv_mu2_sums, S*F*G, this->tmp_precomp_index_gpu, false, streamId);
+			caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_mu2, deriv_mu2_sums, S*F*G, tmp_precomp_index_gpu, streamId);
 		}
 
 		// gauss_mu2_sum = abs(gauss_mu2_sum) > 1e-10 ? gauss_mu2_sum : 0;
@@ -858,7 +868,7 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_mu2_derivative_filte
 
 
 template <typename Dtype>
-__global__ void conv_gauss_sigma_deriv_kernel(const int N, const int k_w, int k_h,
+__global__ void conv_gauss_sigma_deriv_kernel(const int N, const int k_w, const int k_h, const bool gmm_discretize_mean,
 												const Dtype* MU1, const Dtype* MU2, const Dtype* SIGMA_3_INV, const Dtype* guass_dist,
 												Dtype* guass_deriv_sigma) {
 	const int filter_size = k_w * k_h;
@@ -872,8 +882,8 @@ __global__ void conv_gauss_sigma_deriv_kernel(const int N, const int k_w, int k_
 		const int ptr_offset =  n * filter_size + y * k_w + x;
 
 		// read w, mu1, mu2, sigma and other data needed to compute gaussian Distributions
-		const Dtype mu1 = MU1[n];
-		const Dtype mu2 = MU2[n];
+		const Dtype mu1 = gmm_discretize_mean ? round(MU1[n]) : MU1[n];
+		const Dtype mu2 = gmm_discretize_mean ? round(MU2[n]) : MU2[n];
 		const Dtype sigma_cube_inv = SIGMA_3_INV[n];
 
 		const Dtype gauss_value = guass_dist[ptr_offset];
@@ -919,6 +929,8 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_sigma_derivative_fil
 
 		Dtype* deriv_sigma = output_buffer->mutable_gpu_data();
 
+        int* tmp_precomp_index_gpu = this->tmp_precomp_index_.mutable_gpu_data();
+
 		const int S = this->conv_in_channels_;
 		const int F = this->conv_out_channels_;
 		const int G = this->NUM_GAUSS;
@@ -930,7 +942,7 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_sigma_derivative_fil
 		dim3 threadsPerBlock = dim3(CAFFE_CUDA_NUM_THREADS/(K_w * K_h), K_w, K_h);
 		dim3 numBlocks = dim3((S*F*G + threadsPerBlock.y - 1) / threadsPerBlock.y, 1, 1);
 
-		conv_gauss_sigma_deriv_kernel<Dtype><<<numBlocks,threadsPerBlock,0,streamId>>>(S*G*F, K_w, K_h, gauss_params_mu1, gauss_params_mu2, gauss_params_sigma_cube_inv, gauss_dist, deriv_sigma); CUDA_POST_KERNEL_CHECK;
+		conv_gauss_sigma_deriv_kernel<Dtype><<<numBlocks,threadsPerBlock,0,streamId>>>(S*G*F, K_w, K_h, this->gmm_discretize_mean, gauss_params_mu1, gauss_params_mu2, gauss_params_sigma_cube_inv, gauss_dist, deriv_sigma); CUDA_POST_KERNEL_CHECK;
 
 		// compute sum of derivative with
 		if (this->use_gmm_gauss_normalization == false) {
@@ -939,14 +951,14 @@ shared_ptr<Blob<Dtype> > CuDNNGaussianConvLayer<Dtype>::get_sigma_derivative_fil
 
 		} else if (this->use_gmm_square_gauss_normalization) {
 			// deriv_sigma_sums = 2 * sum(gauss_dist * deriv_sigma);
-			caffe_gpu_dot_batched((S*F*G) * (K_w*K_h), gauss_dist, deriv_sigma, deriv_sigma_sums, S*F*G, this->tmp_precomp_index_gpu, false, streamId);
+			caffe_gpu_dot_batched((S*F*G) * (K_w*K_h), gauss_dist, deriv_sigma, deriv_sigma_sums, S*F*G, tmp_precomp_index_gpu, false, streamId);
 
 			CUDNN_CALL_WITH_STREAM(streamId,
 					caffe_gpu_scal((S*F*G), (Dtype)2, deriv_sigma_sums)
 			);
 		} else {
 			// deriv_sigma_sums = sum(deriv_sigma);
-			caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_sigma, deriv_sigma_sums, S*F*G, this->tmp_precomp_index_gpu, false, streamId);
+			caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_sigma, deriv_sigma_sums, S*F*G, tmp_precomp_index_gpu, streamId);
 		}
 
 		// use caffe_gpu_mul_batched instead of caffe_gpu_mul to use manually defined cuda stream
@@ -1010,8 +1022,8 @@ __global__ void merge_components_kernel(int S, int F, Dtype* params_w, Dtype* pa
 					Dtype w_g2[NUM_F_PER_THREAD],mu1_g2[NUM_F_PER_THREAD],mu2_g2[NUM_F_PER_THREAD],sigma_g2[NUM_F_PER_THREAD];
 
 					LOAD_VECTOR(w_g2, params_w, index_g2, NUM_F_PER_THREAD);
-					LOAD_VECTOR(mu1_g2, params_mu1, index_g2, NUM_F_PER_THREAD);
-					LOAD_VECTOR(mu2_g2, params_mu2, index_g2, NUM_F_PER_THREAD);
+					LOAD_VECTOR(mu1_g2, params_mu1, index_g2, NUM_F_PER_THREAD); // DO NOT descritezie when computing merging
+					LOAD_VECTOR(mu2_g2, params_mu2, index_g2, NUM_F_PER_THREAD); // DO NOT descritezie when computing merging
 					LOAD_VECTOR(sigma_g2, params_sigma, index_g2, NUM_F_PER_THREAD);
 
 					// also load directions for new values - load them even if not needed since it would take the same time

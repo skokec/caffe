@@ -49,7 +49,7 @@ def get_edge_label(layer):
 
     if layer.type == 'Data':
         edge_label = 'Batch ' + str(layer.data_param.batch_size)
-    elif layer.type == 'Convolution' or layer.type == 'Deconvolution':
+    elif layer.type == 'Convolution' or layer.type == 'Deconvolution' or layer.type == 'GaussianConv':
         edge_label = str(layer.convolution_param.num_output)
     elif layer.type == 'InnerProduct':
         edge_label = str(layer.inner_product_param.num_output)
@@ -96,6 +96,21 @@ def get_layer_label(layer, rankdir):
                       layer.convolution_param.stride[0] if len(layer.convolution_param.stride._values) else 1,
                       separator,
                       layer.convolution_param.pad[0] if len(layer.convolution_param.pad._values) else 0)
+    elif layer.type == 'GaussianConv':
+        # Outer double quotes needed or else colon characters don't parse
+        # properly
+        node_label = '"%s%s(%s)%skernel size: %d%sstride: %d%spad: %d%snum gauss: %d"' %\
+                     (layer.name,
+                      separator,
+                      layer.type,
+                      separator,
+                      layer.convolution_param.kernel_size[0] if len(layer.convolution_param.kernel_size._values) else 1,
+                      separator,
+                      layer.convolution_param.stride[0] if len(layer.convolution_param.stride._values) else 1,
+                      separator,
+                      layer.convolution_param.pad[0] if len(layer.convolution_param.pad._values) else 0,
+                      separator,
+                      (layer.convolution_param.number_gauss[0] if len(layer.convolution_param.number_gauss._values) else 2) * (layer.convolution_param.number_gauss[1] if len(layer.convolution_param.number_gauss._values) > 1 else 2)  )
     elif layer.type == 'Pooling':
         pooling_types_dict = get_pooling_types_dict()
         node_label = '"%s%s(%s %s)%skernel size: %d%sstride: %d%spad: %d"' %\
@@ -118,7 +133,7 @@ def choose_color_by_layertype(layertype):
     """Define colors for nodes based on the layer type.
     """
     color = '#6495ED'  # Default
-    if layertype == 'Convolution' or layertype == 'Deconvolution':
+    if layertype == 'Convolution' or layertype == 'Deconvolution' or layertype == 'GaussianConv':
         color = '#FF5050'
     elif layertype == 'Pooling':
         color = '#FF9900'

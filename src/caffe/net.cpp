@@ -472,7 +472,8 @@ void Net<Dtype>::AppendParam(const NetParameter& param, const int layer_id,
                              const int param_id) {
   const LayerParameter& layer_param = layers_[layer_id]->layer_param();
   const int param_size = layer_param.param_size();
-  if (param_size > param_id && layer_param.param(param_id).lr_mult() == 0) return;
+  if (param_size > param_id && layer_param.param(param_id).lr_mult() == 0 &&
+          layer_param.has_convolution_param() && layer_param.convolution_param().number_gauss_size() > 0) return;
   string param_name =
       (param_size > param_id) ? layer_param.param(param_id).name() : "";
   if (param_name.size()) {
@@ -503,8 +504,10 @@ void Net<Dtype>::AppendParam(const NetParameter& param, const int layer_id,
     learnable_param_ids_.push_back(learnable_param_id);
     has_params_lr_.push_back(param_spec->has_lr_mult());
     has_params_decay_.push_back(param_spec->has_decay_mult());
+    has_params_decay_target_.push_back(param_spec->has_decay_target());
     params_lr_.push_back(param_spec->lr_mult());
     params_weight_decay_.push_back(param_spec->decay_mult());
+    params_weight_decay_target_.push_back(param_spec->decay_target());
   } else {
     // Named param blob with name we've seen before: share params
     const int owner_net_param_id = param_names_index_[param_name];
@@ -560,6 +563,16 @@ void Net<Dtype>::AppendParam(const NetParameter& param, const int layer_id,
         params_weight_decay_[learnable_param_id] = param_spec->decay_mult();
       }
     }
+    if (param_spec->has_decay_target()) {
+	  if (has_params_decay_target_[learnable_param_id]) {
+		CHECK_EQ(param_spec->decay_target(),
+				 params_weight_decay_target_[learnable_param_id])
+			<< "Shared param '" << param_name << "' has mismatched decay_target.";
+	  } else {
+		has_params_decay_target_[learnable_param_id] = true;
+		params_weight_decay_target_[learnable_param_id] = param_spec->decay_target();
+	  }
+	}
   }
 }
 
@@ -637,6 +650,7 @@ void Net<Dtype>::ForwardDebugInfo(const int layer_id) {
   for (int param_id = 0; param_id < layers_[layer_id]->blobs().size();
        ++param_id) {
     const Blob<Dtype>& blob = *layers_[layer_id]->blobs()[param_id];
+    if (param_id_vecs_[layer_id].size() <= param_id) continue;
     const int net_param_id = param_id_vecs_[layer_id][param_id];
     const string& blob_name = param_display_names_[net_param_id];
     const Dtype data_abs_val_mean = blob.asum_data() / blob.count();

@@ -28,7 +28,7 @@ filterActs_YxX_color_kernel(const float* images, const float* error, const float
 // INPUT: images  [I x S x H x W]
 //		  error   [I x F x H x W]
 //		  filters [S x G x F x Ky x Kx]
-// OUTPUT output  [1 x S x G x F]F
+// OUTPUT output  [1 x S x G x F]
 
 // TODO: using hardcoded warp size may not be portable (should use warpSize) but this way allows compiler optimization and avoids using dynamic memory allocation (for output_sum)
 #define WARP_SIZE 32

@@ -49,7 +49,7 @@ template <typename Dtype>
 void caffe_gpu_mul_split(const int N, const Dtype* a, const Dtype* b, Dtype* y, const int M, const int K, const int L, cudaStream_t streamId = 0);
 
 template <typename Dtype>
-void caffe_gpu_sum(const int N, const Dtype* x, Dtype* y, const int M = 0, cudaStream_t streamId = 0);
+void caffe_gpu_sum(const int N, const Dtype* x, Dtype* y, const int M = 1, cudaStream_t streamId = 0);
 
 template <typename Dtype>
 void caffe_gpu_sum(const int N, const Dtype* x, Dtype* y, const int num_segments, int* offsets_gpu, bool with_add = false, cudaStream_t streamId = NULL);
@@ -71,6 +71,16 @@ void caffe_gpu_clip_upper(const int N, const Dtype upper_bound, const Dtype* x, 
 
 template <typename Dtype>
 void caffe_gpu_clip_eps(const int N, const Dtype eps_bound, const Dtype* x, Dtype* y, cudaStream_t streamId = 0);
+
+template <typename Dtype>
+void caffe_gpu_round(const int N, const Dtype* x, Dtype* y, cudaStream_t streamId = 0);
+
+template <typename Dtype>
+void caffe_gpu_transpose(const int I, const int J, const int K, const int L, const Dtype* X, Dtype* Y, cudaStream_t streamId = 0);
+
+template <typename Dtype>
+void caffe_gpu_pad2d(const int I, const int H, const int W, int pad_size, const Dtype* X, Dtype* Y, cudaStream_t streamId = 0);
+
 
 #define CUDNN_CALL_WITH_STREAM(streamId, CALL) \
 { \

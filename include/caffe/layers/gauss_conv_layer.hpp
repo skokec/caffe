@@ -7,6 +7,8 @@
 
 //#include "caffe/vision_layers.hpp"
 #include "caffe/layers/base_conv_layer.hpp"
+#include "caffe/layers/fast_gauss/fast_gauss_backward.hpp"
+#include "caffe/layers/fast_gauss/fast_gauss_forward.hpp"
 
 namespace caffe {
 
@@ -15,7 +17,7 @@ template <typename Dtype>
 class BaseGaussianConvLayer : public BaseConvolutionLayer<Dtype> {
  public:
 	explicit BaseGaussianConvLayer(const LayerParameter& param)
-		: BaseConvolutionLayer<Dtype>(param), using_gpu(false) {}
+		: BaseConvolutionLayer<Dtype>(param), using_gpu(false), allowed_gauss_div(1), num_gauss_ignore(0) {}
 
 	virtual ~BaseGaussianConvLayer() {}
 
@@ -27,6 +29,57 @@ class BaseGaussianConvLayer : public BaseConvolutionLayer<Dtype> {
 	virtual void Backward_cpu(const vector<Blob<Dtype>*>& top, const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
 	virtual void Backward_gpu(const vector<Blob<Dtype>*>& top,const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
 
+
+	void create_precompute_index(Blob<int>& precomp_index, const int index_size, const int kernel_size);
+
+	void do_precompute_guassian_weights(Blob<Dtype>& gauss_param_buffer_w,
+										Blob<Dtype>& gauss_param_buffer_mu1,
+										Blob<Dtype>& gauss_param_buffer_mu2,
+										Blob<Dtype>& gauss_param_buffer_sigma,
+										int num_in_channels, int num_out_channels, int num_gauss,
+										int kernel_h, int kernel_w,
+										bool is_backward_pass,
+                                        bool use_gmm_weight_normalization,
+                                        bool use_gmm_square_gauss_normalization,
+                                        bool gmm_discretize_mean,
+                                        Dtype gmm_sigma_lower_bound,
+                                        Dtype gmm_component_border_bound,
+										// output buffers
+										Blob<Dtype>* weight_buffer,
+										Blob<Dtype>* weight_vert_buffer,
+										Blob<Dtype>* weight_horiz_buffer,
+										Blob<int>* is_weight_enabled_buffer,
+
+										Blob<Dtype>* deriv_error_buffer,
+										Blob<Dtype>* deriv_weight_buffer,
+										Blob<Dtype>* deriv_mu1_buffer,
+										Blob<Dtype>* deriv_mu2_buffer,
+										Blob<Dtype>* deriv_sigma_buffer);
+
+	void do_precompute_guassian_weights_gpu(Blob<Dtype>& gauss_param_buffer_w,
+											Blob<Dtype>& gauss_param_buffer_mu1,
+											Blob<Dtype>& gauss_param_buffer_mu2,
+											Blob<Dtype>& gauss_param_buffer_sigma,
+											int num_in_channels, int num_out_channels, int num_gauss,
+											int kernel_h, int kernel_w,
+											bool is_backward_pass,
+                                            bool use_gmm_weight_normalization,
+                                            bool use_gmm_square_gauss_normalization,
+                                            bool gmm_discretize_mean,
+                                            Dtype gmm_sigma_lower_bound,
+                                            Dtype gmm_component_border_bound,
+											Blob<int>& tmp_precomp_index,
+											// output buffers
+											Blob<Dtype>* weight_buffer,
+											Blob<Dtype>* weight_vert_buffer,
+											Blob<Dtype>* weight_horiz_buffer,
+											Blob<int>* is_weight_enabled_buffer,
+
+											Blob<Dtype>* deriv_error_buffer,
+											Blob<Dtype>* deriv_weight_buffer,
+											Blob<Dtype>* deriv_mu1_buffer,
+											Blob<Dtype>* deriv_mu2_buffer,
+											Blob<Dtype>* deriv_sigma_buffer);
 
 	void precompute_guassian_weights(bool precompute_derivs);
 	void precompute_guassian_weights_gpu(bool precompute_derivs);
@@ -58,7 +111,13 @@ class BaseGaussianConvLayer : public BaseConvolutionLayer<Dtype> {
 	int gmm_merge_iteration_step;
 	float gmm_merge_threshold;
 
+	bool gmm_discretize_mean;
+
 	int NUM_GAUSS;
+
+	// due to fast_forward/backward impl we allow only factor of 2 num gauss
+	int allowed_gauss_div;
+	int num_gauss_ignore;
 
 	// parameters to learn
 	shared_ptr<Blob<Dtype> > param_buffer_w_;
@@ -66,6 +125,10 @@ class BaseGaussianConvLayer : public BaseConvolutionLayer<Dtype> {
 	shared_ptr<Blob<Dtype> > param_buffer_mu2_;
 	shared_ptr<Blob<Dtype> > param_buffer_sigma_;
 	shared_ptr<Blob<Dtype> > param_buffer_bias_;
+
+	// temporary buffers for discretized mean parameters
+	shared_ptr<Blob<Dtype> > param_buffer_mu1_discr_;
+	shared_ptr<Blob<Dtype> > param_buffer_mu2_discr_;
 
 	// temporary buffers for pre-computed sigma^2, sigma^3 and 1/2*sigma^2
 	Blob<Dtype> param_buffer_sigma_square_inv_;
@@ -84,7 +147,6 @@ class BaseGaussianConvLayer : public BaseConvolutionLayer<Dtype> {
 	Blob<int> is_weight_enabled_buffer_;
 
 	Blob<int> tmp_precomp_index_; // pre-computed indexes for caffe_gpu_sum in precompute_guassian_weights_gpu
-	int* tmp_precomp_index_gpu;
 
 	Blob<Dtype> tmp_deriv_weight_buffer_; // temporary buffer for holding kernel weights when calling precompute_guassian_weights
 
@@ -117,7 +179,7 @@ class BaseGaussianConvLayer : public BaseConvolutionLayer<Dtype> {
 template <typename Dtype>
 class GaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
  public:
-  
+
   explicit GaussianConvLayer(const LayerParameter& param)
       : BaseGaussianConvLayer<Dtype>(param),  A(0), B(0), C(0), d_A(0), d_B(0), d_C(0) {}
 
@@ -126,14 +188,14 @@ class GaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
   virtual inline const char* type() const { return "GaussianConv"; }
   virtual void LayerSetUp(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top);
   virtual void Reshape(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top);
-  
+
  //protected:
   virtual void Forward_cpu(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top);
   virtual void Forward_gpu(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top);
   virtual void Backward_cpu(const vector<Blob<Dtype>*>& top, const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
   virtual void Backward_gpu(const vector<Blob<Dtype>*>& top,const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
 
-  void compute_parameter_deriv(int num_iter,const Blob<Dtype>& col_activations_buffer, const Blob<Dtype>& deriv_kernels_buffer, 
+  void compute_parameter_deriv(int num_iter,const Blob<Dtype>& col_activations_buffer, const Blob<Dtype>& deriv_kernels_buffer,
 				//const Blob<Dtype>& top_error_buffer, Blob<Dtype>& param_output_buffer, int param_output_offset);
 		  	  	  Blob<Dtype>& top_error_buffer, Blob<Dtype>& param_output_buffer, int param_output_offset);
 
@@ -174,6 +236,184 @@ class GaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
 
   void caffe_cpu_gpu_gemm(const CBLAS_TRANSPOSE TransA, const CBLAS_TRANSPOSE TransB, const int M, const int N, const int K, const Dtype alpha, const Dtype* A, const Dtype* B, const Dtype beta, Dtype* C);
   void caffe_cpu_gpu_gemm_batched(const CBLAS_TRANSPOSE TransA, const CBLAS_TRANSPOSE TransB, const int M, const int N, const int K, const Dtype alpha, const Dtype** A, const Dtype** B, const Dtype beta, Dtype** C, int batch_count);
+
+};
+
+/**
+ * FastAproxGaussianConvLayer
+ *
+ * Implementation of Deep Compositional Layer (GaussianConvLayer) that introduces two constraints which allows for 3-5
+ * times faster computation of inference and learning. This introduces a slight loss of information and is only an
+ * aproximation of the original GaussianConvLayer.
+ *
+ * FastAproxGaussianConvLayer implements two constraints on composition/gaussian parameters:
+ *  - single sigma/variance for the whole layer (shared accross all features)
+ *  - internal discretization of mu1/mu2 position values *
+ * Due to discretization of mu1/mu2 values this implementation handles sub-pixel offsets using bilinear interpolation
+ * of input channels.
+ *
+ * Due to cuda implementation this method does not compute accuretely on bottom/right border (1px). Thise values
+ * are used in gradient accumulation unless ignore_edge_gradients_ is set to true. Border values are back-propagated
+ * nevertheless.
+ *
+ *
+ * TODO:
+ *  - add sharing of GPU memory accross layers that are computed in sequence
+ *  - add stride>1 (currently allows only stride=1)
+ *  - improve cudaStream for forward and backward pass
+ *  - combine convolve and input preparation forward and backward pass (might shave 5-10% off the whole computation time) *
+ *
+ *
+ * @tparam Dtype
+ */
+template <typename Dtype>
+class FastAproxGaussianConvLayer : public BaseGaussianConvLayer<Dtype> {
+ public:
+
+  explicit FastAproxGaussianConvLayer(const LayerParameter& param)
+      : BaseGaussianConvLayer<Dtype>(param), current_prefilter_sigma(0) {}
+
+  virtual ~FastAproxGaussianConvLayer();
+
+  virtual inline const char* type() const { return "FastAproxGaussianConvLayer"; }
+  virtual void LayerSetUp(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top);
+  virtual void Reshape(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top);
+
+ //protected:
+  virtual void Forward_cpu(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top);
+  virtual void Forward_gpu(const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top);
+  virtual void Backward_cpu(const vector<Blob<Dtype>*>& top, const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
+  virtual void Backward_gpu(const vector<Blob<Dtype>*>& top,const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
+
+  void update_prefiltering_kernels(cudaStream_t stream = 0);
+  Blob<Dtype>* get_gaussian_kernel(cudaStream_t stream = 0);
+
+  Blob<Dtype>* get_deriv_kernel_weight(cudaStream_t stream = 0);
+  Blob<Dtype>* get_deriv_kernel_mu1(cudaStream_t stream = 0);
+  Blob<Dtype>* get_deriv_kernel_mu2(cudaStream_t stream = 0);
+  Blob<Dtype>* get_deriv_kernel_sigma(cudaStream_t stream = 0);
+  Blob<Dtype>* get_deriv_kernel_error(cudaStream_t stream = 0);
+
+  void set_last_n_gauss_to_zero(Dtype* array, int num_gauss_zero);
+
+	// TODO: add support for K=4 as well
+	const int NUM_K = 4;
+
+	bool use_interpolation_;
+	bool gmm_use_cudnn_in_fast_aproximation_;
+
+    bool gmm_store_filter_blobs_;
+
+	// since right/bottom edge values will not be computed properly we can ignore gradients at right/bottom image edge
+	// NOTE: since gradients are not avegred but summed this should not be an issue, so this is used only for unit-testing (to make it compatible with cpu version)
+	bool ignore_edge_gradients_ = false;
+	bool last_k_optional = true;
+
+	int prefilter_h_;
+	int prefilter_w_;
+
+    int prefilter_pad_h_;
+    int prefilter_pad_w_;
+
+    int prefilter_stride_h_;
+    int prefilter_stride_w_;
+
+    bool handles_setup_;
+	cudaStream_t*  stream_;
+
+	cudaStream_t* paralel_streams; // parallel streams for custom back-propagation kernels
+
+#ifdef USE_CUDNN
+	cudnnHandle_t* handle_;
+
+	// algos and descriptors for forward convolution
+	cudnnConvolutionFwdAlgo_t *fwd_algo_;
+
+	vector<cudnnTensorDescriptor_t> bottom_descs_, top_descs_, top_bias_descs_, fwd_interm_descs_;
+	cudnnFilterDescriptor_t    fwd_prefilter_kernel_desc_;
+	cudnnTensorDescriptor_t    bias_desc_;
+
+	vector<cudnnConvolutionDescriptor_t> fwd_conv_descs_;
+
+	// algos and descriptors for backward convolution
+	cudnnConvolutionFwdAlgo_t *bwd_data_algo_, *bwd_error_algo_;
+
+	vector<cudnnTensorDescriptor_t> bwd_interm_data_descs_, bwd_interm_error_descs_;
+	cudnnFilterDescriptor_t    bwd_prefilter_kernel_desc_;
+
+	vector<cudnnConvolutionDescriptor_t> bwd_conv_data_descs_;
+	vector<cudnnConvolutionDescriptor_t> bwd_conv_error_descs_;
+#endif
+	int bottom_offset_, top_offset_, bias_offset_;
+
+	shared_ptr<caffe::FastGaussBackward<Dtype> > backward_grad_obj;
+	shared_ptr<caffe::FastGaussForward<Dtype> > backward_backporp_obj;
+	shared_ptr<caffe::FastGaussForward<Dtype> > forward_obj;
+
+	size_t *workspace_fwd_sizes_;
+	size_t *workspace_bwd_data_sizes_;
+	size_t *workspace_bwd_error_sizes_;
+
+	size_t workspaceSizeInBytes;  // size of underlying storage
+	void *workspaceData;  // underlying storage
+	void **workspace;  // aliases into workspaceData
+
+
+	Blob<Dtype> interm_buffer_;
+    Blob<Dtype> tmp_param_buffer_;
+
+	Dtype current_prefilter_sigma;
+
+    // buffers for kernels used only during pre-filtering for fast aproximation (those buffers contain only a single kernel)
+	Blob<Dtype> prefilter_kernel_;
+
+    Blob<Dtype> prefilter_deriv_kernel_weight_;
+    Blob<Dtype> prefilter_deriv_kernel_mu1_;
+    Blob<Dtype> prefilter_deriv_kernel_mu2_;
+    Blob<Dtype> prefilter_deriv_kernel_sigma_;
+    Blob<Dtype> prefilter_deriv_kernel_error_;
+
+	// containes w,mu1,mu2,sigma kernels in single blob
+	Blob<Dtype> prefilter_deriv_kernels_;
+
+    Blob<Dtype> prefilter_param_w_;
+    Blob<Dtype> prefilter_param_mu1_;
+    Blob<Dtype> prefilter_param_mu2_;
+    Blob<Dtype> prefilter_param_sigma_;
+
+	// accumulated gradients
+	Blob<Dtype> bwd_gradients;
+
+	struct {
+		Dtype* filtered_images;
+		Dtype* filter_weights;
+		int* filter_offsets;
+		Dtype* filter_offsets_and_weights;
+
+		size_t filtered_images_sizes_;
+		size_t filter_weights_sizes_;
+		size_t filter_offsets_sizes_;
+
+        // this is used durinc backward pass for error backpropagation, but since we use forward pass for that we share
+        // the same buffer, however, size of buffer must accomodate both
+        size_t filtered_error_sizes_;
+        size_t filter_error_weights_sizes_;
+        size_t filter_error_offsets_sizes_;
+	} buffer_fwd_;
+
+	struct {
+		Dtype* error_images;
+		Dtype* filtered_images;
+		Dtype* filter_weights;
+		int* filter_offsets;
+		Dtype* resized_top_for_bwd;
+
+		size_t error_image_sizes_;
+		size_t filtered_images_sizes_;
+		size_t filter_weights_sizes_;
+		size_t filter_offsets_sizes_;
+		size_t resized_top_for_bwd_sizes_;
+	} buffer_bwd_;
 
 };
 

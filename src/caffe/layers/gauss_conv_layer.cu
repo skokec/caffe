@@ -131,22 +131,101 @@ __global__ void mirror_kernel(const int S, const int F, const int n, const Dtype
 	}
 }
 
+
+
 template <typename Dtype>
 void BaseGaussianConvLayer<Dtype>::precompute_guassian_weights_gpu(bool is_backward_pass) {
 
+	shared_ptr<Blob<Dtype> > gauss_param_buffer_mu1 = this->param_buffer_mu1_;
+	shared_ptr<Blob<Dtype> > gauss_param_buffer_mu2 = this->param_buffer_mu2_;
+
+	// discretize mean
+	if (this->gmm_discretize_mean) {
+		Dtype* gauss_params_mu1 = gauss_param_buffer_mu1->mutable_gpu_data();
+		Dtype* gauss_params_mu2 = gauss_param_buffer_mu2->mutable_gpu_data();
+
+		// copy params to seperate buffer since we use discretized means only to compute kernels, but need to accumulate real gradient values in actual buffer
+		caffe_gpu_memcpy(gauss_param_buffer_mu1->count() * sizeof(Dtype), gauss_params_mu1, this->param_buffer_mu1_discr_->mutable_gpu_data());
+		caffe_gpu_memcpy(gauss_param_buffer_mu2->count() * sizeof(Dtype), gauss_params_mu2, this->param_buffer_mu2_discr_->mutable_gpu_data());
+
+		// switch to discretized buffer
+		gauss_param_buffer_mu1 = this->param_buffer_mu1_discr_;
+		gauss_param_buffer_mu2 = this->param_buffer_mu2_discr_;
+
+		gauss_params_mu1 = gauss_param_buffer_mu1->mutable_gpu_data();
+		gauss_params_mu2 = gauss_param_buffer_mu2->mutable_gpu_data();
+
+		// do discretization
+		caffe_gpu_round(gauss_param_buffer_mu1->count(), gauss_params_mu1, gauss_params_mu1);
+		caffe_gpu_round(gauss_param_buffer_mu2->count(), gauss_params_mu2, gauss_params_mu2);
+	}
+
+	do_precompute_guassian_weights_gpu(*this->param_buffer_w_.get(),
+									   *gauss_param_buffer_mu1.get(),
+									   *gauss_param_buffer_mu2.get(),
+									   *this->param_buffer_sigma_.get(),
+									   this->conv_in_channels_, this->conv_out_channels_, this->NUM_GAUSS,
+									   this->kernel_h_, this->kernel_w_,
+									   is_backward_pass,
+                                       this->use_gmm_weight_normalization,
+                                       this->use_gmm_square_gauss_normalization,
+                                       this->gmm_sigma_lower_bound,
+                                       this->gmm_component_border_bound,
+                                       this->gmm_discretize_mean,
+									   this->tmp_precomp_index_,
+									   this->weight_buffer_.get(),
+									   this->weight_vert_buffer_.get(),
+									   this->weight_horiz_buffer_.get(),
+									   &this->is_weight_enabled_buffer_,
+									   this->deriv_error_buffer_.get(),
+									   this->deriv_weight_buffer_.get(),
+									   this->deriv_mu1_buffer_.get(),
+									   this->deriv_mu2_buffer_.get(),
+									   this->deriv_sigma_buffer_.get());
+}
+
+template <typename Dtype>
+void BaseGaussianConvLayer<Dtype>::do_precompute_guassian_weights_gpu(Blob<Dtype>& gauss_param_buffer_w,
+																	Blob<Dtype>& gauss_param_buffer_mu1,
+																	Blob<Dtype>& gauss_param_buffer_mu2,
+																	Blob<Dtype>& gauss_param_buffer_sigma,
+																	int num_in_channels, int num_out_channels, int num_gauss,
+																	int kernel_h, int kernel_w,
+																	bool is_backward_pass,
+                                                                    bool use_gmm_weight_normalization,
+                                                                    bool use_gmm_square_gauss_normalization,
+                                                                    bool gmm_discretize_mean,
+                                                                    Dtype gmm_sigma_lower_bound,
+                                                                    Dtype gmm_component_border_bound,
+																    Blob<int>& tmp_precomp_index,
+																	// output buffers
+																	Blob<Dtype>* weight_buffer,
+																	Blob<Dtype>* weight_vert_buffer,
+																	Blob<Dtype>* weight_horiz_buffer,
+																	Blob<int>* is_weight_enabled_buffer,
+
+																	Blob<Dtype>* deriv_error_buffer,
+																	Blob<Dtype>* deriv_weight_buffer,
+																	Blob<Dtype>* deriv_mu1_buffer,
+																	Blob<Dtype>* deriv_mu2_buffer,
+																	Blob<Dtype>* deriv_sigma_buffer) {
+
+	// we get mutable ptr but we do not modify it, this is just poor code in part of the CUB code
+	int* tmp_precomp_index_gpu = tmp_precomp_index.mutable_gpu_data();
+
 	clock_t start_t = clock();
 
-	Dtype* weight = this->weight_buffer_->mutable_gpu_data();
+	Dtype* weight = weight_buffer->mutable_gpu_data();
 
 // NOT implemented yet
 //	Dtype* weight_vert = this->weight_vert_buffer_->mutable_gpu_data();
 //	Dtype* weight_horiz = this->weight_horiz_buffer_->mutable_gpu_data();
 
 	// pre-compute weights from guassian params
-	Blob<Dtype>& gauss_param_buffer_w = *this->param_buffer_w_;
-	Blob<Dtype>& gauss_param_buffer_mu1 = *this->param_buffer_mu1_;
-	Blob<Dtype>& gauss_param_buffer_mu2 = *this->param_buffer_mu2_;
-	Blob<Dtype>& gauss_param_buffer_sigma = *this->param_buffer_sigma_;
+	/*shared_ptr<Blob<Dtype> > gauss_param_buffer_w = this->param_buffer_w_;
+	shared_ptr<Blob<Dtype> > gauss_param_buffer_mu1 = this->param_buffer_mu1_;
+	shared_ptr<Blob<Dtype> > gauss_param_buffer_mu2 = this->param_buffer_mu2_;
+	shared_ptr<Blob<Dtype> > gauss_param_buffer_sigma = this->param_buffer_sigma_;*/
 
 	Blob<Dtype>& gauss_param_buffer_sigma_square_inv = param_buffer_sigma_square_inv_;
 	Blob<Dtype>& gauss_param_buffer_sigma_cube_inv = param_buffer_sigma_cube_inv_;
@@ -161,34 +240,35 @@ void BaseGaussianConvLayer<Dtype>::precompute_guassian_weights_gpu(bool is_backw
 	Dtype* gauss_params_sigma_cube_inv = gauss_param_buffer_sigma_cube_inv.mutable_gpu_data();
 	Dtype* gauss_params_sigma_square_inv_half = gauss_param_buffer_sigma_square_inv_half.mutable_gpu_data();
 
-	const int S = this->conv_in_channels_;
-	const int F = this->conv_out_channels_;
-	const int G = NUM_GAUSS;
+	const int S = num_in_channels;
+	const int F = num_out_channels;
+	const int G = num_gauss;
 
-	const int K_w = this->kernel_w_;
-	const int K_h = this->kernel_h_;
+	const int K_w = kernel_w;
+	const int K_h = kernel_h;
 
-	if (this->use_gmm_weight_normalization) {
+	if (use_gmm_weight_normalization) {
 		CHECK_EQ(0,1) << "GMM weight normalization not implemented with new version!!";
 	}
 
 	// clip sigma, mu1 and mu2 to within bounds
-	caffe_gpu_clip_lower(gauss_param_buffer_sigma.count(), this->gmm_sigma_lower_bound, gauss_params_sigma, gauss_params_sigma);
+	caffe_gpu_clip_lower(gauss_param_buffer_sigma.count(), gmm_sigma_lower_bound, gauss_params_sigma, gauss_params_sigma);
 
-	caffe_gpu_clip_lower(gauss_param_buffer_mu1.count(), (Dtype)this->gmm_component_border_bound, gauss_params_mu1, gauss_params_mu1);
-	caffe_gpu_clip_lower(gauss_param_buffer_mu2.count(), (Dtype)this->gmm_component_border_bound, gauss_params_mu2, gauss_params_mu2);
+	caffe_gpu_clip_lower(gauss_param_buffer_mu1.count(), (Dtype)gmm_component_border_bound, gauss_params_mu1, gauss_params_mu1);
+	caffe_gpu_clip_lower(gauss_param_buffer_mu2.count(), (Dtype)gmm_component_border_bound, gauss_params_mu2, gauss_params_mu2);
 
-	caffe_gpu_clip_upper(gauss_param_buffer_mu1.count(), this->kernel_w_-1 - (Dtype)this->gmm_component_border_bound, gauss_params_mu1, gauss_params_mu1);
-	caffe_gpu_clip_upper(gauss_param_buffer_mu2.count(), this->kernel_h_-1 - (Dtype)this->gmm_component_border_bound, gauss_params_mu2, gauss_params_mu2);
+	caffe_gpu_clip_upper(gauss_param_buffer_mu1.count(), kernel_w-1 - (Dtype)gmm_component_border_bound, gauss_params_mu1, gauss_params_mu1);
+	caffe_gpu_clip_upper(gauss_param_buffer_mu2.count(), kernel_h-1 - (Dtype)gmm_component_border_bound, gauss_params_mu2, gauss_params_mu2);
+
 
 	// 0. precompute  sigma^2, sigma^3 and (sigma^2)/2
 	conv_gauss_precompute_sigma_kernel<Dtype><<<CAFFE_GET_BLOCKS(S*G*F), CAFFE_CUDA_NUM_THREADS>>>(S*G*F, gauss_params_sigma, gauss_params_sigma_square_inv, gauss_params_sigma_cube_inv, gauss_params_sigma_square_inv_half, this->gmm_sigma_lower_bound);
 
 	/*{
-		const Dtype* gauss_params_w = gauss_param_buffer_w.cpu_data();
-		const Dtype* gauss_params_mu1 = gauss_param_buffer_mu1.cpu_data();
-		const Dtype* gauss_params_mu2 = gauss_param_buffer_mu2.cpu_data();
-		const Dtype* gauss_params_sigma = gauss_param_buffer_sigma.cpu_data();
+		const Dtype* gauss_params_w = gauss_param_buffer_w->cpu_data();
+		const Dtype* gauss_params_mu1 = gauss_param_buffer_mu1->cpu_data();
+		const Dtype* gauss_params_mu2 = gauss_param_buffer_mu2->cpu_data();
+		const Dtype* gauss_params_sigma = gauss_param_buffer_sigma->cpu_data();
 
 		const Dtype* gauss_params_sigma_square_inv = gauss_param_buffer_sigma_square_inv.cpu_data();
 		const Dtype* gauss_params_sigma_cube_inv = gauss_param_buffer_sigma_cube_inv.cpu_data();
@@ -205,19 +285,19 @@ void BaseGaussianConvLayer<Dtype>::precompute_guassian_weights_gpu(bool is_backw
 
 	Dtype* gauss_dist = this->guass_dist_buffer_.mutable_gpu_data();
 
-	Dtype* deriv_weight = this->deriv_weight_buffer_->mutable_gpu_data();
-	Dtype* deriv_mu1 = this->deriv_mu1_buffer_->mutable_gpu_data();
-	Dtype* deriv_mu2 = this->deriv_mu2_buffer_->mutable_gpu_data();
-	Dtype* deriv_sigma = this->deriv_sigma_buffer_->mutable_gpu_data();
+	Dtype* deriv_weight = deriv_weight_buffer->mutable_gpu_data();
+	Dtype* deriv_mu1 = deriv_mu1_buffer->mutable_gpu_data();
+	Dtype* deriv_mu2 = deriv_mu2_buffer->mutable_gpu_data();
+	Dtype* deriv_sigma = deriv_sigma_buffer->mutable_gpu_data();
 
 	conv_gauss_distributions_kernel<Dtype><<<numBlocks,threadsPerBlock>>>(S*G*F, K_w, K_h, gauss_params_w, gauss_params_mu1, gauss_params_mu2, gauss_params_sigma_square_inv, gauss_params_sigma_cube_inv, gauss_params_sigma_square_inv_half, gauss_dist, deriv_mu1, deriv_mu2, deriv_sigma);
 
 	/*
 	{
 		const Dtype* gauss_dist = this->guass_dist_buffer_.cpu_data();
-		const Dtype* deriv_mu1 = this->deriv_mu1_buffer_->cpu_data();
-		const Dtype* deriv_mu2 = this->deriv_mu2_buffer_->cpu_data();
-		const Dtype* deriv_sigma = this->deriv_sigma_buffer_->cpu_data();
+		const Dtype* deriv_mu1 = deriv_mu1_buffer->cpu_data();
+		const Dtype* deriv_mu2 = deriv_mu2_buffer->cpu_data();
+		const Dtype* deriv_sigma = deriv_sigma_buffer->cpu_data();
 	}*/
 
 
@@ -228,13 +308,13 @@ void BaseGaussianConvLayer<Dtype>::precompute_guassian_weights_gpu(bool is_backw
 	Dtype* deriv_sigma_sums = this->deriv_sigma_sums_buffer_.mutable_gpu_data();
 
 	// TODO: all three sums can be done in parallel, do we need seperate streams to make this run in parallel ?
-	if (this->use_gmm_gauss_normalization == false) {
+	if (use_gmm_gauss_normalization == false) {
 		// if there is no normalization then there should be no derivative of normalization
 		caffe_gpu_set((S*F*G), (Dtype)0, deriv_mu1_sums);
 		caffe_gpu_set((S*F*G), (Dtype)0, deriv_mu2_sums);
 		caffe_gpu_set((S*F*G), (Dtype)0, deriv_sigma_sums);
 
-	} else if (this->use_gmm_square_gauss_normalization) {
+	} else if (use_gmm_square_gauss_normalization) {
 		// when using square gauss normalization derivatives dG/dx, dG/dy, dG/dsigma need to be multiplied by un-weighted, un-normalized gaussian dstirubution i.e. gauss_dist
 		Dtype* deriv_mu1_times_gauss_dist = this->deriv_mu1_times_gauss_dist_buffer_.mutable_gpu_data();
 		Dtype* deriv_mu2_times_gauss_dist = this->deriv_mu2_times_gauss_dist_buffer_.mutable_gpu_data();
@@ -250,18 +330,18 @@ void BaseGaussianConvLayer<Dtype>::precompute_guassian_weights_gpu(bool is_backw
 			const Dtype* deriv_sigma_times_gauss_dist = this->deriv_sigma_times_gauss_dist_buffer_.cpu_data();
 		}*/
 
-		caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_mu1_times_gauss_dist, deriv_mu1_sums, S*F*G, this->tmp_precomp_index_gpu);
-		caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_mu2_times_gauss_dist, deriv_mu2_sums, S*F*G, this->tmp_precomp_index_gpu);
-		caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_sigma_times_gauss_dist, deriv_sigma_sums, S*F*G, this->tmp_precomp_index_gpu);
+		caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_mu1_times_gauss_dist, deriv_mu1_sums, S*F*G, tmp_precomp_index_gpu);
+		caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_mu2_times_gauss_dist, deriv_mu2_sums, S*F*G, tmp_precomp_index_gpu);
+		caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_sigma_times_gauss_dist, deriv_sigma_sums, S*F*G, tmp_precomp_index_gpu);
 
 		caffe_gpu_scal((S*F*G), (Dtype)2, deriv_mu1_sums);
 		caffe_gpu_scal((S*F*G), (Dtype)2, deriv_mu2_sums);
 		caffe_gpu_scal((S*F*G), (Dtype)2, deriv_sigma_sums);
 	} else {
 
-		caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_mu1, deriv_mu1_sums, S*F*G, this->tmp_precomp_index_gpu);
-		caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_mu2, deriv_mu2_sums, S*F*G, this->tmp_precomp_index_gpu);
-		caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_sigma, deriv_sigma_sums, S*F*G, this->tmp_precomp_index_gpu);
+		caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_mu1, deriv_mu1_sums, S*F*G, tmp_precomp_index_gpu);
+		caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_mu2, deriv_mu2_sums, S*F*G, tmp_precomp_index_gpu);
+		caffe_gpu_sum((S*F*G) * (K_w*K_h), deriv_sigma, deriv_sigma_sums, S*F*G, tmp_precomp_index_gpu);
 	}
 
 	/*{
@@ -270,19 +350,19 @@ void BaseGaussianConvLayer<Dtype>::precompute_guassian_weights_gpu(bool is_backw
 		const Dtype* deriv_sigma_sums = this->deriv_sigma_sums_buffer_.cpu_data();
 	}*/
 
-	if (this->use_gmm_gauss_normalization == false) {
+	if (use_gmm_gauss_normalization == false) {
 		// set guass_norm to 1 if we sould NOT normalize to sum of 1
 		caffe_gpu_set((S*F*G), (Dtype)1, guass_norm);
 
-	} else if (this->use_gmm_square_gauss_normalization) {
+	} else if (use_gmm_square_gauss_normalization) {
 		// we need to normalize to sum of squares to 1
 		Dtype* gauss_dist_square = this->gauss_dist_square_buffer_.mutable_gpu_data();
 
 		caffe_gpu_mul((S*F*G) * (K_w*K_h), gauss_dist, gauss_dist, gauss_dist_square); // gauss_dist_square = gauss_dist * gauss_dist;
-		caffe_gpu_sum((S*F*G) * (K_w*K_h), gauss_dist_square, guass_norm, S*F*G, this->tmp_precomp_index_gpu);
+		caffe_gpu_sum((S*F*G) * (K_w*K_h), gauss_dist_square, guass_norm, S*F*G, tmp_precomp_index_gpu);
 	} else {
 		// we need to normalize to sum of 1
-		caffe_gpu_sum((S*F*G) * (K_w*K_h), gauss_dist, guass_norm, S*F*G, this->tmp_precomp_index_gpu);
+		caffe_gpu_sum((S*F*G) * (K_w*K_h), gauss_dist, guass_norm, S*F*G, tmp_precomp_index_gpu);
 	}
 
 	/*{
@@ -370,7 +450,7 @@ void BaseGaussianConvLayer<Dtype>::precompute_guassian_weights_gpu(bool is_backw
 
 	// 5. create error kernel for back-propagation by reversing the kernel
 
-	Dtype* deriv_error = this->deriv_error_buffer_->mutable_gpu_data();
+	Dtype* deriv_error = deriv_error_buffer->mutable_gpu_data();
 
 	threadsPerBlock = dim3(K_w*K_h, sqrt(CAFFE_CUDA_NUM_THREADS/(K_w * K_h) ), sqrt(CAFFE_CUDA_NUM_THREADS/(K_w * K_h) ) );
 	numBlocks = dim3(1, (S + threadsPerBlock.y - 1) / threadsPerBlock.y, (F + threadsPerBlock.z - 1) / threadsPerBlock.z);
@@ -384,14 +464,14 @@ void BaseGaussianConvLayer<Dtype>::precompute_guassian_weights_gpu(bool is_backw
 //	LOG(INFO) << "precompute_guassian_weights (GPU) done in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC);
 
 	/*{
-		weight = this->weight_buffer_->mutable_gpu_data();
-		Dtype* weight = this->weight_buffer_->mutable_cpu_data();
-		Dtype* deriv_error = this->deriv_error_buffer_->mutable_cpu_data();
+		weight = weight_buffer->mutable_gpu_data();
+		Dtype* weight = weight_buffer->mutable_cpu_data();
+		Dtype* deriv_error = deriv_error_buffer->mutable_cpu_data();
 
-		Dtype* deriv_weight = this->deriv_weight_buffer_->mutable_cpu_data();
-		Dtype* deriv_mu1 = this->deriv_mu1_buffer_->mutable_cpu_data();
-		Dtype* deriv_mu2 = this->deriv_mu2_buffer_->mutable_cpu_data();
-		Dtype* deriv_sigma = this->deriv_sigma_buffer_->mutable_cpu_data();
+		Dtype* deriv_weight = deriv_weight_buffer->mutable_cpu_data();
+		Dtype* deriv_mu1 = deriv_mu1_buffer->mutable_cpu_data();
+		Dtype* deriv_mu2 = deriv_mu2_buffer->mutable_cpu_data();
+		Dtype* deriv_sigma = deriv_sigma_buffer->mutable_cpu_data();
 	}*/
 }
 
