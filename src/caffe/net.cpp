@@ -81,12 +81,12 @@ void Net<Dtype>::Init(const NetParameter& in_param) {
     //      but in matlab the same network cannot be correclty instantated multiple times for forward/backward passes
     //      since no unique id is used DataReader.
     //      Set UID of root to ensure unique names between nets but the same only for nets that are loaded in multi-GPU mode using the same root net.
-    if (layer_param.has_data_param()) {
-    	DataParameter& mutable_data_param = (DataParameter&)layer_param.data_param();
-    	stringstream uid;
-    	uid << (root_net_ != NULL ? root_net_ : this);
-    	mutable_data_param.set_root_uid(uid.str());
-    }
+    //if (layer_param.has_data_param()) {
+    //	DataParameter& mutable_data_param = (DataParameter&)layer_param.data_param();
+    //	stringstream uid;
+    //	uid << (root_net_ != NULL ? root_net_ : this);
+    //	mutable_data_param.set_root_uid(uid.str());
+    //}
     if (layer_param.propagate_down_size() > 0) {
       CHECK_EQ(layer_param.propagate_down_size(),
           layer_param.bottom_size())
@@ -453,8 +453,8 @@ void Net<Dtype>::AppendParam(const NetParameter& param, const int layer_id,
                              const int param_id) {
   const LayerParameter& layer_param = layers_[layer_id]->layer_param();
   const int param_size = layer_param.param_size();
-  if (param_size > param_id && layer_param.param(param_id).lr_mult() == 0 &&
-          layer_param.has_convolution_param() && layer_param.convolution_param().number_gauss_size() > 0) return;
+  //if (param_size > param_id && layer_param.param(param_id).lr_mult() == 0 &&
+  //        layer_param.has_convolution_param() && layer_param.convolution_param().number_gauss_size() > 0) return;
   string param_name =
       (param_size > param_id) ? layer_param.param(param_id).name() : "";
   if (param_name.size()) {
