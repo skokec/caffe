@@ -210,6 +210,9 @@ void NCCL<Dtype>::run(int layer) {
              blobs[i + 0]->gpu_diff());
   }
 #endif
+  if (!Caffe::root_solver() && SolverAction::STOP == this->solver_->GetRequestedAction())
+    return;
+
   if (blobs.size() > 0) {
     // Make sure default stream is done computing gradients. Could be
     // replaced by cudaEventRecord+cudaStreamWaitEvent to avoid
@@ -224,6 +227,8 @@ void NCCL<Dtype>::run(int layer) {
     if (barrier_) {  // NULL in multi process case
       barrier_->wait();
     }
+    // make sure to skip nccl calls if we stoped since not all GPUs will participate and will cause dead-locks
+    if (!Caffe::root_solver() && SolverAction::STOP == this->solver_->GetRequestedAction()) return;
     NCCL_CHECK(ncclAllReduce(blobs[0]->mutable_gpu_diff(),
                              blobs[0]->mutable_gpu_diff(),
                              size,
@@ -236,6 +241,9 @@ void NCCL<Dtype>::run(int layer) {
 
 template<typename Dtype>
 void NCCL<Dtype>::on_gradients_ready() {
+
+  if (!Caffe::root_solver() && SolverAction::STOP == this->solver_->GetRequestedAction()) return;
+
   if (solver_->param().layer_wise_reduce()) {
     CHECK_EQ(solver_->net()->params().size(),
              solver_->net()->learnable_params().size())
@@ -244,9 +252,13 @@ void NCCL<Dtype>::on_gradients_ready() {
     // Make sure reduction is done before applying gradients
     CUDA_CHECK(cudaStreamSynchronize(stream_));
   } else {
+
     if (barrier_) {  // NULL in multi process case
       barrier_->wait();
     }
+    // make sure to skip nccl calls if we stopped since not all GPUs will participate and will cause dead-locks
+    if (!Caffe::root_solver() && SolverAction::STOP == this->solver_->GetRequestedAction()) return;
+
     NCCL_CHECK(ncclAllReduce(diff_, diff_, static_cast<int>(size_),
                              nccl::dataType<Dtype>::type, ncclSum, comm_,
                              cudaStreamDefault));
@@ -266,6 +278,9 @@ class Worker : public InternalThread {
   }
   virtual ~Worker() {}
 
+  void InvalidateBarrier() {
+    barrier_ = NULL;
+  }
  protected:
   void InternalThreadEntry() {
     // Create solver and install callbacks
@@ -285,6 +300,7 @@ class Worker : public InternalThread {
       // restore all solvers from file.
       s->Restore(restore_);
     }
+    s->SetActionFunction(boost::bind(&Worker::CheckForSignals, this));
     NCCL<Dtype> nccl(s);
     nccl.set_barrier(barrier_);
     s->add_callback(&nccl);
@@ -293,14 +309,14 @@ class Worker : public InternalThread {
     }
     (*nccls_)[Caffe::solver_rank()] = &nccl;
     // Wait for other threads
-    barrier_->wait();
+    if (barrier_) barrier_->wait();
     // Wait for NCCL init
-    barrier_->wait();
+    if (barrier_) barrier_->wait();
     // Broadcast rank 0 state
     nccl.Broadcast();
     // Solve
     s->Step(param.max_iter() - s->iter());
-    barrier_->wait();
+    if (barrier_) barrier_->wait();
 #ifdef DEBUG
     // Check all solvers have same state
     SGDSolver<Dtype>* sa = static_cast<SGDSolver<Dtype>*>(rank0_.get());
@@ -315,6 +331,14 @@ class Worker : public InternalThread {
       }
     }
 #endif
+    s.reset();
+  }
+
+  SolverAction::Enum CheckForSignals() {
+    if (must_stop() || this->rank0_->requested_early_exit_) {
+      return SolverAction::STOP;
+    }
+    return SolverAction::NONE;
   }
 
   shared_ptr<Solver<Dtype> > rank0_;
@@ -355,6 +379,11 @@ void NCCL<Dtype>::Run(const vector<int>& gpus, const char* restore) {
   Broadcast();
   solver_->Solve();
   barrier.wait();  // Hangs without it when running tests
+  // since we just pasesd the last barrier we need to ensure workers will never wait at that barrier otherwise we get deadlock
+
+  for (int i = 1; i < gpus.size(); ++i) {
+    workers[i]->InvalidateBarrier();
+  }
   // Wait for shutdown
   for (int i = 1; i < gpus.size(); ++i) {
     workers[i]->StopInternalThread();

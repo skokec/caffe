@@ -7,7 +7,6 @@
 namespace caffe {
 
 InternalThread::~InternalThread() {
-  StopInternalThread();
 }
 
 bool InternalThread::is_started() const {
