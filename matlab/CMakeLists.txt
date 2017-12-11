@@ -35,7 +35,24 @@ file(GLOB Matlab_srcs +caffe/private/caffe_.cpp)
 set(Matlab_caffe_mex ${PROJECT_SOURCE_DIR}/matlab/+caffe/private/caffe_.mex)
 
 caffe_get_current_cflags(cflags)
-caffe_parse_linker_libs(Caffe_LINKER_LIBS folders libflags macos_frameworks)
+
+# manually add src and include folders since they are not added any more with the new cmake files
+list(APPEND MatCaffe_INCLUDE_DIRS ${Caffe_INCLUDE_DIR})
+list(APPEND MatCaffe_INCLUDE_DIRS ${Caffe_SRC_DIR})
+
+set(MatCaffe_ALL_INCLUDE_DIRS ${MatCaffe_INCLUDE_DIRS})
+list(REMOVE_ITEM MatCaffe_ALL_INCLUDE_DIRS PRIVATE PUBLIC)
+
+foreach(i ${MatCaffe_ALL_INCLUDE_DIRS})
+  list(APPEND cflags "-I${i}")
+endforeach()
+caffe_list_unique(cflags)
+
+# remove PUBLIC/PRIVATE from Caffe_INCLUDE_DIRS
+set(Caffe_ALL_LINKER_LIBS ${Caffe_LINKER_LIBS})
+list(REMOVE_ITEM Caffe_ALL_LINKER_LIBS PRIVATE PUBLIC)
+
+caffe_parse_linker_libs(Caffe_ALL_LINKER_LIBS folders libflags macos_frameworks)
 set(folders $<TARGET_LINKER_FILE_DIR:caffe> ${folders})
 
 # prepare linker flag lists

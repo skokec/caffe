@@ -274,7 +274,7 @@ endmacro()
 # Usage:
 #   caffe_get_current_definitions(<definitions_variable>)
 function(caffe_get_current_definitions definitions_var)
-  get_property(current_definitions DIRECTORY PROPERTY COMPILE_DEFINITIONS)
+  get_property(current_definitions TARGET caffe PROPERTY COMPILE_DEFINITIONS)
   set(result "")
 
   foreach(d ${current_definitions})
@@ -290,7 +290,7 @@ endfunction()
 # Usage:
 #   caffe_get_current_cflags(<cflagslist_variable>)
 function(caffe_get_current_cflags cflags_var)
-  get_property(current_includes DIRECTORY PROPERTY INCLUDE_DIRECTORIES)
+  get_property(current_includes TARGET caffe PROPERTY INCLUDE_DIRECTORIES)
   caffe_convert_absolute_paths(current_includes)
   caffe_get_current_definitions(cflags)
 
