@@ -258,54 +258,16 @@ void BaseGaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom
 		weight_filler->Fill(&tmp_w);
 		sigma_filler->Fill(&tmp_sigma);
 
-		Dtype* w_buf = tmp_w.mutable_cpu_data();
-
-		Dtype* mu1_buf = tmp_mu1.mutable_cpu_data();
-		Dtype* mu2_buf = tmp_mu2.mutable_cpu_data();
-
-		//int num_gauss_per_axis = NUM_GAUSS /2;
-		Dtype* offset_x = new Dtype[NUM_GAUSS_PER_AXIS_X];
-		Dtype* offset_y = new Dtype[NUM_GAUSS_PER_AXIS_Y];
-
-		// use gmm_component_border_bound as start and stop position of where components are allowed to be within the kernel
-		Dtype gmm_mu_bounds_h_ = (Dtype)this->kernel_h_ - 2*this->gmm_component_border_bound;
-		Dtype gmm_mu_bounds_w_ = (Dtype)this->kernel_w_ - 2*this->gmm_component_border_bound;
-
-		Dtype gmm_mu_border_bound = this->gmm_component_border_bound;
-
-		// if filler for mu is "gmm_mu_bounds" then use min/max values as bounds instead of default (if it is not gmm_mu_bounds then just ignore filler)
-		const FillerParameter& mu_filler_param = this->layer_param_.convolution_param().mu_filler();
-
-		if (mu_filler_param.type() == "gmm_mu_bounds") {
-			gmm_mu_bounds_h_ = mu_filler_param.max() -  mu_filler_param.min();
-			gmm_mu_bounds_w_ = mu_filler_param.max() -  mu_filler_param.min();
-
-			gmm_mu_border_bound = mu_filler_param.min();
-		}
-		for (int i = 0; i < NUM_GAUSS_PER_AXIS_X; i++) {
-			offset_x[i] = gmm_mu_border_bound + (i)*gmm_mu_bounds_w_ /(Dtype)(NUM_GAUSS_PER_AXIS_X) + (- 0.5+(gmm_mu_bounds_w_)/(Dtype)(2*NUM_GAUSS_PER_AXIS_X));
-		}
-		for (int i = 0; i < NUM_GAUSS_PER_AXIS_Y; i++) {
-			offset_y[i] = gmm_mu_border_bound + (i)*gmm_mu_bounds_h_ /(Dtype)(NUM_GAUSS_PER_AXIS_Y) + (- 0.5+(gmm_mu_bounds_h_)/(Dtype)(2*NUM_GAUSS_PER_AXIS_Y));
-		}
-
-		// add offset to mean so that (0,0) is at center
-		//int kernel_center_w = this->kernel_w_ / 2;
-		//int kernel_center_h = this->kernel_h_ / 2;
-		int kernel_center_w = 0;
-		int kernel_center_h = 0;
-
 		const int outer_size = this->conv_in_channels_;
 		const int middle_size = NUM_GAUSS;
 		const int inner_size = this->conv_out_channels_;
 
+		Dtype* w_buf = tmp_w.mutable_cpu_data();
+
 		for (int i1 = 0; i1 < outer_size; ++i1) {
 			for (int i2 = 0; i2 < middle_size; ++i2) {
 				for (int i3 = 0; i3 < inner_size; ++i3) {
-					const int gauss_idx = i2;
 					const int offset_idx = (i1 * middle_size + i2 )* inner_size + i3;
-					mu1_buf[offset_idx] = offset_x[gauss_idx / NUM_GAUSS_PER_AXIS_Y] - kernel_center_w;
-					mu2_buf[offset_idx] = offset_y[gauss_idx %  NUM_GAUSS_PER_AXIS_Y] - kernel_center_h;
 
 					// if we need to ignore last few values then set weights to zero
 					if (i2 >= NUM_GAUSS - num_gauss_ignore) {
@@ -315,8 +277,75 @@ void BaseGaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom
 			}
 		}
 
-		delete [] offset_x;
-		delete [] offset_y;
+		Dtype* mu1_buf = tmp_mu1.mutable_cpu_data();
+		Dtype* mu2_buf = tmp_mu2.mutable_cpu_data();
+
+		const FillerParameter& mu_filler_param = this->layer_param_.convolution_param().mu_filler();
+
+		// NOTE: we use "uniform-random" to have legacy compatability where old code assumes "uniform" to mean equally spaced
+		// grid pattern; "uniform-random" now actually initializes them uniformly
+		if (mu_filler_param.type() == "uniform-random") {
+			FillerParameter uniform_mu1_filler_param,uniform_mu2_filler_param;
+
+			uniform_mu1_filler_param.set_min(mu_filler_param.min() > 0 ? mu_filler_param.min() : this->gmm_component_border_bound);
+			uniform_mu1_filler_param.set_max(mu_filler_param.max() > 0 ? mu_filler_param.max() : this->kernel_w_ - this->gmm_component_border_bound);
+
+			uniform_mu2_filler_param.set_min(mu_filler_param.min() > 0 ? mu_filler_param.min() : this->gmm_component_border_bound);
+			uniform_mu2_filler_param.set_max(mu_filler_param.max() > 0 ? mu_filler_param.max() : this->kernel_h_ - this->gmm_component_border_bound);
+
+			UniformFiller<Dtype> mu1_filler(uniform_mu1_filler_param);
+			UniformFiller<Dtype> mu2_filler(uniform_mu1_filler_param);
+
+			mu1_filler.Fill(&tmp_mu1);
+			mu2_filler.Fill(&tmp_mu2);
+
+		} else {
+			//int num_gauss_per_axis = NUM_GAUSS /2;
+			Dtype* offset_x = new Dtype[NUM_GAUSS_PER_AXIS_X];
+			Dtype* offset_y = new Dtype[NUM_GAUSS_PER_AXIS_Y];
+
+			// use gmm_component_border_bound as start and stop position of where components are allowed to be within the kernel
+			Dtype gmm_mu_bounds_h_ = (Dtype)this->kernel_h_ - 2*this->gmm_component_border_bound;
+			Dtype gmm_mu_bounds_w_ = (Dtype)this->kernel_w_ - 2*this->gmm_component_border_bound;
+
+			Dtype gmm_mu_border_bound = this->gmm_component_border_bound;
+
+			// if filler for mu is "gmm_mu_bounds" then use min/max values as bounds instead of default (if it is not gmm_mu_bounds then just ignore filler)
+			if (mu_filler_param.type() == "gmm_mu_bounds") {
+				gmm_mu_bounds_h_ = mu_filler_param.max() -  mu_filler_param.min();
+				gmm_mu_bounds_w_ = mu_filler_param.max() -  mu_filler_param.min();
+
+				gmm_mu_border_bound = mu_filler_param.min();
+			}
+
+			for (int i = 0; i < NUM_GAUSS_PER_AXIS_X; i++) {
+				offset_x[i] = gmm_mu_border_bound + (i)*gmm_mu_bounds_w_ /(Dtype)(NUM_GAUSS_PER_AXIS_X) + (- 0.5+(gmm_mu_bounds_w_)/(Dtype)(2*NUM_GAUSS_PER_AXIS_X));
+			}
+			for (int i = 0; i < NUM_GAUSS_PER_AXIS_Y; i++) {
+				offset_y[i] = gmm_mu_border_bound + (i)*gmm_mu_bounds_h_ /(Dtype)(NUM_GAUSS_PER_AXIS_Y) + (- 0.5+(gmm_mu_bounds_h_)/(Dtype)(2*NUM_GAUSS_PER_AXIS_Y));
+			}
+
+			// add offset to mean so that (0,0) is at center (we do not do this any more)
+			//int kernel_center_w = this->kernel_w_ / 2;
+			//int kernel_center_h = this->kernel_h_ / 2;
+			int kernel_center_w = 0;
+			int kernel_center_h = 0;
+
+
+			for (int i1 = 0; i1 < outer_size; ++i1) {
+				for (int i2 = 0; i2 < middle_size; ++i2) {
+					for (int i3 = 0; i3 < inner_size; ++i3) {
+						const int gauss_idx = i2;
+						const int offset_idx = (i1 * middle_size + i2 )* inner_size + i3;
+						mu1_buf[offset_idx] = offset_x[gauss_idx / NUM_GAUSS_PER_AXIS_Y] - kernel_center_w;
+						mu2_buf[offset_idx] = offset_y[gauss_idx %  NUM_GAUSS_PER_AXIS_Y] - kernel_center_h;
+					}
+				}
+			}
+
+			delete [] offset_x;
+			delete [] offset_y;
+		}
 
 		memcpy(this->param_buffer_w_->mutable_cpu_data() + this->param_buffer_w_->offset(0), tmp_w.cpu_data(), sizeof(Dtype) * this->conv_in_channels_ * this->conv_out_channels_ * NUM_GAUSS);
 		memcpy(this->param_buffer_mu1_->mutable_cpu_data() + this->param_buffer_mu1_->offset(0), tmp_mu1.cpu_data(), sizeof(Dtype) * this->conv_in_channels_ * this->conv_out_channels_ * NUM_GAUSS);
