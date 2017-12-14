@@ -406,7 +406,7 @@ void BaseGaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom
 		}
 
 		// initialize dummy blob at index 4 for legacy reasons
-		this->blobs_[4]->Reshape(1,1,1,1);
+		//this->blobs_[4]->Reshape(1,1,1,1);
 		this->blobs_[4]->cpu_data();
 		this->blobs_[4]->cpu_diff();
 	}
