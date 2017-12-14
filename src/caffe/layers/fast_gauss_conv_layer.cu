@@ -16,7 +16,6 @@ namespace caffe {
 template <typename Dtype>
 void FastAproxGaussianConvLayer<Dtype>::Forward_gpu(
 		const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top) {
-
 	// - first perform gaussian bluring based on variance that is fixed over the whole layer (use CuDNN for that)
 	// - then perform forward pass with our custom kernel
 	// - optionally add bias
@@ -94,7 +93,7 @@ void FastAproxGaussianConvLayer<Dtype>::Forward_gpu(
 
 			caffe_gpu_convolve2(interm_data, out_desc,
 								bottom_data, sig_desc,
-								gauss_kernel, filt_desc, stream_[0]);
+			    				gauss_kernel, filt_desc, stream_[0]);
 
             CUDA_CHECK(cudaStreamWaitEvent(stream_[0], memset_top, 0));
             CUDA_CHECK(cudaStreamWaitEvent(stream_[0], memset_filter, 0));
@@ -148,7 +147,8 @@ void FastAproxGaussianConvLayer<Dtype>::Forward_gpu(
 		// NOLINT_NEXT_LINE(whitespace/operators)
 		//sync_fast_gauss_conv_groups<<<1, 1>>>();
 	}
-
+    CUDA_CHECK(cudaEventDestroy(memset_top));
+    CUDA_CHECK(cudaEventDestroy(memset_filter));
 }
 
 
@@ -156,11 +156,13 @@ template <typename Dtype>
 void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
 													 const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom) {
 
+
 	//  - first convolve bottom input data with kernels for individual parameters (w, mu1, mu2, sigma)
 	//  - then compute and collect gradients by shifting convolved bottom input data and multiplying it with the top error data
 	//  - finally back-propagade the error by convolving top error with the rotated filters (we can use the same function as for forward-pass, but need to transpose mu1 and mu2 values)
 
     this->current_iteration_index++;
+    //return;
 
 	// get buffers for all parameters that we learn
 	const Dtype* filter_weights = this->param_buffer_w_->gpu_data();
@@ -416,6 +418,10 @@ void FastAproxGaussianConvLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>&
             this->set_last_n_gauss_to_zero(param_sigma_diff, this->num_gauss_ignore);
         }
 	}
+
+    CUDA_CHECK(cudaEventDestroy(memset_top));
+    CUDA_CHECK(cudaEventDestroy(memset_filter));
+    CUDA_CHECK(cudaEventDestroy(memset_error));
 }
 
 template <typename Dtype>

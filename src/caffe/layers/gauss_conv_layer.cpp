@@ -404,6 +404,11 @@ void BaseGaussianConvLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom
 				// by default decay_mult is set to 1, however multiply all random values will be canceled out because component merging re-scale values to desired size
 			}
 		}
+
+		// initialize dummy blob at index 4 for legacy reasons
+		this->blobs_[4]->Reshape(1,1,1,1);
+		this->blobs_[4]->cpu_data();
+		this->blobs_[4]->cpu_diff();
 	}
 	// Propagate gradients to the parameters (as directed by backward pass).
 	this->param_propagate_down_.resize(this->blobs_.size(), true);

@@ -565,7 +565,21 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
         this->deriv_mu2_buffer_->Reshape(1, 1, 1, 1);
         this->random_mu1_buffer_->Reshape(1, 1, 1, 1);
         this->random_mu2_buffer_->Reshape(1, 1, 1, 1);
+
+        this->weight_buffer_->cpu_data();
+        this->deriv_error_buffer_->cpu_data();
+        this->deriv_weight_buffer_->cpu_data();
+        this->deriv_sigma_buffer_->cpu_data();
+        this->deriv_mu1_buffer_->cpu_data();
+        this->deriv_mu2_buffer_->cpu_data();
+        this->random_mu1_buffer_->cpu_data();
+        this->random_mu2_buffer_->cpu_data();
     }
+
+    // make sure to allocated data for all learnable params so that blob->update() will not fail
+    for (int i = 0; i < this->blobs_.size(); ++i)
+        this->blobs_[i]->cpu_data();
+
 }
 
 template <typename Dtype>
