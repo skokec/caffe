@@ -148,6 +148,10 @@ void Net<Dtype>::Init(const NetParameter& in_param) {
       }
       memory_used_ += top_vecs_[layer_id][top_id]->count();
     }
+
+    for (int blob_i = 0; blob_i < layers_[layer_id]->blobs().size(); ++blob_i) {
+      memory_used_ += layers_[layer_id]->blobs()[blob_i]->count();
+    }
     float mem = memory_used_ * sizeof(Dtype);
     std::string units;
     if (mem > 1024*1024*1024) {
@@ -164,7 +168,7 @@ void Net<Dtype>::Init(const NetParameter& in_param) {
     }
       
     LOG_IF(INFO, Caffe::root_solver())
-        << "Memory required for data: " << mem << " " << units;
+        << "Cumulative memory required for data up to this point: " << mem << " " << units;
     
 	
     const int param_size = layer_param.param_size();

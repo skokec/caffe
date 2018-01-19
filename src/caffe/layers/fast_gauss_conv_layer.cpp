@@ -483,7 +483,21 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
 
     // this is the total amount of storage needed over all groups + streams
     if (total_max_workspace > workspaceSizeInBytes) {
-        LOG(INFO) << "Reallocating workspace storage: " << total_max_workspace;
+        std::string units;
+        float newly_allocated = total_max_workspace - workspaceSizeInBytes;
+        if (newly_allocated > 1024*1024*1024) {
+            units = "GB";
+            newly_allocated = newly_allocated / (1024*1024*1024);
+        } else if (newly_allocated > 1024*1024) {
+            units = "MB";
+            newly_allocated = newly_allocated / (1024*1024);
+        } else if (newly_allocated > 1024) {
+            units = "kB";
+            newly_allocated = newly_allocated / (1024);
+        } else {
+            units = "B";
+        }
+        LOG(INFO) << "Reallocating workspace storage with extra mem allocation: " << newly_allocated << " " << units;
         workspaceSizeInBytes = total_max_workspace;
 
         // free the existing workspace and allocate a new (larger) one
@@ -557,6 +571,15 @@ void FastAproxGaussianConvLayer<Dtype>::Reshape(
     // we do not need blobs from parent version as they only take up unneccessary memory
     // but due to legacy models we retain them unless explicity requested not to
     if (this->gmm_store_filter_blobs_ == false) {
+        this->weight_buffer_->reset();
+        this->deriv_error_buffer_->reset();
+        this->deriv_weight_buffer_->reset();
+        this->deriv_sigma_buffer_->reset();
+        this->deriv_mu1_buffer_->reset();
+        this->deriv_mu2_buffer_->reset();
+        this->random_mu1_buffer_->reset();
+        this->random_mu2_buffer_->reset();
+
         this->weight_buffer_->Reshape(1, 1, 1, 1);
         this->deriv_error_buffer_->Reshape(1, 1, 1, 1);
         this->deriv_weight_buffer_->Reshape(1, 1, 1, 1);
