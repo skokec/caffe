@@ -3468,6 +3468,210 @@ TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussBackward1x1) {
         }
     }
 }
+
+
+TYPED_TEST(GaussConvolutionLayerTest, DebugFastGaussMemtest) {
+
+    Caffe::SetDevice(1);
+
+    typedef typename TypeParam::Dtype Dtype;
+
+
+    if (Caffe::mode() == Caffe::CPU)
+        return;
+
+    if (sizeof(Dtype) > 4)
+        return;
+
+    SolverParameter solver_param;
+    NetParameter net_param;
+
+    solver_param.set_test_initialization(false);
+    solver_param.set_max_iter(10000);
+    solver_param.set_display(100000);
+    solver_param.set_stepsize(100000);
+    solver_param.set_base_lr(0.01);
+    solver_param.set_snapshot(100000);
+    solver_param.set_momentum(0.9);
+    solver_param.set_solver_mode(solver_param.GPU);
+    solver_param.set_allocated_net_param(&net_param);
+
+
+    // evaluate size settings
+    const int N = 16;
+    const int F = 64;
+    const int S = 64;
+    const int G = 2;
+    const int W = 32;
+    const int H = 32;
+
+    const bool use_interpolation = true;
+
+    const int kernel_size = 9;
+
+    Blob<float> blob_input(N,S,H,W);
+    Blob<int> blob_offsets_x(1, S, G, F);
+    Blob<int> blob_offsets_y(1, S, G, F);
+    Blob<float> blob_offsets_float_x(1, S, G, F);
+    Blob<float> blob_offsets_float_y(1, S, G, F);
+    Blob<float> blob_weights(1, S, G, F);
+    Blob<float> blob_output(N,F,H,W);
+    Blob<float> blob_output_cpu(N,F,H,W);
+    Blob<float> blob_output_cudnn(N,F,H,W);
+
+    FillerParameter const_one_filler_param;
+    const_one_filler_param.set_value(1);
+    ConstantFiller<float> const_one_filer(const_one_filler_param);
+
+    FillerParameter const_zero_filler_param;
+    const_zero_filler_param.set_value(0);
+    ConstantFiller<int> const_zero_filer(const_zero_filler_param);
+    ConstantFiller<float> const_zero_float_filer(const_zero_filler_param);
+
+    FillerParameter rand_filler_param;
+    rand_filler_param.set_std(0.1);
+    GaussianFiller<float> input_filler(rand_filler_param);
+
+    //input_filler.Fill(&blob_input);
+    //input_filler.Fill(&blob_weights);
+
+    const_one_filer.Fill(&blob_input);
+    const_one_filer.Fill(&blob_weights);
+
+
+    input_filler.Fill(&blob_input);
+
+    float* data = blob_input.mutable_cpu_data();
+    for (int n = 0; n < N; ++n){
+        for (int s = 0; s < S; ++s) {
+            for (int i = 0; i < H * W; ++i) {
+                //data[(n * S + s )* H * W + i] = 1;
+                //data[(n * S + s )* H * W + i] = s;
+                //data[(n * S + s )* H * W + i] = n + (i % W + 1);
+                //data[(n * S + s )* H * W + i] = n + (i / W + 1);
+                //data[(n * S + s )* H * W + i] = (i % W);
+
+            }
+        }
+    }
+
+    FillerParameter offset_filler_param;
+    offset_filler_param.set_min(2);
+    offset_filler_param.set_max(kernel_size-2);
+    UniformFiller<float> offset_filler(offset_filler_param);
+
+    //offset_filler.Fill(&blob_offsets);
+    const_zero_filer.Fill(&blob_offsets_x);
+    const_zero_filer.Fill(&blob_offsets_y);
+
+    const_zero_float_filer.Fill(&blob_offsets_float_x);
+    const_zero_float_filer.Fill(&blob_offsets_float_y);
+
+    const_zero_float_filer.Fill(&blob_output);
+
+    float* output = Caffe::mode() == Caffe::CPU ? blob_output.mutable_cpu_data() : blob_output.mutable_gpu_data();
+
+    LayerParameter layer_param;
+
+    ConvolutionParameter* gauss_convolution_param = layer_param.mutable_convolution_param();
+
+    gauss_convolution_param->add_kernel_size(kernel_size);
+    gauss_convolution_param->add_stride(1);
+    gauss_convolution_param->add_pad(kernel_size/2);
+
+    gauss_convolution_param->add_number_gauss(G);
+    gauss_convolution_param->add_number_gauss(1);
+
+    gauss_convolution_param->set_num_output(F);
+
+    //gauss_convolution_param->mutable_weight_filler()->set_type("constant");
+    //gauss_convolution_param->mutable_weight_filler()->set_value(2);
+
+    gauss_convolution_param->mutable_weight_filler()->set_type("gaussian");
+    gauss_convolution_param->mutable_weight_filler()->set_std(0.1);
+
+    gauss_convolution_param->mutable_bias_filler()->set_type("constant");
+    gauss_convolution_param->mutable_bias_filler()->set_value(0);
+
+    gauss_convolution_param->mutable_mu_filler()->set_type("constant");
+    gauss_convolution_param->mutable_mu_filler()->set_value(0);
+
+    gauss_convolution_param->mutable_sigma_filler()->set_type("constant");
+    gauss_convolution_param->mutable_sigma_filler()->set_value(0.8);
+
+    gauss_convolution_param->set_gmm_component_border_bound(0);
+    gauss_convolution_param->set_gmm_sigma_lower_bound(0.5);
+
+    gauss_convolution_param->set_gmm_weight_normalization(false);
+    gauss_convolution_param->set_gmm_gauss_normalization(true);
+    gauss_convolution_param->set_gmm_square_gauss_normalization(false);
+
+    FastAproxGaussianConvLayer<float> layer(layer_param);
+
+
+    LayerParameter cudnn_layer_param;
+
+    ConvolutionParameter* convolution_param =
+            cudnn_layer_param.mutable_convolution_param();
+
+    convolution_param->add_kernel_size(3);
+    convolution_param->add_stride(1);
+    convolution_param->add_pad(1);
+
+    convolution_param->set_num_output(F);
+
+    convolution_param->mutable_weight_filler()->set_type("gaussian");
+    convolution_param->mutable_weight_filler()->set_std(0.1);
+
+    std::vector<Blob<float>* > blob_bottom_vec;
+    std::vector<Blob<float>* > blob_top_vec;
+    std::vector<Blob<float>* > blob_top_vec_cudnn;
+    std::vector<Blob<float>* > blob_top_vec_cpu;
+
+
+    blob_bottom_vec.push_back(&blob_input);
+
+    blob_top_vec.push_back(&blob_output);
+    blob_top_vec_cudnn.push_back(&blob_output_cudnn);
+    blob_top_vec_cpu.push_back(&blob_output_cpu);
+
+
+
+
+/*
+for (int i = 0; i < 1; ++i) {
+    clock_t start_t = clock();
+    cudnn_layer->Forward(blob_bottom_vec, blob_top_vec_cudnn);
+    cudaDeviceSynchronize();
+    clock_t end_t = clock();
+    std::cout << "CuDNNConvolutionLayer forward pass in " << (((float)(end_t-start_t))/CLOCKS_PER_SEC) << std::endl;
+}*/
+    std::cout << std::endl;
+    for (int ii = 0; ii < 1; ++ii) {
+
+        layer.SetUp(blob_bottom_vec, blob_top_vec);
+
+        // override offset data with zeros
+        float* filter_offsets_float_mu1 = layer.param_buffer_mu1_->mutable_gpu_data();
+        float* filter_offsets_float_mu2 = layer.param_buffer_mu2_->mutable_gpu_data();
+
+        cudaMemset(filter_offsets_float_mu1, 0, layer.param_buffer_mu1_->count() * sizeof(float));
+        cudaMemset(filter_offsets_float_mu2, 0, layer.param_buffer_mu2_->count() * sizeof(float));
+
+        offset_filler.Fill(layer.param_buffer_mu1_.get());
+        offset_filler.Fill(layer.param_buffer_mu2_.get());
+
+        for (int jj = 0; jj < 10000; ++jj) {
+            layer.Forward_gpu(blob_bottom_vec, blob_top_vec);
+        }
+
+        float* output_cpu = blob_top_vec_cpu[0]->mutable_cpu_data();
+        float* output_gpu = blob_top_vec[0]->mutable_cpu_data();
+
+        // verify data - since we use 1 for input and wights and 0 for offsets we should get S as output value for all
+    }
+}
+
 #ifdef USE_CUDNN
 
 #endif
